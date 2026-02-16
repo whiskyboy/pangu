@@ -67,7 +67,7 @@ class TestFakeMarketDataProvider:
     def test_commodity_futures(self, fake_market: FakeMarketDataProvider) -> None:
         df = fake_market.get_commodity_futures()
         assert len(df) == 5
-        assert {"symbol", "name", "price", "change_pct"} == set(df.columns)
+        assert {"symbol", "name", "close", "change_pct"}.issubset(set(df.columns))
 
     def test_global_snapshot_aggregates(self, fake_market: FakeMarketDataProvider) -> None:
         df = fake_market.get_global_snapshot()

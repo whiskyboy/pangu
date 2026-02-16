@@ -318,19 +318,184 @@ class TestGetStockList:
 
 
 # ---------------------------------------------------------------------------
-# International stubs (deferred to M2.3)
+# International market data — M2.3
 # ---------------------------------------------------------------------------
 
 
-class TestInternationalStubs:
-    def test_stubs_return_empty(self) -> None:
-        provider = AkShareMarketDataProvider.__new__(AkShareMarketDataProvider)
-        provider._ak = MagicMock()
-        provider._interval = 0
-        provider._last_call = 0
-        provider._circuit = CircuitBreaker()
+def _fake_us_index_df() -> pd.DataFrame:
+    """Simulate ak.index_us_stock_sina() return — historical daily OHLCV."""
+    return pd.DataFrame({
+        "date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+        "open": [5100.0, 5150.0, 5180.0],
+        "high": [5150.0, 5200.0, 5220.0],
+        "low": [5080.0, 5130.0, 5170.0],
+        "close": [5140.0, 5190.0, 5200.0],
+        "volume": [3e9, 3.1e9, 2.9e9],
+        "amount": [0, 0, 0],
+    })
 
-        assert provider.get_us_indices().empty
-        assert provider.get_hk_indices().empty
-        assert provider.get_commodity_futures().empty
-        assert provider.get_global_snapshot().empty
+
+def _fake_hk_index_df() -> pd.DataFrame:
+    """Simulate ak.stock_hk_index_spot_sina() — 38 HK indices (sina format)."""
+    return pd.DataFrame({
+        "代码": ["HSI", "HSTECH", "OTHER"],
+        "名称": ["恒生指数", "恒生科技指数", "其他指数"],
+        "最新价": [26700.0, 5360.0, 1000.0],
+        "涨跌额": [130.0, 50.0, 10.0],
+        "涨跌幅": [0.52, 0.13, 0.05],
+        "昨收": [26570.0, 5310.0, 990.0],
+        "今开": [26500.0, 5340.0, 990.0],
+        "最高": [26750.0, 5380.0, 1010.0],
+        "最低": [26400.0, 5300.0, 980.0],
+    })
+
+
+def _fake_commodity_df() -> pd.DataFrame:
+    """Simulate ak.futures_foreign_commodity_realtime() — batch realtime."""
+    return pd.DataFrame({
+        "名称": ["COMEX黄金", "COMEX白银", "NYMEX原油", "COMEX铜", "新加坡铁矿石"],
+        "最新价": [5040.0, 77.1, 62.5, 583.4, 96.7],
+        "人民币报价": [0, 0, 0, 0, 0],
+        "涨跌额": [-6.5, -0.9, -0.3, -2.8, -0.1],
+        "涨跌幅": [-0.13, -1.11, -0.47, -0.48, -0.10],
+        "开盘价": [5050.0, 77.6, 63.0, 583.9, 96.9],
+        "最高价": [5074.0, 78.4, 63.1, 585.9, 97.8],
+        "最低价": [4982.0, 74.6, 62.4, 579.7, 96.2],
+        "昨日结算价": [5046.0, 78.0, 62.8, 586.3, 96.8],
+        "持仓量": [0, 0, 0, 0, 0],
+        "买价": [5036.0, 77.0, 62.5, 583.1, 96.7],
+        "卖价": [5037.0, 77.0, 62.5, 583.2, 96.8],
+        "行情时间": ["17:54:21", "17:54:15", "17:54:26", "17:53:42", "17:54:30"],
+        "日期": ["2026-02-16", "2026-02-16", "2026-02-16", "2026-02-16", "2026-02-16"],
+    })
+
+
+class TestGetUSIndices:
+    @patch("akshare.index_us_stock_sina")
+    def test_fetches_three_indices(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = _fake_us_index_df()
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_us_indices()
+        assert len(df) == 3
+        assert set(df["symbol"]) == {"SPX", "DJI", "IXIC"}
+        assert "change_pct" in df.columns
+        assert "close" in df.columns
+        assert "source" in df.columns
+        assert df.iloc[0]["source"] == "us_index"
+
+    @patch("akshare.index_us_stock_sina")
+    def test_persists_to_storage(self, mock_api: MagicMock, db: Database) -> None:
+        mock_api.return_value = _fake_us_index_df()
+        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
+
+        df = provider.get_us_indices()
+        assert len(df) == 3
+        stored = db.load_global_snapshots(source="us_index")
+        assert len(stored) == 3
+
+    @patch("akshare.index_us_stock_sina")
+    def test_partial_failure(self, mock_api: MagicMock) -> None:
+        """If one index fails, others are still returned."""
+        mock_api.side_effect = [
+            _fake_us_index_df(),
+            ConnectionError("timeout"),
+            _fake_us_index_df(),
+        ]
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_us_indices()
+        assert len(df) == 2  # 2 succeeded, 1 failed
+
+
+class TestGetHKIndices:
+    @patch("akshare.stock_hk_index_spot_sina")
+    def test_filters_target_indices(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = _fake_hk_index_df()
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_hk_indices()
+        assert len(df) == 2
+        assert set(df["symbol"]) == {"HSI", "HSTECH"}
+        assert df.iloc[0]["source"] == "hk_index"
+        assert df.iloc[0]["change_pct"] == pytest.approx(0.52)
+
+    @patch("akshare.stock_hk_index_spot_sina")
+    def test_persists_to_storage(self, mock_api: MagicMock, db: Database) -> None:
+        mock_api.return_value = _fake_hk_index_df()
+        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
+
+        provider.get_hk_indices()
+        stored = db.load_global_snapshots(source="hk_index")
+        assert len(stored) == 2
+
+    @patch("akshare.stock_hk_index_spot_sina")
+    def test_api_failure_returns_empty(self, mock_api: MagicMock) -> None:
+        mock_api.side_effect = ConnectionError("timeout")
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_hk_indices()
+        assert df.empty
+
+
+class TestGetCommodityFutures:
+    @patch("akshare.futures_foreign_commodity_realtime")
+    def test_fetches_five_commodities(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = _fake_commodity_df()
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_commodity_futures()
+        assert len(df) == 5
+        assert set(df["symbol"]) == {"GC", "SI", "CL", "HG", "FEF"}
+        assert df.iloc[0]["source"] == "commodity"
+        assert "change_pct" in df.columns
+
+    @patch("akshare.futures_foreign_commodity_realtime")
+    def test_persists_to_storage(self, mock_api: MagicMock, db: Database) -> None:
+        mock_api.return_value = _fake_commodity_df()
+        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
+
+        provider.get_commodity_futures()
+        stored = db.load_global_snapshots(source="commodity")
+        assert len(stored) == 5
+
+    @patch("akshare.futures_foreign_commodity_realtime")
+    def test_api_failure_returns_empty(self, mock_api: MagicMock) -> None:
+        mock_api.side_effect = ConnectionError("fail")
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_commodity_futures()
+        assert df.empty
+
+
+class TestGetGlobalSnapshot:
+    @patch("akshare.futures_foreign_commodity_realtime")
+    @patch("akshare.stock_hk_index_spot_sina")
+    @patch("akshare.index_us_stock_sina")
+    def test_aggregates_all_sources(
+        self, mock_us: MagicMock, mock_hk: MagicMock, mock_commodity: MagicMock,
+    ) -> None:
+        mock_us.return_value = _fake_us_index_df()
+        mock_hk.return_value = _fake_hk_index_df()
+        mock_commodity.return_value = _fake_commodity_df()
+        provider = AkShareMarketDataProvider(request_interval=0)
+
+        df = provider.get_global_snapshot()
+        assert len(df) == 10  # 3 US + 2 HK + 5 commodities
+        assert set(df["source"]) == {"us_index", "hk_index", "commodity"}
+
+    @patch("akshare.futures_foreign_commodity_realtime")
+    @patch("akshare.stock_hk_index_spot_sina")
+    @patch("akshare.index_us_stock_sina")
+    def test_persists_all_to_storage(
+        self, mock_us: MagicMock, mock_hk: MagicMock, mock_commodity: MagicMock,
+        db: Database,
+    ) -> None:
+        mock_us.return_value = _fake_us_index_df()
+        mock_hk.return_value = _fake_hk_index_df()
+        mock_commodity.return_value = _fake_commodity_df()
+        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
+
+        provider.get_global_snapshot()
+        all_stored = db.load_latest_global_snapshots()
+        assert len(all_stored) == 10

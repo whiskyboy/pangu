@@ -120,23 +120,41 @@ class FakeMarketDataProvider:
 
     def get_us_indices(self) -> pd.DataFrame:
         return pd.DataFrame([
-            {"symbol": "SPX", "name": "S&P 500", "price": 5200.0, "change_pct": 0.3},
-            {"symbol": "DJI", "name": "Dow Jones", "price": 39000.0, "change_pct": 0.2},
-            {"symbol": "IXIC", "name": "NASDAQ", "price": 16500.0, "change_pct": 0.5},
+            {"symbol": "SPX", "name": "S&P 500", "date": "2026-01-02", "open": 5180.0,
+             "high": 5220.0, "low": 5170.0, "close": 5200.0, "volume": 3e9,
+             "change_pct": 0.3, "source": "us_index"},
+            {"symbol": "DJI", "name": "Dow Jones", "date": "2026-01-02", "open": 38900.0,
+             "high": 39100.0, "low": 38800.0, "close": 39000.0, "volume": 2e9,
+             "change_pct": 0.2, "source": "us_index"},
+            {"symbol": "IXIC", "name": "NASDAQ", "date": "2026-01-02", "open": 16400.0,
+             "high": 16600.0, "low": 16350.0, "close": 16500.0, "volume": 4e9,
+             "change_pct": 0.5, "source": "us_index"},
         ])
 
     def get_hk_indices(self) -> pd.DataFrame:
         return pd.DataFrame([
-            {"symbol": "HSI", "name": "恒生指数", "price": 17500.0, "change_pct": -0.3},
+            {"symbol": "HSI", "name": "恒生指数", "date": "2026-01-02", "open": 17600.0,
+             "high": 17700.0, "low": 17400.0, "close": 17500.0, "volume": 1e9,
+             "change_pct": -0.3, "source": "hk_index"},
         ])
 
     def get_commodity_futures(self) -> pd.DataFrame:
         return pd.DataFrame([
-            {"symbol": "GC", "name": "黄金", "price": 2350.0, "change_pct": 0.1},
-            {"symbol": "SI", "name": "白银", "price": 28.5, "change_pct": -0.2},
-            {"symbol": "CL", "name": "原油", "price": 78.0, "change_pct": 0.8},
-            {"symbol": "HG", "name": "铜", "price": 4.2, "change_pct": 0.4},
-            {"symbol": "DCE_I", "name": "铁矿石", "price": 820.0, "change_pct": -1.0},
+            {"symbol": "GC", "name": "COMEX黄金", "date": "2026-01-02", "open": 2340.0,
+             "high": 2360.0, "low": 2330.0, "close": 2350.0, "volume": 1e6,
+             "change_pct": 0.1, "source": "commodity"},
+            {"symbol": "SI", "name": "COMEX白银", "date": "2026-01-02", "open": 28.3,
+             "high": 28.8, "low": 28.1, "close": 28.5, "volume": 5e5,
+             "change_pct": -0.2, "source": "commodity"},
+            {"symbol": "CL", "name": "WTI原油", "date": "2026-01-02", "open": 77.5,
+             "high": 78.5, "low": 77.0, "close": 78.0, "volume": 8e5,
+             "change_pct": 0.8, "source": "commodity"},
+            {"symbol": "HG", "name": "LME铜", "date": "2026-01-02", "open": 4.15,
+             "high": 4.25, "low": 4.1, "close": 4.2, "volume": 3e5,
+             "change_pct": 0.4, "source": "commodity"},
+            {"symbol": "FEF", "name": "铁矿石", "date": "2026-01-02", "open": 830.0,
+             "high": 835.0, "low": 815.0, "close": 820.0, "volume": 2e5,
+             "change_pct": -1.0, "source": "commodity"},
         ])
 
     def get_global_snapshot(self) -> pd.DataFrame:
@@ -166,35 +184,39 @@ _HIST_COL_MAP = {
 # ---------------------------------------------------------------------------
 
 class CircuitBreaker:
-    """Simple consecutive-failure circuit breaker."""
+    """Simple consecutive-failure circuit breaker (thread-safe)."""
 
     def __init__(self, threshold: int = 5, cooldown: float = 300.0) -> None:
         self._threshold = threshold
         self._cooldown = cooldown
         self._consecutive_failures = 0
         self._open_until: float = 0.0
+        self._lock = threading.Lock()
 
     @property
     def is_open(self) -> bool:
-        if self._consecutive_failures >= self._threshold:
-            if time.monotonic() < self._open_until:
-                return True
-            # Cooldown expired — reset so next failure doesn't re-open immediately
-            self._consecutive_failures = 0
-        return False
+        with self._lock:
+            if self._consecutive_failures >= self._threshold:
+                if time.monotonic() < self._open_until:
+                    return True
+                # Cooldown expired — reset so next failure doesn't re-open immediately
+                self._consecutive_failures = 0
+            return False
 
     def record_success(self) -> None:
-        self._consecutive_failures = 0
+        with self._lock:
+            self._consecutive_failures = 0
 
     def record_failure(self) -> None:
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self._threshold:
-            self._open_until = time.monotonic() + self._cooldown
-            logger.warning(
-                "Circuit breaker OPEN — %d consecutive failures, cooling down %.0fs",
-                self._consecutive_failures,
-                self._cooldown,
-            )
+        with self._lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self._threshold:
+                self._open_until = time.monotonic() + self._cooldown
+                logger.warning(
+                    "Circuit breaker OPEN — %d consecutive failures, cooling down %.0fs",
+                    self._consecutive_failures,
+                    self._cooldown,
+                )
 
 
 def _retry_call(fn, *, max_retries: int = 3, backoff_base: float = 2.0,
@@ -407,17 +429,186 @@ class AkShareMarketDataProvider:
             return pd.DataFrame(columns=["symbol", "name"])
         return pd.concat(frames, ignore_index=True)
 
-    # -- international (deferred to M2.3) --
+    # -- international market data — PRD §4.1.1 --
+
+    # US index symbol → (AkShare param, display name)
+    _US_INDEX_MAP: dict[str, tuple[str, str]] = {
+        "SPX": (".INX", "S&P 500"),
+        "DJI": (".DJI", "Dow Jones"),
+        "IXIC": (".IXIC", "NASDAQ"),
+    }
+
+    # HK index code → display name (from stock_hk_index_spot_em)
+    _HK_INDEX_CODES: dict[str, str] = {
+        "HSI": "恒生指数",
+        "HSTECH": "恒生科技指数",
+    }
+
+    def _fetch_us_index(self, symbol: str, ak_sym: str, name: str) -> dict | None:
+        """Fetch latest US index bar via index_us_stock_sina."""
+        try:
+            self._throttle()
+            df = _retry_call(
+                lambda: self._ak.index_us_stock_sina(symbol=ak_sym),
+                circuit=self._circuit,
+            )
+            if df is None or len(df) < 2:
+                logger.warning("index_us_stock_sina(%s) returned insufficient data", ak_sym)
+                return None
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+            prev_close = float(prev["close"])
+            close = float(last["close"])
+            change_pct = (close - prev_close) / prev_close * 100 if prev_close else None
+            return {
+                "symbol": symbol,
+                "name": name,
+                "date": str(last["date"])[:10],
+                "open": float(last["open"]),
+                "high": float(last["high"]),
+                "low": float(last["low"]),
+                "close": close,
+                "volume": float(last["volume"]) if last.get("volume") else None,
+                "change_pct": round(change_pct, 4) if change_pct is not None else None,
+                "source": "us_index",
+            }
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to fetch US index %s", symbol, exc_info=True)
+            return None
 
     def get_us_indices(self) -> pd.DataFrame:
-        return pd.DataFrame(columns=["symbol", "name", "price", "change_pct"])
+        """Fetch latest US major indices (S&P 500, DJIA, NASDAQ)."""
+        rows: list[dict] = []
+        for symbol, (ak_sym, name) in self._US_INDEX_MAP.items():
+            row = self._fetch_us_index(symbol, ak_sym, name)
+            if row:
+                rows.append(row)
+        df = pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["symbol", "name", "date", "open", "high", "low",
+                      "close", "volume", "change_pct", "source"]
+        )
+        if self._storage is not None and not df.empty:
+            self._storage.save_global_snapshots(df)
+        return df
 
     def get_hk_indices(self) -> pd.DataFrame:
-        return pd.DataFrame(columns=["symbol", "name", "price", "change_pct"])
+        """Fetch latest Hang Seng Index data via stock_hk_index_spot_sina (~1s)."""
+        try:
+            self._throttle()
+            full = _retry_call(
+                lambda: self._ak.stock_hk_index_spot_sina(),
+                circuit=self._circuit,
+            )
+            if full is None or full.empty:
+                logger.warning("stock_hk_index_spot_sina returned empty")
+                return pd.DataFrame(
+                    columns=["symbol", "name", "date", "open", "high", "low",
+                              "close", "volume", "change_pct", "source"]
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to fetch HK indices", exc_info=True)
+            return pd.DataFrame(
+                columns=["symbol", "name", "date", "open", "high", "low",
+                          "close", "volume", "change_pct", "source"]
+            )
+
+        today = pd.Timestamp.now(tz="Asia/Hong_Kong").strftime("%Y-%m-%d")
+        rows: list[dict] = []
+        for code, name in self._HK_INDEX_CODES.items():
+            match = full[full["代码"] == code]
+            if match.empty:
+                logger.warning("HK index %s not found in response", code)
+                continue
+            r = match.iloc[0]
+            rows.append({
+                "symbol": code,
+                "name": name,
+                "date": today,
+                "open": float(r["今开"]) if pd.notna(r["今开"]) else None,
+                "high": float(r["最高"]) if pd.notna(r["最高"]) else None,
+                "low": float(r["最低"]) if pd.notna(r["最低"]) else None,
+                "close": float(r["最新价"]) if pd.notna(r["最新价"]) else None,
+                "volume": None,  # sina API doesn't provide volume
+                "change_pct": float(r["涨跌幅"]) if pd.notna(r["涨跌幅"]) else None,
+                "source": "hk_index",
+            })
+
+        df = pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["symbol", "name", "date", "open", "high", "low",
+                      "close", "volume", "change_pct", "source"]
+        )
+        if self._storage is not None and not df.empty:
+            self._storage.save_global_snapshots(df)
+        return df
+
+    # Commodity symbols for futures_foreign_commodity_realtime batch call
+    _COMMODITY_SYMBOLS = "GC,SI,CL,HG,FEF"
+    _COMMODITY_NAME_MAP: dict[str, tuple[str, str]] = {
+        "COMEX黄金": ("GC", "COMEX黄金"),
+        "COMEX白银": ("SI", "COMEX白银"),
+        "NYMEX原油": ("CL", "WTI原油"),
+        "COMEX铜": ("HG", "LME铜"),
+        "新加坡铁矿石": ("FEF", "铁矿石"),
+    }
 
     def get_commodity_futures(self) -> pd.DataFrame:
-        return pd.DataFrame(columns=["symbol", "name", "price", "change_pct"])
+        """Fetch international commodity futures via futures_foreign_commodity_realtime (~1s)."""
+        try:
+            self._throttle()
+            raw = _retry_call(
+                lambda: self._ak.futures_foreign_commodity_realtime(
+                    symbol=self._COMMODITY_SYMBOLS,
+                ),
+                circuit=self._circuit,
+            )
+            if raw is None or raw.empty:
+                logger.warning("futures_foreign_commodity_realtime returned empty")
+                return pd.DataFrame(
+                    columns=["symbol", "name", "date", "open", "high", "low",
+                              "close", "volume", "change_pct", "source"]
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to fetch commodity futures", exc_info=True)
+            return pd.DataFrame(
+                columns=["symbol", "name", "date", "open", "high", "low",
+                          "close", "volume", "change_pct", "source"]
+            )
+
+        rows: list[dict] = []
+        for _, r in raw.iterrows():
+            cn_name = str(r["名称"])
+            if cn_name not in self._COMMODITY_NAME_MAP:
+                continue
+            sym, display_name = self._COMMODITY_NAME_MAP[cn_name]
+            rows.append({
+                "symbol": sym,
+                "name": display_name,
+                "date": str(r.get("日期", pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d"))),
+                "open": float(r["开盘价"]) if pd.notna(r.get("开盘价")) else None,
+                "high": float(r["最高价"]) if pd.notna(r.get("最高价")) else None,
+                "low": float(r["最低价"]) if pd.notna(r.get("最低价")) else None,
+                "close": float(r["最新价"]) if pd.notna(r.get("最新价")) else None,
+                "volume": None,  # realtime API doesn't provide volume
+                "change_pct": float(r["涨跌幅"]) if pd.notna(r.get("涨跌幅")) else None,
+                "source": "commodity",
+            })
+
+        df = pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["symbol", "name", "date", "open", "high", "low",
+                      "close", "volume", "change_pct", "source"]
+        )
+        if self._storage is not None and not df.empty:
+            self._storage.save_global_snapshots(df)
+        return df
 
     def get_global_snapshot(self) -> pd.DataFrame:
-        return pd.DataFrame(columns=["symbol", "name", "price", "change_pct"])
+        """Aggregate all international quotes into a single snapshot."""
+        frames = [self.get_us_indices(), self.get_hk_indices(), self.get_commodity_futures()]
+        frames = [f for f in frames if not f.empty]
+        if not frames:
+            return pd.DataFrame(
+                columns=["symbol", "name", "date", "open", "high", "low",
+                          "close", "volume", "change_pct", "source"]
+            )
+        return pd.concat(frames, ignore_index=True)
 

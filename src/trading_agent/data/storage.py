@@ -115,6 +115,20 @@ CREATE TABLE IF NOT EXISTS data_sync_log (
 CREATE TABLE IF NOT EXISTS trading_calendar (
     date TEXT PRIMARY KEY   -- YYYY-MM-DD
 );
+
+CREATE TABLE IF NOT EXISTS global_snapshots (
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,       -- YYYY-MM-DD
+    name        TEXT,
+    open        REAL,
+    high        REAL,
+    low         REAL,
+    close       REAL,
+    volume      REAL,
+    change_pct  REAL,
+    source      TEXT,               -- 'us_index', 'hk_index', 'commodity'
+    PRIMARY KEY (symbol, date)
+);
 """
 
 
@@ -412,6 +426,76 @@ class Database:
                 "ORDER BY date",
                 self._conn,
                 params=(symbol, start, end),
+            )
+
+    # ------------------------------------------------------------------
+    # global_snapshots
+    # ------------------------------------------------------------------
+
+    def save_global_snapshots(self, df: pd.DataFrame) -> int:
+        """INSERT OR REPLACE global market snapshots. Returns row count.
+
+        *df* must contain columns: symbol, date.
+        Optional: name, open, high, low, close, volume, change_pct, source.
+        """
+        if df.empty:
+            return 0
+        rows: list[tuple[Any, ...]] = []
+        for _, r in df.iterrows():
+            rows.append((
+                r["symbol"],
+                str(r["date"]),
+                r.get("name"),
+                r.get("open"),
+                r.get("high"),
+                r.get("low"),
+                r.get("close"),
+                r.get("volume"),
+                r.get("change_pct"),
+                r.get("source"),
+            ))
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO global_snapshots "
+                "(symbol, date, name, open, high, low, close, volume, change_pct, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+        return len(rows)
+
+    def load_global_snapshots(
+        self,
+        source: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> pd.DataFrame:
+        """Load global snapshots, optionally filtered by source and date range."""
+        query = "SELECT * FROM global_snapshots WHERE 1=1"
+        params: list[str] = []
+        if source is not None:
+            query += " AND source = ?"
+            params.append(source)
+        if start is not None:
+            query += " AND date >= ?"
+            params.append(start)
+        if end is not None:
+            query += " AND date <= ?"
+            params.append(end)
+        query += " ORDER BY date, symbol"
+        with self._lock:
+            return pd.read_sql(query, self._conn, params=params)
+
+    def load_latest_global_snapshots(self) -> pd.DataFrame:
+        """Load the most recent snapshot for each symbol."""
+        with self._lock:
+            return pd.read_sql(
+                "SELECT g.* FROM global_snapshots g "
+                "INNER JOIN ("
+                "  SELECT symbol, MAX(date) AS max_date FROM global_snapshots GROUP BY symbol"
+                ") m ON g.symbol = m.symbol AND g.date = m.max_date "
+                "ORDER BY g.source, g.symbol",
+                self._conn,
             )
 
     # ------------------------------------------------------------------
