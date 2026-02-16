@@ -43,8 +43,31 @@
 | 获取与发送单聊、群组消息 | `im:message` | 发送信号推送消息 |
 | 以应用的身份发消息 | `im:message:send_as_bot` | Bot 身份发送私聊消息 |
 | 读取用户发给机器人的单聊消息 | `im:message.p2p_msg:readonly` | 接收用户私聊消息以完成自动配对 |
+| 获取单聊、群组消息 | `im:message:readonly` | 读取私聊消息内容 |
+| 接收群聊中与机器人相关的事件 | `im:chat.access_event.bot_p2p_chat:read` | 长连接接收私聊会话事件 |
+| 获取通讯录基本信息 | `contact:contact.base:readonly` | 应用身份识别用户 |
 
 3. 点击 **「批量开通」**
+
+> 💡 **快速导入**：在「权限管理」页面点击 **「批量开通」→「导入」**，粘贴以下 JSON：
+>
+> ```json
+> {
+>   "scopes": {
+>     "tenant": [
+>       "contact:contact.base:readonly",
+>       "im:chat.access_event.bot_p2p_chat:read",
+>       "im:message",
+>       "im:message.p2p_msg:readonly",
+>       "im:message:readonly",
+>       "im:message:send_as_bot"
+>     ],
+>     "user": [
+>       "im:chat.access_event.bot_p2p_chat:read"
+>     ]
+>   }
+> }
+> ```
 
 ### 第 5 步：配置事件订阅（长连接模式）
 

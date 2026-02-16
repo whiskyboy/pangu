@@ -1,0 +1,24 @@
+services:
+  worker:
+    build: .
+    container_name: trading-agent-worker
+    command: python -m trading_agent.main
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    env_file: .env
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    container_name: trading-agent-dashboard
+    command: streamlit run src/trading_agent/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      - worker

@@ -1,0 +1,33 @@
+"""StockPool Protocol — PRD §4.1.4 / §6."""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class StockPool(Protocol):
+    """Interface for stock pool management (watchlist + dynamic pools)."""
+
+    def get_watchlist(self) -> list[str]:
+        """Return manually curated watchlist symbols."""
+        ...
+
+    def add_to_watchlist(self, symbol: str) -> None:
+        """Add a symbol and trigger data initialization."""
+        ...
+
+    def remove_from_watchlist(self, symbol: str) -> None:
+        """Remove a symbol (historical data is kept)."""
+        ...
+
+    def get_factor_selected(self) -> list[str]:
+        """Return symbols selected by factor screening."""
+        ...
+
+    def get_event_triggered(self) -> list[str]:
+        """Return symbols discovered by event-driven analysis."""
+        ...
+
+    def get_active_pool(self) -> list[str]:
+        """Return merged active pool (deduplicated and filtered)."""
+        ...

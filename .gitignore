@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data
+data/*.db
+data/logs/
+
+# Config secrets
+.env
+
+# Ruff
+.ruff_cache/
+
+# pytest
+.pytest_cache/
+
+# uv
+uv.lock
+.coverage

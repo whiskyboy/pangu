@@ -1,0 +1,42 @@
+# 国际行情 → A股板块映射
+# 用于宏观因子计算和国际事件传导
+mappings:
+  - source: "S&P500"
+    type: "index"
+    a_share_sectors: ["大盘蓝筹", "外贸"]
+    weight: 0.3
+
+  - source: "NASDAQ"
+    type: "index"
+    a_share_sectors: ["科技", "半导体", "人工智能"]
+    weight: 0.3
+
+  - source: "恒生指数"
+    type: "index"
+    a_share_sectors: ["AH股", "港股通"]
+    weight: 0.3
+
+  - source: "恒生科技指数"
+    type: "index"
+    a_share_sectors: ["互联网", "科技"]
+    weight: 0.2
+
+  - source: "COMEX黄金"
+    type: "commodity"
+    a_share_sectors: ["黄金", "有色金属"]
+    weight: 0.4
+
+  - source: "WTI原油"
+    type: "commodity"
+    a_share_sectors: ["石油", "化工", "航空"]
+    weight: 0.3
+
+  - source: "LME铜"
+    type: "commodity"
+    a_share_sectors: ["有色金属", "新能源"]
+    weight: 0.2
+
+  - source: "铁矿石"
+    type: "commodity"
+    a_share_sectors: ["钢铁", "基建"]
+    weight: 0.3
