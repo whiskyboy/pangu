@@ -459,7 +459,11 @@ class AkShareMarketDataProvider:
             prev = df.iloc[-2]
             prev_close = float(prev["close"])
             close = float(last["close"])
-            change_pct = (close - prev_close) / prev_close * 100 if prev_close else None
+            change_pct = (
+                round((close - prev_close) / prev_close * 100, 4)
+                if pd.notna(prev_close) and prev_close != 0
+                else None
+            )
             return {
                 "symbol": symbol,
                 "name": name,
