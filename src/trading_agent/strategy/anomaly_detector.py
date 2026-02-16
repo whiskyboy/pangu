@@ -1,4 +1,4 @@
-"""AnomalyDetector Protocol — PRD §4.3.3 / §6."""
+"""AnomalyDetector Protocol + FakeAnomalyDetector — PRD §4.3.3 / §6."""
 
 from __future__ import annotations
 
@@ -19,3 +19,19 @@ class AnomalyDetector(Protocol):
     ) -> list[TradeSignal]:
         """Detect anomalies: volume ratio >3, price change >5%, etc."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Fake implementation for testing / development
+# ---------------------------------------------------------------------------
+
+
+class FakeAnomalyDetector:
+    """Returns empty list — anomaly detection is a stub in M1."""
+
+    def detect(
+        self,
+        a_share_quotes: pd.DataFrame,
+        global_quotes: pd.DataFrame | None = None,
+    ) -> list[TradeSignal]:
+        return []
