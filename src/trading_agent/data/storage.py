@@ -1,0 +1,423 @@
+"""SQLite storage layer — PRD §7.1.
+
+Provides a thin wrapper around sqlite3 for persisting daily bars,
+news items, trade signals, fundamentals, data sync log, and the
+trading calendar.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+import threading
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import pandas as pd
+
+from trading_agent.models import (
+    Action,
+    NewsItem,
+    Region,
+    SignalStatus,
+    TradeSignal,
+)
+
+# ---------------------------------------------------------------------------
+# DDL — per PRD §7.1
+# ---------------------------------------------------------------------------
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS daily_bars (
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,       -- YYYY-MM-DD
+    open        REAL,
+    high        REAL,
+    low         REAL,
+    close       REAL,
+    volume      INTEGER,
+    amount      REAL,
+    adj_factor  REAL DEFAULT 1.0,
+    PRIMARY KEY (symbol, date)
+);
+
+CREATE TABLE IF NOT EXISTS news_items (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    content     TEXT,
+    source      TEXT,
+    region      TEXT DEFAULT 'domestic',
+    symbols     TEXT,               -- JSON array
+    sentiment   REAL,
+    raw_json    TEXT,
+    title_hash  TEXT,
+    UNIQUE (source, title_hash)
+);
+
+CREATE TABLE IF NOT EXISTS trade_signals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp        TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    name             TEXT,
+    action           TEXT NOT NULL,
+    signal_status    TEXT,
+    days_in_top_n    INTEGER DEFAULT 0,
+    price            REAL,
+    confidence       REAL,
+    source           TEXT,
+    reason           TEXT,
+    stop_loss        REAL,
+    take_profit      REAL,
+    factor_score     REAL,
+    prev_factor_score REAL,
+    pushed           INTEGER DEFAULT 0,
+    metadata         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS backtest_results (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_time        TEXT NOT NULL,
+    strategy_name   TEXT,
+    config_json     TEXT,
+    sharpe_ratio    REAL,
+    annual_return   REAL,
+    max_drawdown    REAL,
+    win_rate        REAL,
+    total_trades    INTEGER,
+    report_path     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fundamentals (
+    symbol       TEXT NOT NULL,
+    date         TEXT NOT NULL,
+    pe_ttm       REAL,
+    pb           REAL,
+    roe_ttm      REAL,
+    revenue_yoy  REAL,
+    profit_yoy   REAL,
+    market_cap   REAL,
+    PRIMARY KEY (symbol, date)
+);
+
+CREATE TABLE IF NOT EXISTS data_sync_log (
+    symbol      TEXT NOT NULL,
+    data_type   TEXT NOT NULL,
+    last_sync   TEXT NOT NULL,
+    last_date   TEXT,
+    source      TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    error_msg   TEXT,
+    PRIMARY KEY (symbol, data_type)
+);
+
+CREATE TABLE IF NOT EXISTS trading_calendar (
+    date TEXT PRIMARY KEY   -- YYYY-MM-DD
+);
+"""
+
+
+class Database:
+    """Thin SQLite wrapper for TradingAgent persistence."""
+
+    def __init__(self, db_path: str = ":memory:") -> None:
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.Lock()
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+
+    # ------------------------------------------------------------------
+    # Schema
+    # ------------------------------------------------------------------
+
+    def init_tables(self) -> None:
+        """Create all tables if they don't exist."""
+        with self._lock:
+            self._conn.executescript(_DDL)
+
+    # ------------------------------------------------------------------
+    # daily_bars
+    # ------------------------------------------------------------------
+
+    def save_daily_bars(self, symbol: str, df: pd.DataFrame) -> int:
+        """INSERT OR REPLACE daily bars from *df*.
+
+        *df* must contain columns: date, open, high, low, close, volume.
+        Optional: amount, adj_factor.  Returns row count inserted.
+        """
+        if df.empty:
+            return 0
+
+        rows: list[tuple[Any, ...]] = []
+        for _, r in df.iterrows():
+            rows.append((
+                symbol,
+                str(r["date"]),
+                r.get("open"),
+                r.get("high"),
+                r.get("low"),
+                r.get("close"),
+                r.get("volume"),
+                r.get("amount"),
+                r.get("adj_factor", 1.0),
+            ))
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO daily_bars "
+                "(symbol, date, open, high, low, close, volume, amount, adj_factor) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+        return len(rows)
+
+    def load_daily_bars(
+        self, symbol: str, start: str, end: str
+    ) -> pd.DataFrame:
+        """Load daily bars for *symbol* between *start* and *end* (inclusive)."""
+        with self._lock:
+            return pd.read_sql(
+                "SELECT * FROM daily_bars WHERE symbol = ? AND date >= ? AND date <= ? "
+                "ORDER BY date",
+                self._conn,
+                params=(symbol, start, end),
+            )
+
+    # ------------------------------------------------------------------
+    # data_sync_log
+    # ------------------------------------------------------------------
+
+    def get_last_sync_date(self, symbol: str, data_type: str) -> str | None:
+        """Return the last data date for *(symbol, data_type)*, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT last_date FROM data_sync_log WHERE symbol = ? AND data_type = ?",
+                (symbol, data_type),
+            ).fetchone()
+        return row[0] if row else None
+
+    def update_sync_log(
+        self,
+        symbol: str,
+        data_type: str,
+        status: str,
+        source: str,
+        *,
+        last_date: str | None = None,
+        error_msg: str | None = None,
+    ) -> None:
+        """Upsert a row in data_sync_log."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO data_sync_log "
+                "(symbol, data_type, last_sync, last_date, source, status, error_msg) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (symbol, data_type, now, last_date, source, status, error_msg),
+            )
+            self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # news_items
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _title_hash(title: str) -> str:
+        return hashlib.sha256(title.encode()).hexdigest()[:16]
+
+    def save_news_items(self, items: list[NewsItem]) -> int:
+        """Insert news items, dedup by (source, title_hash). Returns count inserted."""
+        inserted = 0
+        with self._lock:
+            for item in items:
+                try:
+                    self._conn.execute(
+                        "INSERT INTO news_items "
+                        "(timestamp, title, content, source, region, symbols, sentiment, title_hash) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            item.timestamp.isoformat(),
+                            item.title,
+                            item.content,
+                            item.source,
+                            item.region.value,
+                            json.dumps(item.symbols),
+                            item.sentiment,
+                            self._title_hash(item.title),
+                        ),
+                    )
+                    inserted += 1
+                except sqlite3.IntegrityError:
+                    pass
+            self._conn.commit()
+        return inserted
+
+    def load_recent_news(self, hours: int = 24) -> list[NewsItem]:
+        """Load news items from the last *hours* hours."""
+        cutoff = (
+            datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+        ).isoformat()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT timestamp, title, content, source, region, symbols, sentiment "
+                "FROM news_items WHERE timestamp >= ? ORDER BY timestamp DESC",
+                (cutoff,),
+            ).fetchall()
+        result: list[NewsItem] = []
+        for ts, title, content, source, region, symbols_json, sentiment in rows:
+            result.append(
+                NewsItem(
+                    timestamp=datetime.fromisoformat(ts),
+                    title=title,
+                    content=content or "",
+                    source=source or "",
+                    region=Region(region),
+                    symbols=json.loads(symbols_json) if symbols_json else [],
+                    sentiment=sentiment,
+                )
+            )
+        return result
+
+    # ------------------------------------------------------------------
+    # trade_signals
+    # ------------------------------------------------------------------
+
+    def save_trade_signal(self, signal: TradeSignal) -> int:
+        """Insert a trade signal. Returns the inserted row id."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO trade_signals "
+                "(timestamp, symbol, name, action, signal_status, days_in_top_n, "
+                "price, confidence, source, reason, "
+                "stop_loss, take_profit, factor_score, prev_factor_score, pushed, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                (
+                    signal.timestamp.isoformat(),
+                    signal.symbol,
+                    signal.name,
+                    signal.action.value,
+                    signal.signal_status.value,
+                    signal.days_in_top_n,
+                    signal.price,
+                    signal.confidence,
+                    signal.source,
+                    signal.reason,
+                    signal.stop_loss,
+                    signal.take_profit,
+                    signal.factor_score,
+                    signal.prev_factor_score,
+                    json.dumps(signal.metadata),
+                ),
+            )
+            self._conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    def load_signals(self, date: str) -> list[TradeSignal]:
+        """Load all signals whose timestamp starts with *date* (YYYY-MM-DD)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT timestamp, symbol, name, action, signal_status, days_in_top_n, "
+                "price, confidence, source, reason, "
+                "stop_loss, take_profit, factor_score, prev_factor_score, metadata "
+                "FROM trade_signals WHERE timestamp LIKE ? ORDER BY timestamp",
+                (f"{date}%",),
+            ).fetchall()
+        result: list[TradeSignal] = []
+        for (
+            ts, symbol, name, action, signal_status, days_in_top_n,
+            price, confidence, source, reason,
+            stop_loss, take_profit, factor_score, prev_factor_score, metadata_json,
+        ) in rows:
+            result.append(
+                TradeSignal(
+                    timestamp=datetime.fromisoformat(ts),
+                    symbol=symbol,
+                    name=name or "",
+                    action=Action(action),
+                    signal_status=SignalStatus(signal_status) if signal_status else SignalStatus.NEW_ENTRY,
+                    days_in_top_n=days_in_top_n or 0,
+                    price=price or 0.0,
+                    confidence=confidence or 0.0,
+                    source=source or "",
+                    reason=reason or "",
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    factor_score=factor_score,
+                    prev_factor_score=prev_factor_score,
+                    metadata=json.loads(metadata_json) if metadata_json else {},
+                )
+            )
+        return result
+
+    # ------------------------------------------------------------------
+    # trading_calendar
+    # ------------------------------------------------------------------
+
+    def save_trading_calendar(self, dates: list[str]) -> int:
+        """Insert trading calendar dates (YYYY-MM-DD). Returns count of *new* rows inserted."""
+        with self._lock:
+            cur = self._conn.executemany(
+                "INSERT OR IGNORE INTO trading_calendar (date) VALUES (?)",
+                [(d,) for d in dates],
+            )
+            self._conn.commit()
+        return cur.rowcount
+
+    def is_trading_day(self, date: str) -> bool:
+        """Check if *date* is a trading day."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM trading_calendar WHERE date = ?", (date,)
+            ).fetchone()
+        return row is not None
+
+    # ------------------------------------------------------------------
+    # fundamentals
+    # ------------------------------------------------------------------
+
+    def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:
+        """INSERT OR REPLACE fundamentals rows from *df*. Returns row count."""
+        if df.empty:
+            return 0
+        rows: list[tuple[Any, ...]] = []
+        for _, r in df.iterrows():
+            rows.append((
+                symbol,
+                str(r["date"]),
+                r.get("pe_ttm"),
+                r.get("pb"),
+                r.get("roe_ttm"),
+                r.get("revenue_yoy"),
+                r.get("profit_yoy"),
+                r.get("market_cap"),
+            ))
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO fundamentals "
+                "(symbol, date, pe_ttm, pb, roe_ttm, revenue_yoy, profit_yoy, market_cap) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+        return len(rows)
+
+    def load_fundamentals(
+        self, symbol: str, start: str, end: str
+    ) -> pd.DataFrame:
+        """Load fundamentals for *symbol* between *start* and *end*."""
+        with self._lock:
+            return pd.read_sql(
+                "SELECT * FROM fundamentals WHERE symbol = ? AND date >= ? AND date <= ? "
+                "ORDER BY date",
+                self._conn,
+                params=(symbol, start, end),
+            )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the database connection."""
+        self._conn.close()
