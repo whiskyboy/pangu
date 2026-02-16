@@ -26,9 +26,13 @@ data/logs/
 # Ruff
 .ruff_cache/
 
-# pytest
+# pytest / coverage
 .pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
 
 # uv
 uv.lock
-.coverage
