@@ -250,6 +250,166 @@ def _retry_call(fn, *, max_retries: int = 3, backoff_base: float = 2.0,
 
 
 # ---------------------------------------------------------------------------
+# BaoStock fallback implementation — PRD §4.1.1 (M2.4)
+# ---------------------------------------------------------------------------
+
+
+def _to_bs_code(symbol: str) -> str:
+    """Convert 6-digit A-share code to BaoStock format (e.g. '600519' → 'sh.600519')."""
+    if symbol.startswith(("sh.", "sz.")):
+        return symbol
+    if not symbol or len(symbol) != 6 or not symbol.isdigit():
+        raise ValueError(f"Invalid A-share stock code: {symbol!r}")
+    first = symbol[0]
+    if first == "6":
+        return f"sh.{symbol}"
+    if first in ("0", "3"):
+        return f"sz.{symbol}"
+    # BaoStock doesn't support BJ exchange (8xxxxx) or B-shares (9/2xxxxx)
+    raise ValueError(f"BaoStock does not support this stock code: {symbol}")
+
+
+class BaoStockMarketDataProvider:
+    """BaoStock-backed fallback provider for A-share daily bars.
+
+    Only supports ``get_daily_bars`` and ``get_stock_list``.
+    All other methods raise ``NotImplementedError`` because BaoStock has
+    no real-time or international market data.
+
+    BaoStock requires a login/logout session.  This class manages the
+    session lazily (login on first call) and exposes ``close()`` for
+    explicit cleanup.
+    """
+
+    def __init__(self, storage=None) -> None:
+        import baostock as bs  # lazy import
+
+        self._bs = bs
+        self._storage = storage
+        self._logged_in = False
+        self._login_lock = threading.Lock()
+
+    # -- session management --
+
+    def _ensure_login(self) -> None:
+        with self._login_lock:
+            if not self._logged_in:
+                lg = self._bs.login()
+                if lg.error_code != "0":
+                    raise RuntimeError(f"BaoStock login failed: {lg.error_msg}")
+                self._logged_in = True
+
+    def close(self) -> None:
+        """Logout from BaoStock session."""
+        with self._login_lock:
+            if self._logged_in:
+                self._bs.logout()
+                self._logged_in = False
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except AttributeError:
+            pass
+
+    # -- helpers --
+
+    def _query_to_df(self, rs) -> pd.DataFrame:
+        """Convert BaoStock ResultData to DataFrame."""
+        rows: list[list] = []
+        while (rs.error_code == "0") and rs.next():
+            rows.append(rs.get_row_data())
+        return pd.DataFrame(rows, columns=rs.fields) if rows else pd.DataFrame()
+
+    # -- Protocol methods --
+
+    def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        """Fetch daily K-line via bs.query_history_k_data_plus."""
+        self._ensure_login()
+
+        bs_code = _to_bs_code(symbol)
+        rs = self._bs.query_history_k_data_plus(
+            bs_code,
+            "date,code,open,high,low,close,preclose,volume,amount,adjustflag,pctChg",
+            start_date=start,
+            end_date=end,
+            frequency="d",
+            adjustflag="2",  # 前复权 = qfq
+        )
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"BaoStock query_history_k_data_plus failed for {bs_code}: {rs.error_msg}"
+            )
+
+        df = self._query_to_df(rs)
+        if df.empty:
+            return pd.DataFrame(
+                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
+            )
+
+        # Cast numeric columns (BaoStock returns strings)
+        for col in ("open", "high", "low", "close", "volume", "amount"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df["adj_factor"] = 1.0
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+
+        result = df[["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]]
+
+        if self._storage is not None and not result.empty:
+            self._storage.save_daily_bars(symbol, result)
+            max_date = result["date"].max()
+            self._storage.update_sync_log(
+                symbol, "daily_bars", "fallback", "baostock", last_date=max_date,
+            )
+
+        return result
+
+    def get_stock_list(self) -> pd.DataFrame:
+        """Fetch A-share stock list via bs.query_all_stock (excludes BJ exchange)."""
+        self._ensure_login()
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        rs = self._bs.query_all_stock(day=today)
+        if rs.error_code != "0":
+            raise RuntimeError(f"BaoStock query_all_stock failed: {rs.error_msg}")
+
+        df = self._query_to_df(rs)
+        if df.empty:
+            return pd.DataFrame(columns=["symbol", "name"])
+
+        # Filter to A-shares only:
+        #   SH: 6xxxxx (main board), 688xxx (STAR/科创板)
+        #   SZ: 0xxxxx (main board), 3xxxxx (ChiNext/创业板)
+        # Exclude: indices (sh.000xxx), B-shares (sh.9xxx, sz.2xxx)
+        df = df[df["tradeStatus"] == "1"].copy()
+        df["symbol"] = df["code"].str.replace(r"^(sh|sz)\.", "", regex=True)
+        df = df.rename(columns={"code_name": "name"})
+
+        # Use original code prefix to correctly filter
+        is_sh_stock = df["code"].str.startswith("sh.") & df["symbol"].str.match(r"^6\d{5}$")
+        is_sz_stock = df["code"].str.startswith("sz.") & df["symbol"].str.match(r"^[03]\d{5}$")
+        df = df[is_sh_stock | is_sz_stock]
+
+        return df[["symbol", "name"]].reset_index(drop=True)
+
+    def get_realtime_quote(self, symbols: list[str]) -> pd.DataFrame:
+        raise NotImplementedError("BaoStock does not support real-time quotes")
+
+    def get_us_indices(self) -> pd.DataFrame:
+        raise NotImplementedError("BaoStock does not cover international markets")
+
+    def get_hk_indices(self) -> pd.DataFrame:
+        raise NotImplementedError("BaoStock does not cover international markets")
+
+    def get_commodity_futures(self) -> pd.DataFrame:
+        raise NotImplementedError("BaoStock does not cover international markets")
+
+    def get_global_snapshot(self) -> pd.DataFrame:
+        raise NotImplementedError("BaoStock does not cover international markets")
+
+
+# ---------------------------------------------------------------------------
 # AkShare real implementation — PRD §4.1.1
 # ---------------------------------------------------------------------------
 
@@ -263,12 +423,16 @@ class AkShareMarketDataProvider:
         If provided, daily bars are cached in SQLite with incremental updates.
     request_interval : float
         Minimum seconds between AkShare API calls (default 0.5).
+    fallback : BaoStockMarketDataProvider | None
+        If provided, daily bars automatically fall back to BaoStock when
+        AkShare fails (circuit breaker open or retries exhausted).
     """
 
     def __init__(
         self,
         storage=None,
         request_interval: float = 0.5,
+        fallback: BaoStockMarketDataProvider | None = None,
     ) -> None:
         import akshare  # noqa: F811  — lazy import so tests can mock
 
@@ -278,6 +442,7 @@ class AkShareMarketDataProvider:
         self._last_call: float = 0.0
         self._circuit = CircuitBreaker()
         self._throttle_lock = threading.Lock()
+        self._fallback = fallback
 
     # -- rate limiting --
 
@@ -309,7 +474,7 @@ class AkShareMarketDataProvider:
     # -- Protocol methods --
 
     def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        """Fetch daily bars with SQLite cache + incremental update."""
+        """Fetch daily bars with SQLite cache + incremental update + BaoStock fallback."""
         # Try cache first
         if self._storage is not None:
             last = self._storage.get_last_sync_date(symbol, "daily_bars")
@@ -328,14 +493,30 @@ class AkShareMarketDataProvider:
         ak_start = fetch_start.replace("-", "")
         ak_end = end.replace("-", "")
 
-        self._throttle()
-        df = _retry_call(
-            lambda: self._ak.stock_zh_a_hist(
-                symbol=symbol, period="daily",
-                start_date=ak_start, end_date=ak_end, adjust="qfq",
-            ),
-            circuit=self._circuit,
-        )
+        try:
+            self._throttle()
+            df = _retry_call(
+                lambda: self._ak.stock_zh_a_hist(
+                    symbol=symbol, period="daily",
+                    start_date=ak_start, end_date=ak_end, adjust="qfq",
+                ),
+                circuit=self._circuit,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "AkShare get_daily_bars failed for %s, trying fallback", symbol, exc_info=True,
+            )
+            df = None
+
+        # Fallback to BaoStock if AkShare failed or returned empty
+        if (df is None or df.empty) and self._fallback is not None:
+            logger.info("Falling back to BaoStock for %s daily bars", symbol)
+            try:
+                fallback_df = self._fallback.get_daily_bars(symbol, fetch_start, end)
+                if fallback_df is not None and not fallback_df.empty:
+                    return fallback_df
+            except Exception:  # noqa: BLE001
+                logger.warning("BaoStock fallback also failed for %s", symbol, exc_info=True)
 
         if df is None or df.empty:
             if self._storage is not None:
