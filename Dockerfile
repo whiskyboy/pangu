@@ -4,10 +4,12 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
+# Copy source + config first (needed by hatchling build)
 COPY pyproject.toml .
-RUN uv pip install --system .
-
 COPY src/ src/
 COPY config/ config/
+COPY scripts/ scripts/
+
+RUN uv pip install --system .
 
 CMD ["python", "-m", "trading_agent.main"]
