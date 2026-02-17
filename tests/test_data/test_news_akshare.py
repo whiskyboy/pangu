@@ -258,9 +258,10 @@ class TestParseTimestamp:
 
     def test_invalid_falls_back_to_now(self) -> None:
         ts = AkShareNewsDataProvider._parse_timestamp("bad", "data")
-        # Should be close to now
-        from datetime import datetime
-        assert (datetime.now() - ts).total_seconds() < 5
+        # Should be close to now (timezone-aware)
+        from trading_agent.tz import now
+        diff = abs((now().replace(tzinfo=None) - ts.replace(tzinfo=None)).total_seconds())
+        assert diff < 5
 
 
 # ---------------------------------------------------------------------------

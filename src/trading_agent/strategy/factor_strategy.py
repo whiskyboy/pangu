@@ -39,7 +39,8 @@ class FakeFactorStrategy:
     def generate_signals(
         self, data: pd.DataFrame, pool: list[str]
     ) -> list[TradeSignal]:
-        now = datetime.now()
+        from trading_agent.tz import now as _now
+        now = _now()
         signals: list[TradeSignal] = []
         for symbol in pool:
             score = _FAKE_SCORES.get(symbol, 0.5)

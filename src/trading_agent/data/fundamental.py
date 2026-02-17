@@ -129,7 +129,8 @@ class AkShareFundamentalProvider:
         self._throttle()
         import datetime
 
-        current_year = str(datetime.datetime.now().year - 1)
+        from trading_agent.tz import now as _now
+        current_year = str(_now().year - 1)
         df = _retry_call(
             lambda: self._ak.stock_financial_analysis_indicator(
                 symbol=symbol, start_year=current_year,

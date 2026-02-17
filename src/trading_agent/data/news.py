@@ -13,6 +13,16 @@ from trading_agent.models import NewsItem, Region
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Timezone helper
+# ---------------------------------------------------------------------------
+
+def _now() -> datetime:
+    """Return current time in the configured system timezone."""
+    from trading_agent.tz import now
+    return now()
+
+
 class NewsDataProvider(Protocol):
     """Interface for domestic and international financial news."""
 
@@ -194,14 +204,16 @@ class AkShareNewsDataProvider:
 
     @staticmethod
     def _parse_timestamp(date_str: str, time_str: str) -> datetime:
-        """Parse date + time strings from AkShare into datetime."""
+        """Parse date + time strings from AkShare into tz-aware datetime."""
+        from trading_agent.tz import _get_tz
+
         combined = f"{date_str} {time_str}".strip()
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
             try:
-                return datetime.strptime(combined, fmt)
+                return datetime.strptime(combined, fmt).replace(tzinfo=_get_tz())
             except ValueError:
                 continue
-        return datetime.now()
+        return _now()
 
     def _fetch_telegraph(self) -> list[NewsItem]:
         """Fetch all CLS telegraph news (single API call), classify region."""
@@ -282,8 +294,8 @@ class AkShareNewsDataProvider:
         lookback window.  Results are stored as :class:`NewsItem` with
         ``source="巨潮"`` and the announcement URL in *content*.
         """
-        end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+        end_date = _now().strftime("%Y%m%d")
+        start_date = (_now() - timedelta(days=90)).strftime("%Y%m%d")
 
         try:
             self._throttle()

@@ -156,10 +156,12 @@ class StockPoolManager:
 
         Failures are logged but do not prevent the stock from being added.
         """
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
-        end = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+        from trading_agent.tz import now as _now
+
+        end = _now().strftime("%Y-%m-%d")
+        start = (_now() - timedelta(days=200)).strftime("%Y-%m-%d")
 
         # 1. Historical daily bars (~120 trading days ≈ 200 calendar days)
         try:
@@ -177,7 +179,7 @@ class StockPoolManager:
             if val or (fin is not None and not fin.empty):
                 import pandas as pd
 
-                today = datetime.now().strftime("%Y-%m-%d")
+                today = _now().strftime("%Y-%m-%d")
                 row: dict[str, Any] = {"date": today}
                 if val:
                     row.update({
@@ -305,9 +307,14 @@ class StockPoolManager:
                 if ipo_date_str:
                     from datetime import datetime
 
+                    from trading_agent.tz import _get_tz
+                    from trading_agent.tz import now as _tz_now
+
                     try:
-                        ipo_date = datetime.strptime(ipo_date_str, "%Y%m%d")
-                        if (datetime.now() - ipo_date).days < 60:
+                        ipo_date = datetime.strptime(ipo_date_str, "%Y%m%d").replace(
+                            tzinfo=_get_tz()
+                        )
+                        if (_tz_now() - ipo_date).days < 60:
                             logger.info("filtered %s: IPO < 60 days", symbol)
                             continue
                     except ValueError:

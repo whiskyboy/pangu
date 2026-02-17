@@ -159,8 +159,9 @@ class TestSyncLog:
 
 
 def _make_news(title: str = "Test News", source: str = "cls") -> NewsItem:
+    from trading_agent.tz import now as _now
     return NewsItem(
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=_now(),
         title=title,
         content="Content",
         source=source,

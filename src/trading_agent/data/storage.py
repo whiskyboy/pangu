@@ -23,6 +23,7 @@ from trading_agent.models import (
     SignalStatus,
     TradeSignal,
 )
+from trading_agent.tz import now as _now
 
 # ---------------------------------------------------------------------------
 # DDL — per PRD §7.1
@@ -222,7 +223,7 @@ class Database:
         error_msg: str | None = None,
     ) -> None:
         """Upsert a row in data_sync_log."""
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = _now().isoformat()
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO data_sync_log "
@@ -270,7 +271,7 @@ class Database:
     def load_recent_news(self, hours: int = 24) -> list[NewsItem]:
         """Load news items from the last *hours* hours."""
         cutoff = (
-            datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+            _now() - timedelta(hours=hours)
         ).isoformat()
         with self._lock:
             rows = self._conn.execute(
@@ -295,7 +296,7 @@ class Database:
 
     def cleanup_old_news(self, days: int = 30) -> int:
         """Delete news items older than *days* days. Returns count deleted."""
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        cutoff = (_now() - timedelta(days=days)).isoformat()
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM news_items WHERE timestamp < ?", (cutoff,)

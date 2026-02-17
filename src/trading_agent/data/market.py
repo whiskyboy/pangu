@@ -369,7 +369,9 @@ class BaoStockMarketDataProvider:
         """Fetch A-share stock list via bs.query_all_stock (excludes BJ exchange)."""
         self._ensure_login()
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        from trading_agent.tz import today_str
+
+        today = today_str()
         rs = self._bs.query_all_stock(day=today)
         if rs.error_code != "0":
             raise RuntimeError(f"BaoStock query_all_stock failed: {rs.error_msg}")
@@ -697,7 +699,9 @@ class AkShareMarketDataProvider:
                           "close", "volume", "change_pct", "source"]
             )
 
-        today = pd.Timestamp.now(tz="Asia/Hong_Kong").strftime("%Y-%m-%d")
+        from trading_agent.tz import today_str
+
+        today = today_str()
         rows: list[dict] = []
         for code, name in self._HK_INDEX_CODES.items():
             match = full[full["代码"] == code]
@@ -738,6 +742,8 @@ class AkShareMarketDataProvider:
 
     def get_commodity_futures(self) -> pd.DataFrame:
         """Fetch international commodity futures via futures_foreign_commodity_realtime (~1s)."""
+        from trading_agent.tz import today_str
+
         try:
             self._throttle()
             raw = _retry_call(
@@ -768,7 +774,7 @@ class AkShareMarketDataProvider:
             rows.append({
                 "symbol": sym,
                 "name": display_name,
-                "date": str(r.get("日期", pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d"))),
+                "date": str(r.get("日期", today_str())),
                 "open": float(r["开盘价"]) if pd.notna(r.get("开盘价")) else None,
                 "high": float(r["最高价"]) if pd.notna(r.get("最高价")) else None,
                 "low": float(r["最低价"]) if pd.notna(r.get("最低价")) else None,

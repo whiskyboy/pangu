@@ -35,7 +35,8 @@ class FakeLLMEventEngine:
     async def analyze_news(
         self, news: list[NewsItem], watchlist: list[str]
     ) -> list[TradeSignal]:
-        now = datetime.now()
+        from trading_agent.tz import now as _now
+        now = _now()
         signals: list[TradeSignal] = []
         for item in news:
             for symbol in item.symbols:
