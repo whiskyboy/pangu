@@ -254,3 +254,92 @@ class TestParseTimestamp:
         # Should be close to now
         from datetime import datetime
         assert (datetime.now() - ts).total_seconds() < 5
+
+
+# ---------------------------------------------------------------------------
+# get_announcements
+# ---------------------------------------------------------------------------
+
+
+def _fake_announcement_df(n: int = 3) -> pd.DataFrame:
+    """Simulate ak.stock_zh_a_disclosure_report_cninfo() return."""
+    rows = []
+    for i in range(n):
+        rows.append({
+            "代码": "601899",
+            "简称": "紫金矿业",
+            "公告标题": f"紫金矿业关于测试公告{i}",
+            "公告时间": f"2026-02-{10 + i:02d}",
+            "公告链接": f"http://www.cninfo.com.cn/announcement/{i}",
+        })
+    return pd.DataFrame(rows)
+
+
+class TestGetAnnouncements:
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_returns_announcements(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = _fake_announcement_df(3)
+        provider = AkShareNewsDataProvider(request_interval=0)
+        items = provider.get_announcements("601899", limit=20)
+
+        assert len(items) == 3
+        assert items[0].source == "巨潮"
+        assert items[0].region == Region.DOMESTIC
+        assert "601899" in items[0].symbols
+        assert items[0].title == "紫金矿业关于测试公告0"
+        assert items[0].content.startswith("http://www.cninfo.com.cn/")
+        # All A-shares use market="沪深京"
+        call_kwargs = mock_api.call_args
+        assert call_kwargs[1]["market"] == "沪深京" or call_kwargs.kwargs["market"] == "沪深京"
+
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_limit_caps_results(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = _fake_announcement_df(5)
+        provider = AkShareNewsDataProvider(request_interval=0)
+        items = provider.get_announcements("601899", limit=2)
+        assert len(items) == 2
+
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_empty_returns_empty_list(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = pd.DataFrame()
+        provider = AkShareNewsDataProvider(request_interval=0)
+        assert provider.get_announcements("601899") == []
+
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_exception_returns_empty_list(self, mock_api: MagicMock) -> None:
+        mock_api.side_effect = ConnectionError("network error")
+        provider = AkShareNewsDataProvider(request_interval=0)
+        from trading_agent.data.market import CircuitBreaker
+        provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
+        assert provider.get_announcements("601899") == []
+
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_persists_to_storage(self, mock_api: MagicMock, db: Database) -> None:
+        mock_api.return_value = _fake_announcement_df(2)
+        provider = AkShareNewsDataProvider(storage=db, request_interval=0)
+        items = provider.get_announcements("601899", limit=20)
+
+        assert len(items) == 2
+        stored = db.load_recent_news(hours=24 * 30)
+        assert len(stored) == 2
+        assert stored[0].source == "巨潮"
+
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_parses_timestamp(self, mock_api: MagicMock) -> None:
+        mock_api.return_value = _fake_announcement_df(1)
+        provider = AkShareNewsDataProvider(request_interval=0)
+        items = provider.get_announcements("601899", limit=1)
+        assert items[0].timestamp.year == 2026
+        assert items[0].timestamp.month == 2
+
+    @patch("akshare.stock_zh_a_disclosure_report_cninfo")
+    def test_dedup_across_calls(self, mock_api: MagicMock, db: Database) -> None:
+        """Same announcements fetched twice should not duplicate in DB."""
+        mock_api.return_value = _fake_announcement_df(2)
+        provider = AkShareNewsDataProvider(storage=db, request_interval=0)
+
+        provider.get_announcements("601899")
+        provider.get_announcements("601899")
+
+        stored = db.load_recent_news(hours=24 * 30)
+        assert len(stored) == 2  # not 4

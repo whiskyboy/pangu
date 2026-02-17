@@ -28,6 +28,10 @@ class NewsDataProvider(Protocol):
         """Return international financial news."""
         ...
 
+    def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+        """Return recent announcements for a specific stock (巨潮)."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Fake implementation for testing / development
@@ -108,6 +112,18 @@ class FakeNewsDataProvider:
             ),
         ]
         return items[:limit]
+
+    def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+        return [
+            NewsItem(
+                timestamp=_NOW - timedelta(hours=1),
+                title=f"{symbol} 关于2025年度业绩预增的公告",
+                content="http://www.cninfo.com.cn/example",
+                source="巨潮",
+                region=Region.DOMESTIC,
+                symbols=[symbol],
+            ),
+        ][:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -258,3 +274,54 @@ class AkShareNewsDataProvider:
         """Fetch financial news via CLS telegraph (same feed as get_latest_news)."""
         all_items = self._fetch_telegraph()
         return all_items[:limit]
+
+    def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+        """Fetch announcements for *symbol* from 巨潮 (cninfo).
+
+        Uses ``ak.stock_zh_a_disclosure_report_cninfo`` with a 90-day
+        lookback window.  Results are stored as :class:`NewsItem` with
+        ``source="巨潮"`` and the announcement URL in *content*.
+        """
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+
+        try:
+            self._throttle()
+            df = _retry_call(
+                lambda: self._ak.stock_zh_a_disclosure_report_cninfo(
+                    symbol=symbol,
+                    market="沪深京",
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+                circuit=self._circuit,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "stock_zh_a_disclosure_report_cninfo(%s) failed",
+                symbol,
+                exc_info=True,
+            )
+            return []
+
+        if df is None or df.empty:
+            return []
+
+        items: list[NewsItem] = []
+        for _, row in df.head(limit).iterrows():
+            title = str(row.get("公告标题", ""))
+            url = str(row.get("公告链接", ""))
+            pub_time = str(row.get("公告时间", ""))
+            ts = self._parse_timestamp(pub_time, "")
+            items.append(NewsItem(
+                timestamp=ts,
+                title=title,
+                content=url,
+                source="巨潮",
+                region=Region.DOMESTIC,
+                symbols=[symbol],
+            ))
+
+        if self._storage is not None and items:
+            self._storage.save_news_items(items)
+        return items

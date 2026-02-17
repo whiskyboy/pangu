@@ -77,6 +77,9 @@ class _StubNews:
     def get_global_news(self, limit: int = 30) -> list[NewsItem]:
         return []
 
+    def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
+        return []
+
 
 class _StubStockPool:
     def get_watchlist(self) -> list[str]:
