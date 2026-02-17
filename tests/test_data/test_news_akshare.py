@@ -25,6 +25,9 @@ def db() -> Database:
 
 def _fake_telegraph_df(n: int = 3) -> pd.DataFrame:
     """Simulate ak.stock_info_global_cls() return with mixed domestic/global news."""
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
     templates = [
         ("央行宣布降准50基点", "中国人民银行决定下调存款准备金率。"),
         ("美联储维持利率不变", "Fed holds rates steady amid inflation."),
@@ -38,7 +41,7 @@ def _fake_telegraph_df(n: int = 3) -> pd.DataFrame:
         rows.append({
             "标题": templates[i][0],
             "内容": templates[i][1],
-            "发布日期": "2026-02-16",
+            "发布日期": today,
             "发布时间": f"10:{i:02d}:00",
         })
     return pd.DataFrame(rows)
@@ -46,13 +49,16 @@ def _fake_telegraph_df(n: int = 3) -> pd.DataFrame:
 
 def _fake_stock_news_df(n: int = 2) -> pd.DataFrame:
     """Simulate ak.stock_news_em() return."""
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
     rows = []
     for i in range(n):
         rows.append({
             "关键词": "600519",
             "新闻标题": f"茅台新闻{i}",
             "新闻内容": f"贵州茅台相关内容{i}。",
-            "发布时间": f"2026-02-16 09:{i:02d}:00",
+            "发布时间": f"{today} 09:{i:02d}:00",
             "文章来源": "东财快讯",
             "新闻链接": f"http://example.com/news/{i}",
         })
@@ -111,7 +117,8 @@ class TestGetLatestNews:
         mock_cls.return_value = _fake_telegraph_df(1)
         provider = AkShareNewsDataProvider(request_interval=0)
         items = provider.get_latest_news(limit=1)
-        assert items[0].timestamp.year == 2026
+        from datetime import datetime
+        assert items[0].timestamp.year == datetime.now().year
         assert items[0].timestamp.hour == 10
 
 
@@ -263,13 +270,16 @@ class TestParseTimestamp:
 
 def _fake_announcement_df(n: int = 3) -> pd.DataFrame:
     """Simulate ak.stock_zh_a_disclosure_report_cninfo() return."""
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
     rows = []
     for i in range(n):
         rows.append({
             "代码": "601899",
             "简称": "紫金矿业",
             "公告标题": f"紫金矿业关于测试公告{i}",
-            "公告时间": f"2026-02-{10 + i:02d}",
+            "公告时间": today,
             "公告链接": f"http://www.cninfo.com.cn/announcement/{i}",
         })
     return pd.DataFrame(rows)
@@ -329,8 +339,9 @@ class TestGetAnnouncements:
         mock_api.return_value = _fake_announcement_df(1)
         provider = AkShareNewsDataProvider(request_interval=0)
         items = provider.get_announcements("601899", limit=1)
-        assert items[0].timestamp.year == 2026
-        assert items[0].timestamp.month == 2
+        from datetime import datetime
+        assert items[0].timestamp.year == datetime.now().year
+        assert items[0].timestamp.month == datetime.now().month
 
     @patch("akshare.stock_zh_a_disclosure_report_cninfo")
     def test_dedup_across_calls(self, mock_api: MagicMock, db: Database) -> None:
