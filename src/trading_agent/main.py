@@ -1,9 +1,8 @@
-"""TradingAgent main entry point — M1 smoke test.
+"""TradingAgent main entry point — M2.9 integration verification.
 
-Runs a single pass through the core signal pipeline using Fake data providers
-to verify all components are correctly wired. This is NOT the final scheduler
-entry point — see PRD §4.6 and M5 (TradingScheduler) for the production
-7-task scheduling architecture.
+Runs a single pass through the core signal pipeline using real AkShare
+data providers for market, news, fundamental, and announcement data.
+Factor/LLM/anomaly engines remain Fake until M3/M4.
 """
 
 from __future__ import annotations
@@ -11,14 +10,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 import pandas as pd
 
+# Load .env if present (before config reads $ENV_VAR placeholders)
+_env_path = Path(".env")
+if _env_path.exists():
+    for line in _env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key:
+                os.environ.setdefault(key, val.strip())
+
 from trading_agent.config import load_settings
-from trading_agent.data.fundamental import FakeFundamentalDataProvider
-from trading_agent.data.market import FakeMarketDataProvider
-from trading_agent.data.news import FakeNewsDataProvider
-from trading_agent.data.stock_pool import FakeStockPool
+from trading_agent.data.fundamental import AkShareFundamentalProvider
+from trading_agent.data.market import AkShareMarketDataProvider
+from trading_agent.data.news import AkShareNewsDataProvider
+from trading_agent.data.stock_pool import StockPoolManager
+from trading_agent.data.storage import Database
 from trading_agent.models import Action
 from trading_agent.notification import NotificationManager
 from trading_agent.notification.feishu import FeishuNotifier
@@ -26,6 +38,7 @@ from trading_agent.strategy.anomaly_detector import FakeAnomalyDetector
 from trading_agent.strategy.factor_strategy import FakeFactorStrategy
 from trading_agent.strategy.llm_engine import FakeLLMEventEngine
 from trading_agent.strategy.signal_merger import SimpleSignalMerger
+from trading_agent.tz import today_str
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,22 +69,40 @@ def _print_signal_summary(signals: list) -> None:
 
 
 async def smoke_test() -> None:
-    """Run one pass of the T6 (intraday signal) flow with Fake data.
+    """Run one pass of the data + signal pipeline with real data providers.
 
-    Validates: config → stock pool → market data → news → factor signals
-    → event signals → anomaly detection → signal merger → notification.
+    Real: market (AkShare), news (AkShare), fundamental (AkShare), stock pool
+    Fake: factor strategy, LLM engine, anomaly detector (M3/M4)
     """
-    logger.info("=== TradingAgent M1 Smoke Test ===")
+    logger.info("=== TradingAgent M2.9 Integration Verification ===")
 
     # 1. Load config
     settings = load_settings()
     logger.info("Config loaded: timezone=%s", settings.system.get("timezone"))
 
-    # 2. Initialize Fake components
-    market = FakeMarketDataProvider()
-    _fundamental = FakeFundamentalDataProvider()  # used in T5, kept for completeness
-    news = FakeNewsDataProvider()
-    stock_pool = FakeStockPool()
+    # 2. Initialize SQLite
+    db_path = settings.system.get("db_path", "data/trading_agent.db")
+    dirname = os.path.dirname(db_path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+    db = Database(db_path)
+    db.init_tables()
+    logger.info("SQLite initialized: %s", db_path)
+
+    # 3. Initialize real data providers
+    market = AkShareMarketDataProvider(storage=db)
+    news = AkShareNewsDataProvider(storage=db)
+    fundamental = AkShareFundamentalProvider(storage=db)
+
+    stock_pool = StockPoolManager(
+        watchlist_path="config/watchlist.yaml",
+        storage=db,
+        market_provider=market,
+        news_provider=news,
+        fundamental_provider=fundamental,
+    )
+
+    # Fake engines (M3/M4)
     factor_strategy = FakeFactorStrategy()
     llm_engine = FakeLLMEventEngine()
     anomaly_detector = FakeAnomalyDetector()
@@ -84,7 +115,7 @@ async def smoke_test() -> None:
         sell_threshold=strategy_cfg.get("sell_threshold", 0.3),
     )
 
-    # 3. Setup notification
+    # 4. Setup notification
     notif_cfg = settings.notification
     notif_manager = NotificationManager()
 
@@ -108,41 +139,88 @@ async def smoke_test() -> None:
     else:
         logger.warning("Feishu not configured, skipping")
 
-    # 4. Get active stock pool
-    pool = stock_pool.get_active_pool()
-    logger.info("Active pool: %s (%d stocks)", pool, len(pool))
+    # 5. Sync trading calendar
+    cal_count = stock_pool.sync_trading_calendar()
+    logger.info("Trading calendar: %d new dates synced", cal_count)
 
-    # 5. Get market data
+    # 6. Get active stock pool (with ST/IPO filtering)
+    watchlist = stock_pool.get_watchlist()
+    logger.info("Watchlist: %s (%d stocks)", watchlist, len(watchlist))
+    pool = stock_pool.get_active_pool()
+    logger.info("Active pool (after filtering): %s (%d stocks)", pool, len(pool))
+
+    # 7. Fetch market data for each stock
+    today = today_str()
     bars_map: dict[str, pd.DataFrame] = {}
     for symbol in pool:
-        bars_map[symbol] = market.get_daily_bars(symbol, "2025-01-01", "2025-06-30")
-    logger.info("Daily bars loaded for %d symbols", len(bars_map))
+        try:
+            bars = market.get_daily_bars(symbol, "2025-06-01", today)
+            if bars is not None and not bars.empty:
+                bars_map[symbol] = bars
+                logger.info("  %s: %d daily bars", symbol, len(bars))
+            else:
+                logger.warning("  %s: no bars returned", symbol)
+        except Exception:  # noqa: BLE001
+            logger.warning("  %s: daily bars failed", symbol, exc_info=True)
+    logger.info("Daily bars loaded for %d/%d symbols", len(bars_map), len(pool))
 
-    quotes = market.get_realtime_quote(pool)
-    global_snapshot = market.get_global_snapshot()
-    logger.info("Realtime quotes: %d rows, global snapshot: %d rows", len(quotes), len(global_snapshot))
+    # 8. Fetch fundamentals
+    for symbol in pool:
+        try:
+            val = fundamental.get_valuation(symbol)
+            logger.info("  %s: PE=%.1f, PB=%.1f, 市值=%.0f亿",
+                        symbol,
+                        val.get("pe_ttm", 0),
+                        val.get("pb", 0),
+                        val.get("market_cap", 0) / 1e8)
+        except Exception:  # noqa: BLE001
+            logger.warning("  %s: fundamentals failed", symbol, exc_info=True)
 
-    # 6. Get news
-    domestic_news = news.get_latest_news()
-    global_news = news.get_global_news()
-    logger.info("News: %d domestic, %d global", len(domestic_news), len(global_news))
+    # 9. Fetch news
+    domestic_news = news.get_latest_news(limit=10)
+    logger.info("Latest news: %d items", len(domestic_news))
 
-    # 7. Generate factor signals
-    # Use first symbol's bars as representative data for FakeFactorStrategy
+    for symbol in pool[:2]:  # sample 2 stocks
+        try:
+            stock_news = news.get_stock_news(symbol, limit=5)
+            logger.info("  %s stock news: %d items", symbol, len(stock_news))
+        except Exception:  # noqa: BLE001
+            logger.warning("  %s: stock news failed", symbol, exc_info=True)
+
+    # 10. Fetch announcements
+    for symbol in pool[:2]:  # sample 2 stocks
+        try:
+            anns = news.get_announcements(symbol, limit=5)
+            logger.info("  %s announcements: %d items", symbol, len(anns))
+        except Exception:  # noqa: BLE001
+            logger.warning("  %s: announcements failed", symbol, exc_info=True)
+
+    # 11. Fetch global market snapshot
+    try:
+        global_snapshot = market.get_global_snapshot()
+        logger.info("Global snapshot: %d rows", len(global_snapshot))
+    except Exception:  # noqa: BLE001
+        logger.warning("Global snapshot failed", exc_info=True)
+        global_snapshot = pd.DataFrame()
+
+    # 12. Generate signals (Fake engines)
     sample_bars = next(iter(bars_map.values())) if bars_map else pd.DataFrame()
     factor_signals = factor_strategy.generate_signals(sample_bars, pool)
-    logger.info("Factor signals: %d", len(factor_signals))
+    logger.info("Factor signals (fake): %d", len(factor_signals))
 
-    # 8. Generate event signals
-    all_news = domestic_news + global_news
+    all_news = domestic_news
     event_signals = await llm_engine.analyze_news(all_news, pool)
-    logger.info("Event signals: %d", len(event_signals))
+    logger.info("Event signals (fake): %d", len(event_signals))
 
-    # 9. Anomaly detection
+    try:
+        quotes = market.get_realtime_quote(pool) if pool else pd.DataFrame()
+    except Exception:  # noqa: BLE001
+        logger.warning("Realtime quotes failed", exc_info=True)
+        quotes = pd.DataFrame()
     anomaly_signals = anomaly_detector.detect(quotes, global_snapshot)
-    logger.info("Anomaly signals: %d", len(anomaly_signals))
+    logger.info("Anomaly signals (fake): %d", len(anomaly_signals))
 
-    # 10. Signal merger
+    # 13. Signal merger
     news_availability = {
         symbol: any(symbol in n.symbols for n in all_news)
         for symbol in pool
@@ -151,11 +229,9 @@ async def smoke_test() -> None:
         factor_signals, event_signals, anomaly_signals, news_availability,
     )
     logger.info("Merged signals: %d", len(merged_signals))
-
-    # 11. Print summary
     _print_signal_summary(merged_signals)
 
-    # 12. Push notifications
+    # 14. Push notifications
     if merged_signals:
         for signal in merged_signals:
             result = await notif_manager.notify(signal)
@@ -164,7 +240,29 @@ async def smoke_test() -> None:
     else:
         logger.info("No signals to push")
 
-    logger.info("=== Smoke test complete ===")
+    # 15. DB summary
+    _print_db_summary(db)
+
+    logger.info("=== Integration verification complete ===")
+
+
+def _print_db_summary(db: Database) -> None:
+    """Print row counts for all tables."""
+    tables = [
+        "daily_bars", "news_items", "fundamentals",
+        "trade_signals", "trading_calendar", "global_snapshots",
+        "data_sync_log",
+    ]
+    print("\n" + "=" * 40)
+    print("📦 SQLite Summary")
+    print("=" * 40)
+    for table in tables:
+        try:
+            row = db._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608
+            print(f"  {table:25s} {row[0]:>8,} rows")
+        except Exception:  # noqa: BLE001
+            print(f"  {table:25s}    error")
+    print("=" * 40 + "\n")
 
 
 def main() -> None:

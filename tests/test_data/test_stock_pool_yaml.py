@@ -250,6 +250,69 @@ class TestYamlRoundTrip:
 
 
 # ---------------------------------------------------------------------------
+# _backfill_missing_data
+# ---------------------------------------------------------------------------
+
+
+class TestBackfillMissingData:
+    def test_backfills_when_no_bars(self, tmp_yaml: Path, db: Database) -> None:
+        """Stocks in YAML with no DB data should trigger _init_stock_data."""
+        m, n, f = _mock_providers()
+        # Constructor triggers backfill — both stocks have no bars in DB
+        _pool = StockPoolManager(tmp_yaml, db, m, n, f)
+
+        # get_daily_bars called once per stock without data
+        assert m.get_daily_bars.call_count == 2
+
+    def test_skips_when_bars_exist(self, tmp_yaml: Path, db: Database) -> None:
+        """Stocks with existing DB data should not trigger backfill."""
+        m, n, f = _mock_providers()
+        # Pre-populate bars for both stocks
+        db.save_daily_bars("601899", pd.DataFrame({
+            "date": ["2026-02-10"], "open": [10], "high": [11],
+            "low": [9], "close": [10.5], "volume": [1000],
+        }))
+        db.save_daily_bars("600967", pd.DataFrame({
+            "date": ["2026-02-10"], "open": [10], "high": [11],
+            "low": [9], "close": [10.5], "volume": [1000],
+        }))
+        _pool = StockPoolManager(tmp_yaml, db, m, n, f)
+
+        # No backfill calls since both stocks have data
+        m.get_daily_bars.assert_not_called()
+
+    def test_backfills_only_missing(self, tmp_yaml: Path, db: Database) -> None:
+        """Only stocks without data should trigger backfill."""
+        m, n, f = _mock_providers()
+        # Pre-populate bars for only one stock
+        db.save_daily_bars("601899", pd.DataFrame({
+            "date": ["2026-02-10"], "open": [10], "high": [11],
+            "low": [9], "close": [10.5], "volume": [1000],
+        }))
+        _pool = StockPoolManager(tmp_yaml, db, m, n, f)
+
+        # Only 600967 should be backfilled
+        assert m.get_daily_bars.call_count == 1
+
+    def test_backfills_stale_data(self, tmp_path: Path, db: Database) -> None:
+        """Stocks with data older than 7 days should trigger backfill."""
+        p = tmp_path / "watchlist.yaml"
+        p.write_text(yaml.dump({"watchlist": [
+            {"symbol": "601899", "name": "紫金矿业"},
+        ]}, allow_unicode=True))
+        m, n, f = _mock_providers()
+        # Data from 30 days ago — stale
+        db.save_daily_bars("601899", pd.DataFrame({
+            "date": ["2025-12-01"], "open": [10], "high": [11],
+            "low": [9], "close": [10.5], "volume": [1000],
+        }))
+        _pool = StockPoolManager(p, db, m, n, f)
+
+        # Should trigger backfill due to stale data
+        assert m.get_daily_bars.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # _filter_stocks
 # ---------------------------------------------------------------------------
 

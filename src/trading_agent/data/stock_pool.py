@@ -125,6 +125,7 @@ class StockPoolManager:
         self._fundamental = fundamental_provider
         self._entries: list[dict[str, str]] = []
         self._load_yaml()
+        self._backfill_missing_data()
 
     # -- YAML I/O --
 
@@ -148,6 +149,32 @@ class StockPoolManager:
         self._path.write_text(
             yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
         )
+
+    # -- Data backfill --
+
+    def _backfill_missing_data(self) -> None:
+        """Check watchlist stocks for missing or stale data and pull if needed."""
+        from datetime import timedelta
+
+        from trading_agent.tz import now as _now
+        from trading_agent.tz import today_str
+
+        today = today_str()
+        cutoff = (_now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        for symbol in self.get_watchlist():
+            bars = self._storage.load_daily_bars(symbol, "2000-01-01", today)
+            if bars.empty:
+                logger.info("No data for %s, running initial data pull…", symbol)
+                self._init_stock_data(symbol)
+            else:
+                last_date = str(bars["date"].iloc[-1])
+                if last_date < cutoff:
+                    logger.info(
+                        "Stale data for %s (last: %s), backfilling…",
+                        symbol, last_date,
+                    )
+                    self._init_stock_data(symbol)
 
     # -- Data initialization --
 
