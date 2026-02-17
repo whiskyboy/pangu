@@ -217,6 +217,37 @@ class TestNewsItems:
         assert got.symbols == ["600519"]
         assert got.sentiment == pytest.approx(0.5)
 
+    def test_cleanup_old_news_deletes_expired(self, db: Database) -> None:
+        """Items older than retention window should be deleted."""
+        old = NewsItem(
+            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            title="Old News",
+            content="Old",
+            source="cls",
+            region=Region.DOMESTIC,
+        )
+        recent = _make_news("Recent News")
+        db.save_news_items([old, recent])
+
+        deleted = db.cleanup_old_news(days=30)
+        assert deleted == 1
+
+        remaining = db.load_recent_news(hours=24)
+        assert len(remaining) == 1
+        assert remaining[0].title == "Recent News"
+
+    def test_cleanup_old_news_keeps_recent(self, db: Database) -> None:
+        """All items within retention window should be kept."""
+        items = [_make_news("News A"), _make_news("News B")]
+        db.save_news_items(items)
+
+        deleted = db.cleanup_old_news(days=30)
+        assert deleted == 0
+
+    def test_cleanup_old_news_returns_zero_when_empty(self, db: Database) -> None:
+        """Cleanup on empty table should return 0."""
+        assert db.cleanup_old_news(days=30) == 0
+
 
 # ------------------------------------------------------------------
 # trade_signals

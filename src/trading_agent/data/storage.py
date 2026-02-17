@@ -293,6 +293,16 @@ class Database:
             )
         return result
 
+    def cleanup_old_news(self, days: int = 30) -> int:
+        """Delete news items older than *days* days. Returns count deleted."""
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM news_items WHERE timestamp < ?", (cutoff,)
+            )
+            self._conn.commit()
+            return cur.rowcount
+
     # ------------------------------------------------------------------
     # trade_signals
     # ------------------------------------------------------------------
