@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from trading_agent.models import NewsItem, Region
+from trading_agent.models import NewsCategory, NewsItem, Region
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +132,7 @@ class FakeNewsDataProvider:
                 source="巨潮",
                 region=Region.DOMESTIC,
                 symbols=[symbol],
+                category=NewsCategory.ANNOUNCEMENT,
             ),
         ][:limit]
 
@@ -332,6 +333,7 @@ class AkShareNewsDataProvider:
                 source="巨潮",
                 region=Region.DOMESTIC,
                 symbols=[symbol],
+                category=NewsCategory.ANNOUNCEMENT,
             ))
 
         if self._storage is not None and items:

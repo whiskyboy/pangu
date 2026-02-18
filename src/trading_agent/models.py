@@ -31,6 +31,13 @@ class Region(Enum):
     GLOBAL = "global"
 
 
+class NewsCategory(str, Enum):
+    """Distinguishes news articles from company announcements."""
+
+    NEWS = "news"
+    ANNOUNCEMENT = "announcement"
+
+
 @dataclass
 class NewsItem:
     """A single news item from any data source.
@@ -45,6 +52,7 @@ class NewsItem:
     region: Region
     symbols: list[str] = field(default_factory=list)
     sentiment: float | None = None
+    category: NewsCategory = NewsCategory.NEWS
 
 
 @dataclass

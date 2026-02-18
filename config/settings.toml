@@ -39,9 +39,6 @@ max_signals_per_day_per_stock_per_direction = 1
 anomaly_volume_ratio = 3.0
 anomaly_price_change_pct = 5.0
 
-[news_filter]
-keywords = ["重大合同", "业绩预增", "回购", "增持", "并购", "战略合作", "突破", "获批", "业绩预告", "定增", "减持", "处罚", "退市", "ST"]
-
 [llm]
 provider = "azure/$AZURE_DEPLOYMENT"
 fallback_providers = ["deepseek/deepseek-chat", "gemini/gemini-2.5-flash"]

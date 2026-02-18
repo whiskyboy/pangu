@@ -86,7 +86,6 @@ class Settings:
     notification: dict[str, Any] = field(default_factory=dict)
     scheduler: dict[str, Any] = field(default_factory=dict)
     global_market: dict[str, Any] = field(default_factory=dict)
-    news_filter: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for section in (
@@ -99,7 +98,6 @@ class Settings:
             "notification",
             "scheduler",
             "global_market",
-            "news_filter",
         ):
             setattr(self, section, self.raw.get(section, {}))
 

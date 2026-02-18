@@ -18,6 +18,7 @@ import pandas as pd
 
 from trading_agent.models import (
     Action,
+    NewsCategory,
     NewsItem,
     Region,
     SignalStatus,
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS news_items (
     content     TEXT,
     source      TEXT,
     region      TEXT DEFAULT 'domestic',
+    category    TEXT DEFAULT 'news',
     symbols     TEXT,               -- JSON array
     sentiment   REAL,
     raw_json    TEXT,
@@ -158,6 +160,20 @@ class Database:
         """Create all tables if they don't exist."""
         with self._lock:
             self._conn.executescript(_DDL)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply schema migrations for existing databases."""
+        # Add category column to news_items if missing
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(news_items)").fetchall()
+        }
+        if "category" not in cols:
+            self._conn.execute(
+                "ALTER TABLE news_items ADD COLUMN category TEXT DEFAULT 'news'"
+            )
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # daily_bars
@@ -257,14 +273,15 @@ class Database:
                 try:
                     self._conn.execute(
                         "INSERT INTO news_items "
-                        "(timestamp, title, content, source, region, symbols, sentiment, title_hash) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "(timestamp, title, content, source, region, category, symbols, sentiment, title_hash) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             item.timestamp.isoformat(),
                             item.title,
                             item.content,
                             item.source,
                             item.region.value,
+                            item.category.value,
                             json.dumps(item.symbols),
                             item.sentiment,
                             self._title_hash(item.title),
@@ -283,12 +300,12 @@ class Database:
         ).isoformat()
         with self._lock:
             rows = self._conn.execute(
-                "SELECT timestamp, title, content, source, region, symbols, sentiment "
+                "SELECT timestamp, title, content, source, region, category, symbols, sentiment "
                 "FROM news_items WHERE timestamp >= ? ORDER BY timestamp DESC",
                 (cutoff,),
             ).fetchall()
         result: list[NewsItem] = []
-        for ts, title, content, source, region, symbols_json, sentiment in rows:
+        for ts, title, content, source, region, category, symbols_json, sentiment in rows:
             result.append(
                 NewsItem(
                     timestamp=datetime.fromisoformat(ts),
@@ -298,6 +315,7 @@ class Database:
                     region=Region(region),
                     symbols=json.loads(symbols_json) if symbols_json else [],
                     sentiment=sentiment,
+                    category=NewsCategory(category) if category else NewsCategory.NEWS,
                 )
             )
         return result
