@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -267,13 +268,14 @@ class TestBackfillMissingData:
     def test_skips_when_bars_exist(self, tmp_yaml: Path, db: Database) -> None:
         """Stocks with existing DB data should not trigger backfill."""
         m, n, f = _mock_providers()
-        # Pre-populate bars for both stocks
+        # Pre-populate bars for both stocks with recent data
+        recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         db.save_daily_bars("601899", pd.DataFrame({
-            "date": ["2026-02-10"], "open": [10], "high": [11],
+            "date": [recent], "open": [10], "high": [11],
             "low": [9], "close": [10.5], "volume": [1000],
         }))
         db.save_daily_bars("600967", pd.DataFrame({
-            "date": ["2026-02-10"], "open": [10], "high": [11],
+            "date": [recent], "open": [10], "high": [11],
             "low": [9], "close": [10.5], "volume": [1000],
         }))
         _pool = StockPoolManager(tmp_yaml, db, m, n, f)
@@ -284,9 +286,10 @@ class TestBackfillMissingData:
     def test_backfills_only_missing(self, tmp_yaml: Path, db: Database) -> None:
         """Only stocks without data should trigger backfill."""
         m, n, f = _mock_providers()
-        # Pre-populate bars for only one stock
+        # Pre-populate bars for only one stock with recent data
+        recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         db.save_daily_bars("601899", pd.DataFrame({
-            "date": ["2026-02-10"], "open": [10], "high": [11],
+            "date": [recent], "open": [10], "high": [11],
             "low": [9], "close": [10.5], "volume": [1000],
         }))
         _pool = StockPoolManager(tmp_yaml, db, m, n, f)
