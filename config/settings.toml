@@ -63,14 +63,13 @@ smtp_password = "$SMTP_PASSWORD"
 to_addresses = ["$NOTIFY_EMAIL"]
 
 [scheduler]
-news_poll_interval_minutes = 30
+news_poll_interval_minutes = 60
 news_poll_start_time = "07:00"
 news_poll_end_time = "20:00"
-domestic_market_poll_time = "15:30"
-global_market_pre_open_time = "08:00"
-global_market_intraday_interval_minutes = 30
-stock_pool_update_time = "15:30"
-signal_scan_interval_minutes = 5
+domestic_market_sync_time = "15:30"
+global_market_sync_time = "08:00"
+signal_generate_time = "08:15"
+calendar_sync_day = 1  # day of month
 
 [global_market]
 enabled = true
