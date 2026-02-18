@@ -625,6 +625,7 @@ class AkShareMarketDataProvider:
     _HK_INDEX_CODES: dict[str, str] = {
         "HSI": "恒生指数",
         "HSTECH": "恒生科技指数",
+        "VHSI": "恒指波幅指数",
     }
 
     def _fetch_us_index(self, symbol: str, ak_sym: str, name: str) -> dict | None:
@@ -731,13 +732,15 @@ class AkShareMarketDataProvider:
         return df
 
     # Commodity symbols for futures_foreign_commodity_realtime batch call
-    _COMMODITY_SYMBOLS = "GC,SI,CL,HG,FEF"
+    _COMMODITY_SYMBOLS = "GC,SI,CL,HG,FEF,NG,CT"
     _COMMODITY_NAME_MAP: dict[str, tuple[str, str]] = {
         "COMEX黄金": ("GC", "COMEX黄金"),
         "COMEX白银": ("SI", "COMEX白银"),
         "NYMEX原油": ("CL", "WTI原油"),
         "COMEX铜": ("HG", "LME铜"),
         "新加坡铁矿石": ("FEF", "铁矿石"),
+        "NYMEX天然气": ("NG", "NYMEX天然气"),
+        "NYBOT-棉花": ("CT", "NYBOT棉花"),
     }
 
     def get_commodity_futures(self) -> pd.DataFrame:

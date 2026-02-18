@@ -21,10 +21,20 @@ mappings:
     a_share_sectors: ["互联网", "科技"]
     weight: 0.2
 
+  - source: "恒指波幅指数"
+    type: "index"
+    a_share_sectors: ["全行业"]
+    weight: 0.15
+
   - source: "COMEX黄金"
     type: "commodity"
     a_share_sectors: ["黄金", "有色金属"]
     weight: 0.4
+
+  - source: "COMEX白银"
+    type: "commodity"
+    a_share_sectors: ["黄金", "有色金属"]
+    weight: 0.3
 
   - source: "WTI原油"
     type: "commodity"
@@ -40,3 +50,13 @@ mappings:
     type: "commodity"
     a_share_sectors: ["钢铁", "基建"]
     weight: 0.3
+
+  - source: "NYMEX天然气"
+    type: "commodity"
+    a_share_sectors: ["石油", "化工", "天然气"]
+    weight: 0.2
+
+  - source: "NYBOT棉花"
+    type: "commodity"
+    a_share_sectors: ["纺织", "服装"]
+    weight: 0.15
