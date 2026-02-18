@@ -181,7 +181,6 @@ watchlist:
 | `strategy.sell_threshold` | 0.3 | 综合评分 < 此值发卖出信号 |
 | `strategy.factor_weight` | 0.6 | 因子策略权重 |
 | `strategy.event_weight` | 0.4 | 事件策略权重 |
-| `scheduler.market_scan_interval_minutes` | 5 | 盘中扫描间隔 |
 | `llm.provider` | `azure/gpt-4o-mini` | LLM 后端 |
 | `llm.news_impact_threshold` | 7 | LLM 影响度 ≥ 此值才生成信号 |
 

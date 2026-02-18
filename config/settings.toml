@@ -8,8 +8,6 @@ auto_filter_st = true
 auto_filter_suspended = true
 min_listing_days = 60
 factor_pool_universe = "csi300"
-event_pool_max_size = 10
-event_pool_expire_days = 3
 
 [data_source]
 market_provider = "akshare"
@@ -26,18 +24,14 @@ factor_weights = { RSI_14 = 0.15, MACD = 0.20, BBANDS = 0.10, OBV = 0.10, ATR_14
 [strategy]
 factor_weight = 0.6
 event_weight = 0.4
-no_news_factor_weight = 0.9
-no_news_anomaly_weight = 0.1
-announcement_only_factor = 0.7
+no_news_factor_weight = 1.0
+announcement_only_factor = 0.8
 announcement_only_event = 0.2
-announcement_only_anomaly = 0.1
 buy_threshold = 0.7
 sell_threshold = 0.3
 top_n = 3
 risk_dampen_threshold = -1.0
 max_signals_per_day_per_stock_per_direction = 1
-anomaly_volume_ratio = 3.0
-anomaly_price_change_pct = 5.0
 
 [llm]
 provider = "azure/$AZURE_DEPLOYMENT"

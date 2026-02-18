@@ -190,27 +190,26 @@
   └───────────────────────────────┬────────────────────────────────┘
                                   │
          ┌────────────────────────┼────────────────────┐
-         ▼                        ▼                    ▼
-  ┌──────────────┐     ┌───────────────────┐   ┌──────────────────┐
-  │ Step 2a:     │     │ Step 2b:          │   │ Step 2c:         │
-  │ 因子池排名    │     │ 事件池更新         │   │ 事件池清理        │
-  │              │     │                   │   │                  │
-  │ CSI300 日线   │     │ 盘后公告/新闻      │   │ >3日无后续命中   │
-  │ → 全量因子    │     │ → 关键词预过滤     │   │ → 自动移除       │
-  │ → 截面排名    │     │ → LLM 深度分析     │   │                  │
-  │ → Top-N      │     │ → 新标的入事件池   │   │                  │
-  └──────┬───────┘     └────────┬──────────┘   └────────┬─────────┘
-         │                      │                       │
-         └──────────────────────┼───────────────────────┘
+         ▼                        ▼
+  ┌──────────────┐     ┌───────────────────┐
+  │ Step 2a:     │     │ Step 2b:          │
+  │ 因子池排名    │     │ LLM 事件分析       │
+  │              │     │                   │
+  │ CSI300 日线   │     │ 近期新闻/公告      │
+  │ → 全量因子    │     │ → 批量 LLM 分析    │
+  │ → 截面排名    │     │ → 板块级+个股级    │
+  │ → Top-N      │     │ → 事件信号入库     │
+  └──────┬───────┘     └────────┬──────────┘
+         │                      │
+         └──────────────────────┘
                                 ▼
                   ┌──────────────────────────┐
                   │ Step 3: 合并股票池        │
                   │                          │
                   │ Layer 1 自选股 (不变)     │
                   │ + Layer 2 因子池 Top-N    │
-                  │ + Layer 3 事件池 (增/删)  │
                   │ → 去重 + 全局过滤         │
-                  │ → 输出: 次日活跃股票池    │
+                  │ → 输出: 活跃股票池        │
                   └──────────┬───────────────┘
                              │
                              ▼
@@ -221,7 +220,8 @@
                   └──────────────────────────┘
 ```
 
-> **关键点**：Step 2a (因子排名) 和 Step 2b (LLM 事件分析) 可并行执行，互不依赖。Step 2b 之所以在盘后也要跑，是因为 A 股大量公告（业绩预告、定增、重组等）在 15:00 收盘后才发布，需要 LLM 分析后决定是否纳入事件池。
+> **关键点**：Step 2a (因子排名) 和 Step 2b (LLM 事件分析) 可并行执行，互不依赖。
+
 
 ### 3.4 回测流 【Phase 2】
 
@@ -244,7 +244,7 @@
 | **数据频率** | A 股: 日线 (核心) + 实时快照 (盘中)；国际: 快照 |
 | **缓存策略** | 日线: ✅ SQLite 缓存 120 交易日；实时快照: ❌ 不缓存，用完即弃；国际快照: ✅ SQLite 保留全部历史 |
 | **关联数据流** | 盘中实时流 (实时快照 + 缓存日线拼接「今日伪日线」用于因子计算) + 盘后更新流 (增量同步当日日线) |
-| **调用频率** | A 股实时快照: 盘中每 5 分钟 (T6 内联)；国际快照: 盘前 08:00 + 盘中每 30 分钟；日线增量: 盘后 15:30 一次 |
+| **调用频率** | 国际快照: 盘前 08:00 一次；A 股日线增量: 盘后 15:30 一次 |
 
 **数据源分级策略：**
 
@@ -261,11 +261,11 @@
 
 | 标的类别 | AkShare 接口 | 对应 A 股板块 | 运行时机 |
 |---------|-------------|---------------|---------|
-| 美股指数 (S&P500/NASDAQ/道琼斯) | `ak.index_us_stock_sina()` | 整体开盘情绪、科技板块 | 盘前 08:00 (捕获隔夜收盘) + 盘中每 30 分钟 |
-| 港股指数 (恒生/恒生科技) | `ak.stock_hk_index_spot_em()` | AH 联动股、互联网板块 | 盘中每 30 分钟 |
-| 贵金属 (COMEX 黄金/白银) | `ak.futures_foreign_commodity_realtime()` | 黄金股 (600489/002155)、有色金属 | 盘前 + 盘中 30 分钟 |
-| 能源 (WTI/布伦特原油) | `ak.futures_foreign_commodity_realtime()` | 石油石化 (600028/601857) | 盘前 + 盘中 30 分钟 |
-| 工业金属 (LME 铜/铝/铁矿石) | `ak.futures_foreign_commodity_realtime()` | 有色金属、钢铁 | 盘前 + 盘中 30 分钟 |
+| 美股指数 (S&P500/NASDAQ/道琼斯) | `ak.index_us_stock_sina()` | 整体开盘情绪、科技板块 | 盘前 08:00 (捕获隔夜收盘) |
+| 港股指数 (恒生/恒生科技) | `ak.stock_hk_index_spot_em()` | AH 联动股、互联网板块 | 盘前 08:00 |
+| 贵金属 (COMEX 黄金/白银) | `ak.futures_foreign_commodity_realtime()` | 黄金股 (600489/002155)、有色金属 | 盘前 08:00 |
+| 能源 (WTI/布伦特原油) | `ak.futures_foreign_commodity_realtime()` | 石油石化 (600028/601857) | 盘前 08:00 |
+| 工业金属 (LME 铜/铝/铁矿石) | `ak.futures_foreign_commodity_realtime()` | 有色金属、钢铁 | 盘前 08:00 |
 
 **国际行情 → A 股板块映射表 (YAML 配置)：**
 
@@ -338,7 +338,7 @@ class MarketDataProvider(Protocol):
         ...
 ```
 
-> **复用说明**：A 股部分直接用 AkShare 的 `ak.stock_zh_a_hist()` (日K)、`ak.stock_zh_a_spot_em()` (实时行情)。国际部分用 `ak.index_us_stock_sina()` (美股)、`ak.stock_hk_index_spot_em()` (港股)、`ak.futures_foreign_commodity_realtime()` (商品)。所有接口均为快照式（非推送），盘前跑一次捕获隔夜数据，盘中每 30 分钟轮询港股/商品即可。
+> **复用说明**：A 股部分直接用 AkShare 的 `ak.stock_zh_a_hist()` (日K)、`ak.stock_zh_a_spot_em()` (实时行情)。国际部分用 `ak.index_us_stock_sina()` (美股)、`ak.stock_hk_index_spot_em()` (港股)、`ak.futures_foreign_commodity_realtime()` (商品)。所有接口均为快照式（非推送），盘前 08:00 跑一次捕获隔夜数据即可。
 
 **AkShare 请求频率限制与容错策略：**
 
@@ -469,7 +469,7 @@ class NewsItem:
     sentiment: float | None   # LLM 分析后的情感分数 (-1 ~ +1)，初始为 None
 ```
 
-> **国内新闻 vs 国际新闻的处理路径**：两类新闻统一经过预过滤后进入 LLM 事件引擎，但 Prompt 策略不同。国内新闻直接分析对个股的影响；国际新闻则要求 LLM 分析其对 A 股相关板块/个股的传导影响。`region` 字段使引擎自动选择对应的 Prompt 模板。
+> **国内新闻 vs 国际新闻的处理路径**：两类新闻统一进入 LLM 批量分析（不做预过滤），但 Prompt 策略不同。国内新闻直接分析对个股的影响；国际新闻则要求 LLM 分析其对 A 股相关板块/个股的传导影响。`region` 字段使引擎自动选择对应的 Prompt 模板。
 
 #### 4.1.4 股票池管理 (StockPool)
 
@@ -599,7 +599,7 @@ CREATE TABLE data_sync_log (
 |------|------|
 | **职责** | 判断当前日期是否为 A 股交易日，控制调度器任务执行 |
 | **数据来源** | AkShare `ak.tool_trade_date_hist_sina()` 获取历史交易日列表 |
-| **缓存** | 每月初更新一次 (T7)，缓存到本地 SQLite `trading_calendar` 表 |
+| **缓存** | 每月初更新一次 (T5)，缓存到本地 SQLite `trading_calendar` 表 |
 
 > 交易日历的使用方式及完整调度逻辑详见 [§4.6 任务调度与编排](#46-任务调度与编排)。
 
@@ -640,7 +640,6 @@ CREATE TABLE data_sync_log (
 > - 盘中因子值为**近似监控值**，非精确信号。收盘后以真实日 K 线修正，重新计算因子。
 > - **盘中可靠因子**：均线类 (MA/EMA)、乖离率 (BIAS)、RSI — 受成交量不完整影响小
 > - **仅收盘可靠因子**：量能类 (OBV/VWAP)、布林带 — 需完整成交量/收盘价才有意义
-> - **推送标注**：盘中信号推送时标注「盘中估算」，收盘后修正信号标注「收盘确认」
 
 **Phase 2 QLib Alpha158 移植因子集 (新增 ~60个)：**
 
@@ -1077,8 +1076,7 @@ trading-agent run news --domestic    # T1: 国内新闻采集+分析
 trading-agent run news --global      # T2: 国际新闻采集+分析
 trading-agent run market --domestic  # T3: 国内行情同步
 trading-agent run market --global    # T4: 国际行情采集
-trading-agent run update-pool        # T5: 股票池更新
-trading-agent run scan               # T6: 盘中信号生成
+trading-agent run signals            # T4: 信号生成
 
 # 个股诊断
 trading-agent inspect 600519   # 查看单只股票的策略详情 (因子评分+事件分析+信号状态)
@@ -1097,7 +1095,7 @@ trading-agent db stats         # 数据库统计
 ```
 调度器每日启动时:
 1. 检查 today in trading_days (交易日历, §4.1.6)
-2. 交易日 → 执行全部 7 个定时任务 (T1-T7)
+2. 交易日 → 执行全部 5 个定时任务 (T1-T5)
 3. 非交易日 → 不执行任何任务
 ```
 
@@ -1426,8 +1424,6 @@ auto_filter_st = true
 auto_filter_suspended = true
 min_listing_days = 60
 factor_pool_universe = "csi300"       # csi300 | csi500 | csi1000 | all_a
-event_pool_max_size = 10              # 事件池最大标的数
-event_pool_expire_days = 3            # 事件池标的过期天数
 
 [data_source]
 market_provider = "akshare"       # akshare | baostock | tushare
@@ -1444,21 +1440,14 @@ fundamental_factors = ["PE_TTM", "PB", "ROE_TTM"]
 factor_weights = { RSI_14 = 0.15, MACD = 0.20, BBANDS = 0.10, OBV = 0.10, ATR_14 = 0.10, BIAS_20 = 0.10, PE_TTM = 0.10, PB = 0.05, ROE_TTM = 0.10 }
 
 [strategy]
-factor_weight = 0.6               # 因子策略在融合中的权重 (有新闻时)
-event_weight = 0.4                # 事件策略在融合中的权重 (有新闻时)
-no_news_factor_weight = 0.9       # 无新闻时因子权重 (因子独立决策)
-no_news_anomaly_weight = 0.1      # 无新闻时异动信号权重
-announcement_only_factor = 0.7    # 仅有公告时因子权重
+factor_weight = 0.6               # 因子策略在融合中的权重 (有事件信号时)
+event_weight = 0.4                # 事件策略在融合中的权重 (有事件信号时)
+no_news_factor_weight = 1.0       # 无事件信号时因子权重 (因子独立决策)
+announcement_only_factor = 0.8    # 仅有公告时因子权重
 announcement_only_event = 0.2     # 仅有公告时事件权重
-announcement_only_anomaly = 0.1   # 仅有公告时异动权重
 buy_threshold = 0.7               # 综合评分 > 0.7 发买入信号
 sell_threshold = 0.3              # 综合评分 < 0.3 发卖出信号
 max_signals_per_day_per_stock_per_direction = 1  # 同股同方向每日最多 1 次 (允许 BUY+SELL 各一次)
-anomaly_volume_ratio = 3.0        # 量比 > 3 视为异动
-anomaly_price_change_pct = 5.0    # 涨跌幅 > 5% 视为异动
-
-[news_filter]
-keywords = ["重大合同", "业绩预增", "回购", "增持", "并购", "战略合作", "突破", "获批", "业绩预告", "定增", "减持", "处罚", "退市", "ST"]
 
 [llm]
 provider = "azure/gpt-4o-mini"        # LiteLLM model string (默认 Azure OpenAI)
@@ -1496,14 +1485,13 @@ smtp_password = "$SMTP_PASSWORD"
 to_addresses = ["$NOTIFY_EMAIL"]
 
 [scheduler]
-news_poll_interval_minutes = 30           # T1/T2: 新闻采集间隔
-news_poll_start_time = "07:00"            # T1/T2: 新闻采集开始时间
-news_poll_end_time = "20:00"              # T1/T2: 新闻采集结束时间
-domestic_market_poll_time = "15:30"       # T3: 国内行情盘后同步
-global_market_pre_open_time = "08:00"     # T4: 国际行情盘前首次采集
-global_market_intraday_interval_minutes = 30  # T4: 盘中国际行情轮询间隔 (含港股)
-stock_pool_update_time = "15:30"          # T5: 股票池更新 (T3 完成后自动触发)
-signal_scan_interval_minutes = 5          # T6: 盘中信号生成间隔
+news_poll_interval_minutes = 60           # T2: 新闻采集间隔 (每小时)
+news_poll_start_time = "07:00"            # T2: 新闻采集开始时间
+news_poll_end_time = "20:00"              # T2: 新闻采集结束时间
+domestic_market_sync_time = "15:30"       # T3: 国内行情盘后同步
+global_market_sync_time = "08:00"         # T1: 全球市场盘前同步
+signal_generate_time = "08:15"            # T4: 盘前信号生成时间
+calendar_sync_day = 1                     # T5: 交易日历每月同步日
 
 [global_market]                       # 国际行情配置
 enabled = true                        # 默认启用
@@ -1545,7 +1533,7 @@ trading-agent/
 │       │   ├── __init__.py
 │       │   ├── factor_strategy.py  # 因子策略引擎
 │       │   ├── llm_engine.py       # LLM 事件驱动引擎 (牛/熊辩论, 国内+国际新闻)
-│       │   ├── anomaly_detector.py # 异动检测器 (A股 + 国际行情异动)
+│       │   ├── anomaly_detector.py # 异动检测器 (代码保留，不作为独立信号源)
 │       │   └── signal_merger.py    # 信号融合器 (动态权重)
 │       ├── backtest/           # Layer 4: 回测
 │       │   ├── __init__.py
@@ -1697,7 +1685,7 @@ services:
 | 个股新闻稀缺 | 事件引擎无输入 | 3层保障: 公告(100%覆盖)+行业传导+异动价量信号 |
 | 回测过拟合 | 实盘亏损 | Phase 2 引入回测 + 样本外测试 + Walk-Forward (PyBroker) |
 | 国际行情数据源不稳定 | 宏观因子/异动信号缺失 | AkShare 国际行情接口偏快照式,延迟可接受; 因子引擎受限降级时统一将宏观因子置为中性值 |
-| 国际新闻 LLM 推理偏差 | 误判全球事件对 A 股影响 | 牛/熊/裁判 Prompt 多角度降低偏见; 映射表作为上下文辅助 LLM; 国际新闻经同一预过滤管道控制成本 |
+| 国际新闻 LLM 推理偏差 | 误判全球事件对 A 股影响 | 牛/熊/裁判 Prompt 多角度降低偏见; 映射表作为上下文辅助 LLM; 批量分析控制成本 |
 
 ### 9.2 业务风险
 
