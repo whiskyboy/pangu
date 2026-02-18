@@ -2,15 +2,7 @@
 
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING
-
 import pandas as pd
-
-if TYPE_CHECKING:
-    from trading_agent.data.fundamental import FundamentalDataProvider
-
-logger = logging.getLogger(__name__)
 
 _FACTOR_NAMES: list[str] = [
     "pe_ttm",
@@ -24,57 +16,34 @@ _FACTOR_NAMES: list[str] = [
 class FundamentalFactorEngine:
     """Cross-sectional fundamental factor computation.
 
-    Calls *provider* per symbol and assembles a DataFrame
-    where rows = symbols and columns = factor names.
+    Pure function: accepts a DataFrame already loaded from SQLite,
+    returns a validated DataFrame with factor columns.
     """
 
-    def compute(
-        self,
-        symbols: list[str],
-        provider: FundamentalDataProvider,
-    ) -> pd.DataFrame:
-        """Return a DataFrame (index=symbol, columns=factor_names)."""
-        if not symbols:
+    def compute(self, fundamentals_df: pd.DataFrame) -> pd.DataFrame:
+        """Return a DataFrame (index=symbol, columns=factor_names).
+
+        *fundamentals_df* must have a ``symbol`` column (or index) and
+        any subset of the factor columns.  Missing columns are filled
+        with NaN.
+        """
+        if fundamentals_df is None or fundamentals_df.empty:
             return pd.DataFrame(columns=_FACTOR_NAMES)
 
-        rows: list[dict[str, object]] = []
-        for sym in symbols:
-            row = self._fetch_one(sym, provider)
-            rows.append(row)
+        df = fundamentals_df.copy()
 
-        df = pd.DataFrame(rows, index=symbols)
-        df.index.name = "symbol"
-        return df
+        # Normalise index: if "symbol" is a column, set it as index
+        if "symbol" in df.columns:
+            df = df.set_index("symbol")
+        if df.index.name != "symbol":
+            df.index.name = "symbol"
+
+        # Ensure all factor columns exist, fill missing with NaN
+        for col in _FACTOR_NAMES:
+            if col not in df.columns:
+                df[col] = float("nan")
+
+        return df[_FACTOR_NAMES].astype(float)
 
     def get_factor_names(self) -> list[str]:
         return list(_FACTOR_NAMES)
-
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _fetch_one(symbol: str, provider: FundamentalDataProvider) -> dict[str, object]:
-        """Fetch valuation + financial indicators for a single symbol."""
-        record: dict[str, object] = {k: float("nan") for k in _FACTOR_NAMES}
-
-        # Valuation: pe_ttm, pb
-        try:
-            val = provider.get_valuation(symbol)
-            if val is not None:
-                for key in ("pe_ttm", "pb"):
-                    if key in val and val[key] is not None:
-                        record[key] = float(val[key])
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to get valuation for %s", symbol)
-
-        # Financial indicators: roe_ttm, revenue_yoy, profit_yoy
-        try:
-            fin = provider.get_financial_indicator(symbol)
-            if fin is not None and not fin.empty:
-                latest = fin.iloc[-1]
-                for key in ("roe_ttm", "revenue_yoy", "profit_yoy"):
-                    if key in latest and latest[key] is not None:
-                        record[key] = float(latest[key])
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to get financial indicator for %s", symbol)
-
-        return record

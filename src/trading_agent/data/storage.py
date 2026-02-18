@@ -130,6 +130,14 @@ CREATE TABLE IF NOT EXISTS global_snapshots (
     source      TEXT,               -- 'us_index', 'hk_index', 'commodity'
     PRIMARY KEY (symbol, date)
 );
+
+CREATE TABLE IF NOT EXISTS factor_pool (
+    symbol      TEXT NOT NULL,
+    date        TEXT NOT NULL,       -- YYYY-MM-DD
+    score       REAL,
+    rank        INTEGER,
+    PRIMARY KEY (symbol, date)
+);
 """
 
 
@@ -507,6 +515,53 @@ class Database:
                 ") m ON g.symbol = m.symbol AND g.date = m.max_date "
                 "ORDER BY g.source, g.symbol",
                 self._conn,
+            )
+
+    # ------------------------------------------------------------------
+    # Factor pool
+    # ------------------------------------------------------------------
+
+    def save_factor_pool(self, date: str, df: pd.DataFrame) -> int:
+        """Save factor scores and ranks for a given date.
+
+        *df* must have columns: symbol, score, rank.
+        """
+        if df.empty:
+            return 0
+        rows = [
+            (row["symbol"], date, float(row["score"]), int(row["rank"]))
+            for _, row in df.iterrows()
+        ]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO factor_pool (symbol, date, score, rank) "
+                "VALUES (?, ?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+        return len(rows)
+
+    def load_factor_pool(self, date: str) -> pd.DataFrame:
+        """Load factor pool for a specific date."""
+        with self._lock:
+            return pd.read_sql(
+                "SELECT symbol, score, rank FROM factor_pool WHERE date = ? ORDER BY rank",
+                self._conn,
+                params=(date,),
+            )
+
+    def load_factor_pool_latest(self) -> pd.DataFrame:
+        """Load factor pool for the most recent date."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(date) FROM factor_pool"
+            ).fetchone()
+            if row is None or row[0] is None:
+                return pd.DataFrame(columns=["symbol", "score", "rank"])
+            return pd.read_sql(
+                "SELECT symbol, score, rank FROM factor_pool WHERE date = ? ORDER BY rank",
+                self._conn,
+                params=(row[0],),
             )
 
     # ------------------------------------------------------------------

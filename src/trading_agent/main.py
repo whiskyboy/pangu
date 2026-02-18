@@ -204,8 +204,10 @@ async def smoke_test() -> None:
         global_snapshot = pd.DataFrame()
 
     # 12. Generate signals (Fake engines)
-    sample_bars = next(iter(bars_map.values())) if bars_map else pd.DataFrame()
-    factor_signals = factor_strategy.generate_signals(sample_bars, pool)
+    fake_tech_df = {sym: bars_map.get(sym, pd.DataFrame()) for sym in pool}
+    _pool_df, factor_signals = factor_strategy.generate_signals(
+        fake_tech_df, pd.DataFrame(), {},
+    )
     logger.info("Factor signals (fake): %d", len(factor_signals))
 
     all_news = domestic_news

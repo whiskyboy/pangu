@@ -113,9 +113,15 @@ class _StubFactorEngine:
 
 class _StubStrategy:
     def generate_signals(
-        self, data: pd.DataFrame, pool: list[str]
-    ) -> list[TradeSignal]:
-        return []
+        self,
+        tech_df: dict[str, pd.DataFrame],
+        fund_df: pd.DataFrame,
+        macro_factors: dict[str, float],
+        *,
+        prev_pool: pd.DataFrame | None = None,
+        sector_map: dict[str, str] | None = None,
+    ) -> tuple[pd.DataFrame, list[TradeSignal]]:
+        return pd.DataFrame(), []
 
 
 class _StubLLMEngine:
@@ -368,7 +374,9 @@ class TestStubInvocation:
 
     def test_strategy_stubs_return(self) -> None:
         s = _StubStrategy()
-        assert isinstance(s.generate_signals(pd.DataFrame(), []), list)
+        pool_df, signals = s.generate_signals({}, pd.DataFrame(), {})
+        assert isinstance(pool_df, pd.DataFrame)
+        assert isinstance(signals, list)
 
     def test_llm_engine_stubs_return(self) -> None:
         e = _StubLLMEngine()

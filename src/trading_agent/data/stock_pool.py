@@ -274,8 +274,25 @@ class StockPoolManager:
         self._save_yaml()
 
     def get_factor_selected(self) -> list[str]:
-        """Return factor-screened symbols (populated by M3)."""
-        return []
+        """Return factor-screened symbols from SQLite factor_pool (top-N)."""
+        try:
+            from trading_agent.tz import today_str
+            pool = self._storage.load_factor_pool(today_str())
+            if pool.empty:
+                pool = self._storage.load_factor_pool_latest()
+            if pool.empty:
+                return []
+            # Read top_n from config or default to 3
+            top_n = 3
+            try:
+                from trading_agent.config import get_config
+                cfg = get_config()
+                top_n = cfg.get("strategy", {}).get("top_n", 3)
+            except Exception:  # noqa: BLE001
+                pass
+            return pool[pool["rank"] <= top_n]["symbol"].tolist()
+        except Exception:  # noqa: BLE001
+            return []
 
     def get_event_triggered(self) -> list[str]:
         """Return event-triggered symbols (populated by M4)."""
