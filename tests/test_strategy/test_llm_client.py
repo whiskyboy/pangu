@@ -15,13 +15,13 @@ from trading_agent.strategy.llm_engine import LLMClient
 # ---------------------------------------------------------------------------
 
 _VALID_RESPONSE = {
-    "direction": "bullish",
-    "impact_score": 8,
+    "action": "BUY",
+    "confidence": 0.8,
     "bull_reason": "重大合同签订",
     "bear_reason": "短期估值偏高",
     "judge_conclusion": "利好为主",
-    "affected_symbols": ["601899"],
-    "affected_sectors": ["有色金属"],
+    "short_term_outlook": "短期看涨",
+    "mid_term_outlook": "中期震荡",
 }
 
 
@@ -60,7 +60,7 @@ class TestParseJsonResponse:
         text = f"Based on my analysis, {json.dumps(_VALID_RESPONSE)} is the result."
         result = self.client._parse_json_response(text)
         assert result is not None
-        assert result["direction"] == "bullish"
+        assert result["action"] == "BUY"
 
     def test_empty_text(self) -> None:
         assert self.client._parse_json_response("") is None
@@ -76,19 +76,19 @@ class TestParseJsonResponse:
     def test_deeply_nested_json(self) -> None:
         """3+ levels of nesting should parse correctly."""
         nested = {
-            "direction": "bullish",
-            "impact_score": 8,
+            "action": "BUY",
+            "confidence": 0.8,
             "bull_reason": "strong",
             "bear_reason": "weak",
             "judge_conclusion": "buy",
-            "affected_symbols": ["601899"],
-            "affected_sectors": [],
+            "short_term_outlook": "up",
+            "mid_term_outlook": "stable",
             "metadata": {"confidence": "high", "factors": {"fundamental": "strong"}},
         }
         text = f"Analysis result: {json.dumps(nested)} -- end"
         result = self.client._parse_json_response(text)
         assert result is not None
-        assert result["direction"] == "bullish"
+        assert result["action"] == "BUY"
         assert result["metadata"]["factors"]["fundamental"] == "strong"
 
 
@@ -104,36 +104,36 @@ class TestRuleBasedFallback:
     def test_bullish_keywords(self) -> None:
         text = "该公司获批新药，业绩预增超预期，增持计划公布"
         result = self.client._rule_based_fallback(text)
-        assert result["direction"] == "bullish"
-        assert result["impact_score"] >= 5
+        assert result["action"] == "BUY"
+        assert result["confidence"] >= 0.5
 
     def test_bearish_keywords(self) -> None:
         text = "业绩下滑，大股东减持，面临处罚风险"
         result = self.client._rule_based_fallback(text)
-        assert result["direction"] == "bearish"
-        assert result["impact_score"] >= 5
+        assert result["action"] == "SELL"
+        assert result["confidence"] >= 0.5
 
     def test_neutral_no_keywords(self) -> None:
         text = "公司召开年度股东大会，审议日常议案"
         result = self.client._rule_based_fallback(text)
-        assert result["direction"] == "neutral"
-        assert result["impact_score"] == 3
+        assert result["action"] == "HOLD"
+        assert result["confidence"] == 0.3
 
     def test_structure_complete(self) -> None:
         result = self.client._rule_based_fallback("test")
         required_keys = [
-            "direction", "impact_score", "bull_reason",
+            "action", "confidence", "bull_reason",
             "bear_reason", "judge_conclusion",
-            "affected_symbols", "affected_sectors",
+            "short_term_outlook", "mid_term_outlook",
         ]
         for key in required_keys:
             assert key in result
 
-    def test_impact_score_capped(self) -> None:
-        """Score should never exceed 10."""
+    def test_confidence_capped(self) -> None:
+        """Confidence should never exceed 0.8."""
         text = " ".join(["利好 增持 回购 业绩预增 超预期 突破 获批 中标"] * 3)
         result = self.client._rule_based_fallback(text)
-        assert result["impact_score"] <= 10
+        assert result["confidence"] <= 0.8
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ class TestLLMCall:
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
             result = await client.call("system", "user prompt")
 
-        assert result["direction"] == "bullish"
+        assert result["action"] == "BUY"
         assert client.call_count == 1
 
     @pytest.mark.asyncio
@@ -173,7 +173,7 @@ class TestLLMCall:
         with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=side_effect):
             result = await client.call("system", "user prompt")
 
-        assert result["direction"] == "bullish"
+        assert result["action"] == "BUY"
         # Primary tried 2 times (initial + retry), then fallback 1 time
         assert client.call_count == 1  # only successful calls counted
 
@@ -191,7 +191,7 @@ class TestLLMCall:
         ):
             result = await client.call("system", "重大合同签订，利好明显")
 
-        assert result["direction"] == "bullish"
+        assert result["action"] == "BUY"
         assert "规则降级" in result["judge_conclusion"]
         assert client.call_count == 0  # no successful LLM calls
 
@@ -217,7 +217,7 @@ class TestLLMCall:
         with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=side_effect):
             result = await client.call("system", "user prompt")
 
-        assert result["direction"] == "bullish"
+        assert result["action"] == "BUY"
 
     @pytest.mark.asyncio
     async def test_empty_response_content(self) -> None:
@@ -228,7 +228,7 @@ class TestLLMCall:
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=empty_resp):
             result = await client.call("system", "利空消息，减持风险")
 
-        assert result["direction"] == "bearish"
+        assert result["action"] == "SELL"
         assert "规则降级" in result["judge_conclusion"]
 
     @pytest.mark.asyncio

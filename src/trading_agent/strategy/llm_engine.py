@@ -1,13 +1,24 @@
-"""LLMEventEngine Protocol + LLMClient + FakeLLMEventEngine — PRD §4.3.2 / §6."""
+"""LLM engines — PRD §4.3.2 / §6.
+
+LLMClient: LiteLLM wrapper with retry + fallback + rule degradation.
+LLMJudgeEngine: per-stock comprehensive judge (evidence package → BUY/SELL/HOLD).
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
-from typing import Protocol
+from typing import Any, Protocol
+
+import pandas as pd
 
 from trading_agent.models import Action, NewsItem, SignalStatus, TradeSignal
+from trading_agent.strategy.prompts import (
+    TRADING_JUDGE_SYSTEM_PROMPT,
+    build_stock_prompt,
+)
+from trading_agent.tz import now as _now
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +43,15 @@ class LLMEventEngine(Protocol):
 # LLM Client — LiteLLM wrapper with retry + fallback + rule degradation
 # ---------------------------------------------------------------------------
 
-# Default structured output schema expected from LLM
+# Default structured output schema expected from LLM (judge mode)
 _DEFAULT_RESPONSE: dict = {
-    "direction": "neutral",
-    "impact_score": 1,
+    "action": "HOLD",
+    "confidence": 0.0,
     "bull_reason": "",
     "bear_reason": "",
     "judge_conclusion": "",
-    "affected_symbols": [],
-    "affected_sectors": [],
+    "short_term_outlook": "",
+    "mid_term_outlook": "",
 }
 
 _BULLISH_KEYWORDS: list[str] = [
@@ -193,35 +204,317 @@ class LLMClient:
         bear_count = sum(1 for kw in _BEARISH_KEYWORDS if kw in user_prompt)
 
         if bull_count > bear_count:
-            direction = "bullish"
-            score = min(5 + bull_count, 10)
+            action = "BUY"
+            confidence = min(0.5 + bull_count * 0.05, 0.8)
             bull_reason = f"关键词命中: {bull_count}个利好词"
             bear_reason = f"关键词命中: {bear_count}个利空词"
         elif bear_count > bull_count:
-            direction = "bearish"
-            score = min(5 + bear_count, 10)
+            action = "SELL"
+            confidence = min(0.5 + bear_count * 0.05, 0.8)
             bull_reason = f"关键词命中: {bull_count}个利好词"
             bear_reason = f"关键词命中: {bear_count}个利空词"
         else:
-            direction = "neutral"
-            score = 3
+            action = "HOLD"
+            confidence = 0.3
             bull_reason = "无明显利好信号"
             bear_reason = "无明显利空信号"
 
         return {
-            "direction": direction,
-            "impact_score": score,
+            "action": action,
+            "confidence": confidence,
             "bull_reason": bull_reason,
             "bear_reason": bear_reason,
-            "judge_conclusion": f"规则降级: {direction} (bull={bull_count}, bear={bear_count})",
-            "affected_symbols": [],
-            "affected_sectors": [],
+            "judge_conclusion": f"规则降级 (bull={bull_count}, bear={bear_count})",
+            "short_term_outlook": "规则降级, 无法判断",
+            "mid_term_outlook": "规则降级, 无法判断",
         }
+
+# ---------------------------------------------------------------------------
+# LLMJudgeEngine — per-stock comprehensive judge (方案C)
+# ---------------------------------------------------------------------------
+
+# Factor keys that should appear in prompts (whitelist).
+# Anything outside this set (e.g. amount, adj_factor, ma5) is filtered out.
+_KNOWN_FACTORS: frozenset[str] = frozenset({
+    "rsi_14", "macd_hist", "bias_20", "obv", "atr_14",
+    "volume_ratio", "pe_ttm", "pb", "roe_ttm", "macro_adj",
+})
+
+
+class LLMJudgeEngine(Protocol):
+    """Interface for per-stock LLM comprehensive judge."""
+
+    async def judge_stock(
+        self,
+        symbol: str,
+        name: str,
+        factor_score: float,
+        factor_rank: int,
+        factor_details: dict[str, float],
+        stock_news: list[NewsItem],
+        announcements: list[NewsItem],
+        telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
+        price: float,
+    ) -> TradeSignal:
+        """Judge a single stock and return a TradeSignal."""
+        ...
+
+    async def judge_pool(
+        self,
+        candidates: list[dict[str, Any]],
+        telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
+    ) -> list[TradeSignal]:
+        """Judge a pool of candidates and return signals."""
+        ...
+
+
+class LLMJudgeEngineImpl:
+    """LLM comprehensive judge: evidence package → BUY/SELL/HOLD.
+
+    Uses bull/bear/judge three-role debate (inspired by TradingAgents).
+    """
+
+    def __init__(self, llm_client: LLMClient) -> None:
+        self._client = llm_client
+
+    async def judge_stock(
+        self,
+        symbol: str,
+        name: str,
+        factor_score: float,
+        factor_rank: int,
+        factor_details: dict[str, float],
+        stock_news: list[NewsItem],
+        announcements: list[NewsItem],
+        telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
+        price: float,
+    ) -> TradeSignal:
+        """Judge a single stock. Always returns a TradeSignal (never None)."""
+        try:
+            filtered_details = {
+                k: v for k, v in factor_details.items() if k in _KNOWN_FACTORS
+            }
+
+            user_prompt = build_stock_prompt(
+                symbol=symbol,
+                name=name,
+                factor_score=factor_score,
+                factor_rank=factor_rank,
+                factor_details=filtered_details,
+                stock_news=stock_news,
+                announcements=announcements,
+                telegraph=telegraph,
+                global_market=global_market,
+            )
+
+            result = await self._client.call(
+                TRADING_JUDGE_SYSTEM_PROMPT, user_prompt,
+            )
+            return self._parse_signal(
+                result, symbol, name, factor_score, price, _now(),
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("LLM judge failed for %s, using factor fallback",
+                           symbol, exc_info=True)
+            return self._factor_fallback(
+                symbol, name, factor_score, price, _now(),
+            )
+
+    async def judge_pool(
+        self,
+        candidates: list[dict[str, Any]],
+        telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
+    ) -> list[TradeSignal]:
+        """Judge a pool of candidates sequentially.
+
+        Each candidate dict must contain:
+            symbol, name, factor_score, factor_rank, factor_details,
+            stock_news, announcements, price
+        """
+        signals: list[TradeSignal] = []
+        ok, fail = 0, 0
+
+        for c in candidates:
+            try:
+                signal = await self.judge_stock(
+                    symbol=c["symbol"],
+                    name=c["name"],
+                    factor_score=c["factor_score"],
+                    factor_rank=c["factor_rank"],
+                    factor_details=c["factor_details"],
+                    stock_news=c.get("stock_news", []),
+                    announcements=c.get("announcements", []),
+                    telegraph=telegraph,
+                    global_market=global_market,
+                    price=c["price"],
+                )
+                signals.append(signal)
+                ok += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+                logger.warning("judge_pool: %s failed", c.get("symbol", "UNKNOWN"),
+                               exc_info=True)
+
+        logger.info("judge_pool: %d/%d succeeded, %d failed",
+                    ok, len(candidates), fail)
+        return signals
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _parse_signal(
+        self,
+        result: dict,
+        symbol: str,
+        name: str,
+        factor_score: float,
+        price: float,
+        now: Any,
+    ) -> TradeSignal:
+        """Parse LLM JSON output into a TradeSignal."""
+        raw_action = str(result.get("action", "HOLD")).upper().strip()
+        try:
+            action = Action(raw_action)
+        except ValueError:
+            logger.warning("Invalid action '%s' for %s, defaulting to HOLD",
+                           raw_action, symbol)
+            action = Action.HOLD
+
+        confidence = float(result.get("confidence", 0.0))
+        confidence = max(0.0, min(1.0, confidence))
+
+        bull = result.get("bull_reason", "")
+        bear = result.get("bear_reason", "")
+        conclusion = result.get("judge_conclusion", "")
+        reason = f"[牛] {bull} [熊] {bear} [裁判] {conclusion}"
+
+        return TradeSignal(
+            timestamp=now,
+            symbol=symbol,
+            name=name,
+            action=action,
+            signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0,
+            price=price,
+            confidence=confidence,
+            source="llm_judge",
+            reason=reason,
+            factor_score=factor_score,
+            metadata={
+                "bull_reason": bull,
+                "bear_reason": bear,
+                "judge_conclusion": conclusion,
+                "short_term_outlook": result.get("short_term_outlook", ""),
+                "mid_term_outlook": result.get("mid_term_outlook", ""),
+            },
+        )
+
+    def _factor_fallback(
+        self,
+        symbol: str,
+        name: str,
+        factor_score: float,
+        price: float,
+        now: Any,
+    ) -> TradeSignal:
+        """Fallback when LLM is unavailable: use pure factor score."""
+        if factor_score >= 0.7:
+            action = Action.BUY
+        elif factor_score <= 0.3:
+            action = Action.SELL
+        else:
+            action = Action.HOLD
+
+        return TradeSignal(
+            timestamp=now,
+            symbol=symbol,
+            name=name,
+            action=action,
+            signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0,
+            price=price,
+            confidence=factor_score,
+            source="factor_fallback",
+            reason=f"LLM 不可用, 纯因子降级 (score={factor_score:.4f})",
+            factor_score=factor_score,
+            metadata={"fallback": True},
+        )
 
 
 # ---------------------------------------------------------------------------
 # Fake implementation for testing / development
 # ---------------------------------------------------------------------------
+
+
+class FakeLLMJudgeEngine:
+    """Deterministic judge based on factor_score. For testing only.
+
+    Unlike LLMJudgeEngineImpl, no error handling — expects well-formed input.
+    """
+
+    async def judge_stock(
+        self,
+        symbol: str,
+        name: str,
+        factor_score: float,
+        factor_rank: int,
+        factor_details: dict[str, float],
+        stock_news: list[NewsItem],
+        announcements: list[NewsItem],
+        telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
+        price: float,
+    ) -> TradeSignal:
+
+        if factor_score >= 0.7:
+            action = Action.BUY
+        elif factor_score <= 0.3:
+            action = Action.SELL
+        else:
+            action = Action.HOLD
+
+        return TradeSignal(
+            timestamp=_now(),
+            symbol=symbol,
+            name=name,
+            action=action,
+            signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0,
+            price=price,
+            confidence=factor_score,
+            source="fake_llm_judge",
+            reason=f"fake judge: score={factor_score:.2f}",
+            factor_score=factor_score,
+            metadata={},
+        )
+
+    async def judge_pool(
+        self,
+        candidates: list[dict[str, Any]],
+        telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
+    ) -> list[TradeSignal]:
+        signals = []
+        for c in candidates:
+            signal = await self.judge_stock(
+                symbol=c["symbol"],
+                name=c["name"],
+                factor_score=c["factor_score"],
+                factor_rank=c["factor_rank"],
+                factor_details=c.get("factor_details", {}),
+                stock_news=c.get("stock_news", []),
+                announcements=c.get("announcements", []),
+                telegraph=telegraph,
+                global_market=global_market,
+                price=c["price"],
+            )
+            signals.append(signal)
+        return signals
 
 
 class FakeLLMEventEngine:
@@ -230,7 +523,6 @@ class FakeLLMEventEngine:
     async def analyze_news(
         self, news: list[NewsItem], watchlist: list[str]
     ) -> list[TradeSignal]:
-        from trading_agent.tz import now as _now
         now = _now()
         signals: list[TradeSignal] = []
         for item in news:

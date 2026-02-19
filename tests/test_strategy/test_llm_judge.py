@@ -1,0 +1,440 @@
+"""Tests for LLMJudgeEngine — M4.4."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pandas as pd
+import pytest
+
+from trading_agent.models import Action, NewsCategory, NewsItem, Region, SignalStatus
+from trading_agent.strategy.llm_engine import (
+    FakeLLMJudgeEngine,
+    LLMClient,
+    LLMJudgeEngineImpl,
+    _KNOWN_FACTORS,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_llm_response(
+    action: str = "BUY",
+    confidence: float = 0.8,
+    bull: str = "利好明确",
+    bear: str = "短期有压力",
+    conclusion: str = "综合看多",
+) -> dict:
+    return {
+        "action": action,
+        "confidence": confidence,
+        "bull_reason": bull,
+        "bear_reason": bear,
+        "judge_conclusion": conclusion,
+        "short_term_outlook": "短期看涨",
+        "mid_term_outlook": "中期震荡",
+    }
+
+
+def _make_completion(content: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+    )
+
+
+def _make_news(title: str = "测试新闻") -> NewsItem:
+    return NewsItem(
+        timestamp=datetime(2026, 2, 19, 8, 0),
+        title=title,
+        content="正文",
+        source="财联社",
+        region=Region.DOMESTIC,
+    )
+
+
+_GLOBAL_DF = pd.DataFrame([
+    {"name": "标普500", "close": 5200.0, "change_pct": 0.35},
+])
+
+_FACTOR_DETAILS = {
+    "rsi_14": 55.0,
+    "macd_hist": 0.12,
+    "pe_ttm": 15.3,
+    "amount": 1e10,       # should be filtered
+    "adj_factor": 1.0,    # should be filtered
+    "ma5": 38.0,          # should be filtered
+}
+
+
+# ---------------------------------------------------------------------------
+# LLMJudgeEngineImpl tests
+# ---------------------------------------------------------------------------
+
+class TestLLMJudgeEngineImpl:
+
+    @pytest.fixture()
+    def engine(self) -> LLMJudgeEngineImpl:
+        client = LLMClient(model="test/model")
+        return LLMJudgeEngineImpl(client)
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_buy_signal(self, engine):
+        resp = _make_llm_response(action="BUY", confidence=0.85)
+        content = json.dumps(resp)
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signal = await engine.judge_stock(
+                symbol="601899", name="紫金矿业",
+                factor_score=0.82, factor_rank=2,
+                factor_details=_FACTOR_DETAILS,
+                stock_news=[_make_news()], announcements=[],
+                telegraph=[_make_news("快讯")],
+                global_market=_GLOBAL_DF, price=39.5,
+            )
+
+        assert signal.action == Action.BUY
+        assert signal.confidence == 0.85
+        assert signal.source == "llm_judge"
+        assert signal.symbol == "601899"
+        assert signal.price == 39.5
+        assert signal.factor_score == 0.82
+        assert "[牛]" in signal.reason
+        assert "[熊]" in signal.reason
+        assert "[裁判]" in signal.reason
+        assert signal.metadata["bull_reason"] == "利好明确"
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_sell_signal(self, engine):
+        resp = _make_llm_response(action="SELL", confidence=0.7)
+        content = json.dumps(resp)
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.25, factor_rank=50,
+                factor_details={"rsi_14": 30.0},
+                stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert signal.action == Action.SELL
+        assert signal.confidence == 0.7
+        assert signal.source == "llm_judge"
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_hold_signal(self, engine):
+        resp = _make_llm_response(action="HOLD", confidence=0.5)
+        content = json.dumps(resp)
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.5, factor_rank=10,
+                factor_details={}, stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert signal.action == Action.HOLD
+        assert signal.source == "llm_judge"
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_invalid_action_defaults_hold(self, engine):
+        resp = _make_llm_response(action="INVALID")
+        content = json.dumps(resp)
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.5, factor_rank=10,
+                factor_details={}, stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert signal.action == Action.HOLD
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_all_llm_fail_uses_rule_fallback(self, engine):
+        """When all LLM providers fail, LLMClient returns rule-based result."""
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   side_effect=Exception("API down")):
+            signal = await engine.judge_stock(
+                symbol="601899", name="紫金矿业",
+                factor_score=0.82, factor_rank=2,
+                factor_details={"rsi_14": 55.0},
+                stock_news=[_make_news("利好消息，增持回购")],
+                announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=39.5,
+            )
+
+        # Rule-based fallback still produces a valid signal via _parse_signal
+        assert signal.source == "llm_judge"
+        assert "规则降级" in signal.metadata["judge_conclusion"]
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_factor_fallback_on_internal_error(self, engine):
+        """Factor fallback triggers when build_stock_prompt or _parse_signal fails."""
+        # patching at llm_engine module level
+        with patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+                          side_effect=TypeError("unexpected error")):
+            signal = await engine.judge_stock(
+                symbol="601899", name="紫金矿业",
+                factor_score=0.82, factor_rank=2,
+                factor_details={"rsi_14": 55.0},
+                stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=39.5,
+            )
+
+        assert signal.action == Action.BUY  # factor_score=0.82 >= 0.7
+        assert signal.source == "factor_fallback"
+        assert signal.metadata["fallback"] is True
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_factor_fallback_sell(self, engine):
+        # patching at llm_engine module level
+        with patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+                          side_effect=TypeError("unexpected error")):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.2, factor_rank=50,
+                factor_details={}, stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert signal.action == Action.SELL
+        assert signal.source == "factor_fallback"
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_factor_fallback_hold(self, engine):
+        # patching at llm_engine module level
+        with patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+                          side_effect=TypeError("unexpected error")):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.5, factor_rank=10,
+                factor_details={}, stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert signal.action == Action.HOLD
+        assert signal.source == "factor_fallback"
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_filters_non_factor_columns(self, engine):
+        """Verify amount/adj_factor/ma5 are NOT passed to build_stock_prompt."""
+        resp = _make_llm_response()
+        content = json.dumps(resp)
+
+        from trading_agent.strategy.prompts import build_stock_prompt as real_build
+        captured_details: list[dict] = []
+
+        def capture_build(*args, **kwargs):
+            details = kwargs.get(
+                "factor_details",
+                args[4] if len(args) > 4 else {},
+            )
+            captured_details.append(dict(details))
+            return real_build(*args, **kwargs)
+
+        with (
+            patch("litellm.acompletion", new_callable=AsyncMock,
+                  return_value=_make_completion(content)),
+            patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+                  side_effect=capture_build),
+        ):
+            await engine.judge_stock(
+                symbol="601899", name="紫金矿业",
+                factor_score=0.82, factor_rank=2,
+                factor_details=_FACTOR_DETAILS,
+                stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=39.5,
+            )
+
+        assert len(captured_details) == 1
+        passed = captured_details[0]
+        assert "rsi_14" in passed
+        assert "macd_hist" in passed
+        assert "pe_ttm" in passed
+        assert "amount" not in passed
+        assert "adj_factor" not in passed
+        assert "ma5" not in passed
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_confidence_clamped(self, engine):
+        resp = _make_llm_response(confidence=1.5)
+        content = json.dumps(resp)
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.5, factor_rank=10,
+                factor_details={}, stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert signal.confidence == 1.0
+
+    @pytest.mark.asyncio
+    async def test_judge_stock_metadata_has_outlooks(self, engine):
+        resp = _make_llm_response()
+        content = json.dumps(resp)
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signal = await engine.judge_stock(
+                symbol="000001", name="平安银行",
+                factor_score=0.5, factor_rank=10,
+                factor_details={}, stock_news=[], announcements=[],
+                telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+            )
+
+        assert "short_term_outlook" in signal.metadata
+        assert "mid_term_outlook" in signal.metadata
+        assert signal.metadata["judge_conclusion"] == "综合看多"
+
+
+# ---------------------------------------------------------------------------
+# judge_pool tests
+# ---------------------------------------------------------------------------
+
+class TestJudgePool:
+
+    @pytest.fixture()
+    def engine(self) -> LLMJudgeEngineImpl:
+        client = LLMClient(model="test/model")
+        return LLMJudgeEngineImpl(client)
+
+    def _make_candidate(self, symbol: str, name: str,
+                        score: float, rank: int, price: float) -> dict:
+        return {
+            "symbol": symbol, "name": name,
+            "factor_score": score, "factor_rank": rank,
+            "factor_details": {"rsi_14": 50.0},
+            "stock_news": [], "announcements": [],
+            "price": price,
+        }
+
+    @pytest.mark.asyncio
+    async def test_judge_pool_collects_signals(self, engine):
+        resp = _make_llm_response()
+        content = json.dumps(resp)
+
+        candidates = [
+            self._make_candidate("601899", "紫金矿业", 0.82, 1, 39.5),
+            self._make_candidate("000001", "平安银行", 0.65, 2, 10.0),
+        ]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   return_value=_make_completion(content)):
+            signals = await engine.judge_pool(
+                candidates, telegraph=[], global_market=_GLOBAL_DF,
+            )
+
+        assert len(signals) == 2
+        symbols = {s.symbol for s in signals}
+        assert symbols == {"601899", "000001"}
+
+    @pytest.mark.asyncio
+    async def test_judge_pool_partial_failure(self, engine):
+        """When one stock's LLM fails, it gets rule-based fallback, not factor fallback."""
+        resp = _make_llm_response()
+        content = json.dumps(resp)
+
+        async def flaky_completion(**kwargs):
+            msgs = kwargs.get("messages", [])
+            user_msg = msgs[1]["content"] if len(msgs) > 1 else ""
+            if "000001" in user_msg:
+                raise Exception("API error for 000001")
+            return _make_completion(content)
+
+        candidates = [
+            self._make_candidate("601899", "紫金矿业", 0.82, 1, 39.5),
+            self._make_candidate("000001", "平安银行", 0.65, 2, 10.0),
+        ]
+
+        with patch("litellm.acompletion", new_callable=AsyncMock,
+                   side_effect=flaky_completion):
+            signals = await engine.judge_pool(
+                candidates, telegraph=[], global_market=_GLOBAL_DF,
+            )
+
+        # Both return signals: one from LLM, one from rule-based fallback
+        assert len(signals) == 2
+        by_sym = {s.symbol: s for s in signals}
+        assert by_sym["601899"].source == "llm_judge"
+        # 000001 gets rule-based fallback (still source="llm_judge")
+        assert by_sym["000001"].source == "llm_judge"
+        assert "规则降级" in by_sym["000001"].metadata["judge_conclusion"]
+
+    @pytest.mark.asyncio
+    async def test_judge_pool_empty_candidates(self, engine):
+        signals = await engine.judge_pool(
+            candidates=[], telegraph=[], global_market=_GLOBAL_DF,
+        )
+        assert signals == []
+
+
+# ---------------------------------------------------------------------------
+# FakeLLMJudgeEngine tests
+# ---------------------------------------------------------------------------
+
+class TestFakeLLMJudgeEngine:
+
+    @pytest.mark.asyncio
+    async def test_high_score_buy(self):
+        engine = FakeLLMJudgeEngine()
+        signal = await engine.judge_stock(
+            symbol="601899", name="紫金矿业",
+            factor_score=0.8, factor_rank=1,
+            factor_details={}, stock_news=[], announcements=[],
+            telegraph=[], global_market=_GLOBAL_DF, price=39.5,
+        )
+        assert signal.action == Action.BUY
+        assert signal.source == "fake_llm_judge"
+
+    @pytest.mark.asyncio
+    async def test_low_score_sell(self):
+        engine = FakeLLMJudgeEngine()
+        signal = await engine.judge_stock(
+            symbol="000001", name="平安银行",
+            factor_score=0.2, factor_rank=50,
+            factor_details={}, stock_news=[], announcements=[],
+            telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+        )
+        assert signal.action == Action.SELL
+
+    @pytest.mark.asyncio
+    async def test_mid_score_hold(self):
+        engine = FakeLLMJudgeEngine()
+        signal = await engine.judge_stock(
+            symbol="000001", name="平安银行",
+            factor_score=0.5, factor_rank=10,
+            factor_details={}, stock_news=[], announcements=[],
+            telegraph=[], global_market=_GLOBAL_DF, price=10.0,
+        )
+        assert signal.action == Action.HOLD
+
+    @pytest.mark.asyncio
+    async def test_judge_pool(self):
+        engine = FakeLLMJudgeEngine()
+        candidates = [
+            {"symbol": "601899", "name": "紫金矿业",
+             "factor_score": 0.8, "factor_rank": 1, "price": 39.5},
+            {"symbol": "000001", "name": "平安银行",
+             "factor_score": 0.2, "factor_rank": 2, "price": 10.0},
+        ]
+        signals = await engine.judge_pool(
+            candidates, telegraph=[], global_market=_GLOBAL_DF,
+        )
+        assert len(signals) == 2
+        assert signals[0].action == Action.BUY
+        assert signals[1].action == Action.SELL
