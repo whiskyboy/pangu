@@ -36,10 +36,6 @@ class StockPool(Protocol):
         """Return symbols selected by factor screening."""
         ...
 
-    def get_event_triggered(self) -> list[str]:
-        """Return symbols discovered by event-driven analysis."""
-        ...
-
     def get_active_pool(self) -> list[str]:
         """Return merged active pool (deduplicated and filtered)."""
         ...
@@ -51,7 +47,7 @@ class StockPool(Protocol):
 
 
 class FakeStockPool:
-    """Loads watchlist from YAML; factor/event pools are empty stubs."""
+    """Loads watchlist from YAML; factor pool is an empty stub."""
 
     def __init__(self, watchlist_path: str | Path = "config/watchlist.yaml") -> None:
         self._path = Path(watchlist_path)
@@ -75,9 +71,6 @@ class FakeStockPool:
             self._symbols.remove(symbol)
 
     def get_factor_selected(self) -> list[str]:
-        return []
-
-    def get_event_triggered(self) -> list[str]:
         return []
 
     def get_active_pool(self) -> list[str]:
@@ -294,18 +287,13 @@ class StockPoolManager:
         except Exception:  # noqa: BLE001
             return []
 
-    def get_event_triggered(self) -> list[str]:
-        """Return event-triggered symbols (populated by M4)."""
-        return []
-
     def get_active_pool(self) -> list[str]:
-        """Merge watchlist + factor + event pools, deduplicated and filtered."""
+        """Merge watchlist + factor pools, deduplicated and filtered."""
         seen: set[str] = set()
         merged: list[str] = []
         for sym in (
             self.get_watchlist()
             + self.get_factor_selected()
-            + self.get_event_triggered()
         ):
             if sym not in seen:
                 seen.add(sym)

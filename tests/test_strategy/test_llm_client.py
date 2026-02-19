@@ -10,6 +10,13 @@ import pytest
 
 from trading_agent.strategy.llm_engine import LLMClient
 
+
+@pytest.fixture(autouse=True)
+def _no_sleep():
+    """Mock asyncio.sleep to avoid real delays in tests."""
+    with patch("trading_agent.strategy.llm_engine.asyncio.sleep", new_callable=AsyncMock):
+        yield
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

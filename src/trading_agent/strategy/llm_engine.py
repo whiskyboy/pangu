@@ -6,6 +6,7 @@ LLMJudgeEngine: per-stock comprehensive judge (evidence package → BUY/SELL/HOL
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -21,22 +22,6 @@ from trading_agent.strategy.prompts import (
 from trading_agent.tz import now as _now
 
 logger = logging.getLogger(__name__)
-
-
-class LLMEventEngine(Protocol):
-    """Interface for LLM-powered event-driven signal generation."""
-
-    async def analyze_news(
-        self, news: list[NewsItem], watchlist: list[str]
-    ) -> list[TradeSignal]:
-        """Analyze news items and produce event-driven signals."""
-        ...
-
-    async def analyze_announcement(
-        self, announcements: list[NewsItem], watchlist: list[str]
-    ) -> list[TradeSignal]:
-        """Analyze company announcements and produce event-driven signals."""
-        ...
 
 
 # ---------------------------------------------------------------------------
@@ -71,10 +56,15 @@ class LLMClient:
     """LiteLLM wrapper with retry, fallback chain, and rule-based degradation.
 
     Fallback order:
-    1. Primary model (retry once on failure)
-    2. Each fallback model (sequential, retry once each)
+    1. Primary model (retry with exponential backoff)
+    2. Each fallback model (sequential, retry with backoff each)
     3. Rule-based keyword scoring (no API call)
     """
+
+    # Retry backoff settings
+    _RETRY_BASE_DELAY = 1.0   # seconds
+    _RETRY_ATTEMPTS = 2       # per model
+    _FALLBACK_DELAY = 0.5     # seconds between models
 
     def __init__(
         self,
@@ -99,11 +89,13 @@ class LLMClient:
     async def call(self, system_prompt: str, user_prompt: str) -> dict:
         """Call LLM and return parsed JSON dict.
 
-        Tries primary → fallbacks → rule-based degradation.
+        Tries primary → fallbacks (with delay) → rule-based degradation.
         """
         models = [self._model, *self._fallback_models]
 
-        for model in models:
+        for i, model in enumerate(models):
+            if i > 0:
+                await asyncio.sleep(self._FALLBACK_DELAY)
             result = await self._try_model(model, system_prompt, user_prompt)
             if result is not None:
                 return result
@@ -115,10 +107,10 @@ class LLMClient:
     async def _try_model(
         self, model: str, system_prompt: str, user_prompt: str
     ) -> dict | None:
-        """Try a single model with one retry. Returns parsed dict or None."""
+        """Try a single model with exponential backoff. Returns parsed dict or None."""
         import litellm
 
-        for attempt in range(2):  # 1 initial + 1 retry
+        for attempt in range(self._RETRY_ATTEMPTS):
             try:
                 response = await litellm.acompletion(
                     model=model,
@@ -145,6 +137,10 @@ class LLMClient:
                     "Model %s failed (attempt %d)",
                     model, attempt + 1, exc_info=True,
                 )
+            # Exponential backoff before retry (skip after last attempt)
+            if attempt < self._RETRY_ATTEMPTS - 1:
+                delay = self._RETRY_BASE_DELAY * (2 ** attempt)
+                await asyncio.sleep(delay)
         return None
 
     def _parse_json_response(self, text: str) -> dict | None:
@@ -515,36 +511,3 @@ class FakeLLMJudgeEngine:
             )
             signals.append(signal)
         return signals
-
-
-class FakeLLMEventEngine:
-    """Returns deterministic event signals for news containing known symbols."""
-
-    async def analyze_news(
-        self, news: list[NewsItem], watchlist: list[str]
-    ) -> list[TradeSignal]:
-        now = _now()
-        signals: list[TradeSignal] = []
-        for item in news:
-            for symbol in item.symbols:
-                if symbol not in watchlist:
-                    continue
-                signals.append(TradeSignal(
-                    timestamp=now,
-                    symbol=symbol,
-                    name=symbol,
-                    action=Action.BUY,
-                    signal_status=SignalStatus.NEW_ENTRY,
-                    days_in_top_n=0,
-                    price=100.0,
-                    confidence=0.8,
-                    source="llm_event",
-                    reason=f"fake LLM: bullish on '{item.title}'",
-                    metadata={"news_title": item.title},
-                ))
-        return signals
-
-    async def analyze_announcement(
-        self, announcements: list[NewsItem], watchlist: list[str]
-    ) -> list[TradeSignal]:
-        return await self.analyze_news(announcements, watchlist)

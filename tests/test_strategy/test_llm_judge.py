@@ -10,6 +10,14 @@ from unittest.mock import AsyncMock, patch
 import pandas as pd
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_sleep():
+    """Mock asyncio.sleep to avoid real delays in tests."""
+    with patch("trading_agent.strategy.llm_engine.asyncio.sleep", new_callable=AsyncMock):
+        yield
+
+
 from trading_agent.models import Action, NewsCategory, NewsItem, Region, SignalStatus
 from trading_agent.strategy.llm_engine import (
     FakeLLMJudgeEngine,

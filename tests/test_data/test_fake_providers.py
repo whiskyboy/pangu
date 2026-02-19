@@ -181,9 +181,6 @@ class TestFakeStockPool:
     def test_factor_selected_empty(self, fake_stock_pool: FakeStockPool) -> None:
         assert fake_stock_pool.get_factor_selected() == []
 
-    def test_event_triggered_empty(self, fake_stock_pool: FakeStockPool) -> None:
-        assert fake_stock_pool.get_event_triggered() == []
-
     def test_active_pool_equals_watchlist(self, fake_stock_pool: FakeStockPool) -> None:
         assert fake_stock_pool.get_active_pool() == fake_stock_pool.get_watchlist()
 

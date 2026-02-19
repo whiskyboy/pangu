@@ -1,8 +1,7 @@
-"""TradingAgent main entry point — M3.6 integration verification.
+"""TradingAgent main entry point — M4.5 integration.
 
 Runs a single pass through the core signal pipeline using real AkShare
-data providers for market, news, fundamental data, and real factor/strategy
-engines.  LLM event engine remains Fake until M4.
+data providers, real factor engines, and LLM comprehensive judge engine.
 """
 
 from __future__ import annotations
@@ -35,13 +34,11 @@ from trading_agent.data.storage import Database
 from trading_agent.factor.fundamental import FundamentalFactorEngine
 from trading_agent.factor.macro import MacroFactorEngine
 from trading_agent.factor.technical import PandasTAFactorEngine
-from trading_agent.models import Action
+from trading_agent.models import Action, TradeSignal
 from trading_agent.notification import NotificationManager
 from trading_agent.notification.feishu import FeishuNotifier
-from trading_agent.strategy.anomaly_detector import PriceVolumeAnomalyDetector
 from trading_agent.strategy.factor_strategy import MultiFactorStrategy
-from trading_agent.strategy.llm_engine import FakeLLMEventEngine
-from trading_agent.strategy.signal_merger import SimpleSignalMerger
+from trading_agent.strategy.llm_engine import LLMClient, LLMJudgeEngineImpl
 from trading_agent.tz import today_str
 
 logging.basicConfig(
@@ -76,10 +73,9 @@ async def smoke_test() -> None:
     """Run one pass of the data + signal pipeline with real engines.
 
     Real: market, news, fundamental, technical/fundamental/macro factors,
-          multi-factor strategy, anomaly detector
-    Fake: LLM event engine (M4)
+          multi-factor strategy, LLM comprehensive judge engine
     """
-    logger.info("=== TradingAgent M3.6 Integration Verification ===")
+    logger.info("=== TradingAgent M4.5 Integration ===")
 
     # 1. Load config
     settings = load_settings()
@@ -121,7 +117,7 @@ async def smoke_test() -> None:
     fund_engine = FundamentalFactorEngine()
     macro_engine = MacroFactorEngine()
 
-    # 6. Real strategy + anomaly detector
+    # 6. Real strategy + LLM judge engine
     strategy_cfg = settings.strategy
     factor_strategy = MultiFactorStrategy(
         top_n=strategy_cfg.get("top_n", 3),
@@ -129,19 +125,14 @@ async def smoke_test() -> None:
         sector_mapping=sector_mapping,
     )
 
-    anomaly_detector = PriceVolumeAnomalyDetector(
-        sector_mapping=sector_mapping,
+    llm_cfg = settings.llm
+    llm_client = LLMClient(
+        model=llm_cfg.get("provider", "azure/gpt-4o-mini"),
+        fallback_models=llm_cfg.get("fallback_providers", []),
+        temperature=llm_cfg.get("temperature", 0.1),
+        max_tokens=llm_cfg.get("max_tokens", 800),
     )
-
-    # Fake LLM (M4)
-    llm_engine = FakeLLMEventEngine()
-
-    merger = SimpleSignalMerger(
-        factor_weight=strategy_cfg.get("factor_weight", 0.6),
-        event_weight=strategy_cfg.get("event_weight", 0.4),
-        buy_threshold=strategy_cfg.get("buy_threshold", 0.7),
-        sell_threshold=strategy_cfg.get("sell_threshold", 0.3),
-    )
+    judge_engine = LLMJudgeEngineImpl(llm_client)
 
     # 7. Setup notification
     notif_cfg = settings.notification
@@ -227,84 +218,110 @@ async def smoke_test() -> None:
     macro_factors = macro_engine.compute(global_snapshot)
     logger.info("Macro factors: %s", {k: round(v, 4) for k, v in macro_factors.items()})
 
-    # 13. Fetch news
-    domestic_news = news.get_latest_news(limit=10)
-    logger.info("Latest news: %d items", len(domestic_news))
+    # 13. Fetch telegraph (market-wide news for LLM evidence package)
+    telegraph = news.get_latest_news(limit=50)
+    logger.info("Telegraph: %d items", len(telegraph))
 
-    for symbol in pool[:2]:
-        try:
-            stock_news = news.get_stock_news(symbol, limit=5)
-            logger.info("  %s stock news: %d items", symbol, len(stock_news))
-        except Exception:  # noqa: BLE001
-            logger.warning("  %s: stock news failed", symbol, exc_info=True)
-
-    # 14. Fetch announcements
-    for symbol in pool[:2]:
-        try:
-            anns = news.get_announcements(symbol, limit=5)
-            logger.info("  %s announcements: %d items", symbol, len(anns))
-        except Exception:  # noqa: BLE001
-            logger.warning("  %s: announcements failed", symbol, exc_info=True)
-
-    # 15. Generate factor signals (real engines)
+    # 14. Generate factor pool (real engines)
     prev_pool = db.load_factor_pool_latest()
     pool_df, factor_signals = factor_strategy.generate_signals(
         tech_df, fund_df, macro_factors,
         prev_pool=prev_pool,
     )
     logger.info("Factor pool:\n%s", pool_df.to_string() if not pool_df.empty else "(empty)")
-    logger.info("Factor signals: %d", len(factor_signals))
-    for sig in factor_signals:
-        logger.info("  %s %s %s conf=%.2f %s",
-                    sig.action.value, sig.symbol, sig.name,
-                    sig.confidence, sig.reason)
+    logger.info("Factor signals (for fallback): %d", len(factor_signals))
 
     # Save factor pool
     if not pool_df.empty:
         db.save_factor_pool(today, pool_df)
         logger.info("Factor pool saved to SQLite (%d rows)", len(pool_df))
 
-    # 16. LLM event signals (fake)
-    all_news = domestic_news
-    event_signals = await llm_engine.analyze_news(all_news, pool)
-    logger.info("Event signals (fake): %d", len(event_signals))
+    # 15. Load stock name + sector map from watchlist
+    wl_path = Path("config/watchlist.yaml")
+    name_map: dict[str, str] = {}
+    sector_map: dict[str, str] = {}
+    if wl_path.exists():
+        wl_data = yaml.safe_load(wl_path.read_text()) or {}
+        for item in wl_data.get("watchlist", []):
+            sym = item["symbol"]
+            name_map[sym] = item.get("name", sym)
+            sector_map[sym] = item.get("sector", "")
 
-    # 17. Anomaly detection (real)
-    try:
-        quotes = market.get_realtime_quote(pool) if pool else pd.DataFrame()
-    except Exception:  # noqa: BLE001
-        logger.warning("Realtime quotes failed", exc_info=True)
-        quotes = pd.DataFrame()
-    anomaly_signals = anomaly_detector.detect(quotes, global_snapshot)
-    logger.info("Anomaly signals: %d", len(anomaly_signals))
-    for sig in anomaly_signals:
-        logger.info("  %s %s conf=%.2f %s",
-                    sig.action.value, sig.symbol, sig.confidence, sig.reason)
-
-    # 18. Signal merger
-    news_availability = {
-        symbol: any(symbol in n.symbols for n in all_news)
-        for symbol in pool
-    }
-    merged_signals = merger.merge(
-        factor_signals, event_signals, anomaly_signals, news_availability,
+    # 16. Build factor details matrix for LLM prompt
+    factor_matrix = factor_strategy._build_factor_matrix(
+        pool, tech_df, fund_df, macro_factors,
+        {s: sector_map.get(s, "") for s in pool},
     )
-    logger.info("Merged signals: %d", len(merged_signals))
-    _print_signal_summary(merged_signals)
 
-    # 19. Push notifications
-    if merged_signals:
-        for signal in merged_signals:
+    # 17. Build LLM candidates (factor pool + watchlist, deduplicated)
+    candidate_symbols = list(dict.fromkeys(
+        list(pool_df["symbol"]) + watchlist if not pool_df.empty else watchlist
+    ))
+
+    candidates: list[dict] = []
+    for sym in candidate_symbols:
+        # Factor data
+        row = pool_df[pool_df["symbol"] == sym] if not pool_df.empty else pd.DataFrame()
+        f_score = float(row["score"].iloc[0]) if not row.empty else 0.5
+        f_rank = int(row["rank"].iloc[0]) if not row.empty else len(candidate_symbols)
+        f_details = (
+            factor_matrix.loc[sym].to_dict()
+            if sym in factor_matrix.index else {}
+        )
+
+        # Per-stock news + announcements
+        try:
+            s_news = news.get_stock_news(sym, limit=10)
+        except Exception:  # noqa: BLE001
+            logger.warning("  %s: stock news failed", sym, exc_info=True)
+            s_news = []
+        try:
+            s_anns = news.get_announcements(sym, limit=5)
+        except Exception:  # noqa: BLE001
+            logger.warning("  %s: announcements failed", sym, exc_info=True)
+            s_anns = []
+
+        # Price (from latest bar)
+        bars = tech_df.get(sym)
+        price = float(bars["close"].iloc[-1]) if bars is not None and not bars.empty else 0.0
+
+        candidates.append({
+            "symbol": sym,
+            "name": name_map.get(sym, sym),
+            "factor_score": f_score,
+            "factor_rank": f_rank,
+            "factor_details": f_details,
+            "stock_news": s_news,
+            "announcements": s_anns,
+            "price": price,
+        })
+
+    logger.info("LLM candidates: %d stocks", len(candidates))
+
+    # 18. LLM comprehensive judge (per-stock)
+    signals: list[TradeSignal] = await judge_engine.judge_pool(
+        candidates, telegraph=telegraph, global_market=global_snapshot,
+    )
+    logger.info("LLM signals: %d (call_count=%d)", len(signals), llm_client.call_count)
+    _print_signal_summary(signals)
+
+    # 19. Save signals + push notifications
+    actionable = [s for s in signals if s.action != Action.HOLD]
+    for signal in signals:
+        db.save_trade_signal(signal)
+
+    if actionable:
+        for signal in actionable:
             result = await notif_manager.notify(signal)
             if result:
                 logger.info("Push result for %s: %s", signal.symbol, result)
     else:
-        logger.info("No signals to push")
+        logger.info("No actionable signals to push (all HOLD)")
 
     # 20. DB summary
     _print_db_summary(db)
 
-    logger.info("=== M3.6 Integration verification complete ===")
+    logger.info("=== M4.5 Integration complete ===")
 
 
 def _print_db_summary(db: Database) -> None:

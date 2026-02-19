@@ -224,7 +224,6 @@ class TestGetActivePool:
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         assert pool.get_factor_selected() == []
-        assert pool.get_event_triggered() == []
 
 
 # ---------------------------------------------------------------------------

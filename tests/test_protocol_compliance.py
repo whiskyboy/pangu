@@ -29,8 +29,7 @@ from trading_agent.models import (
 from trading_agent.notification.feishu import NotificationProvider
 from trading_agent.strategy.anomaly_detector import AnomalyDetector
 from trading_agent.strategy.factor_strategy import Strategy
-from trading_agent.strategy.llm_engine import LLMEventEngine
-from trading_agent.strategy.signal_merger import SignalMerger
+from trading_agent.strategy.llm_engine import LLMJudgeEngine
 
 # ---------------------------------------------------------------------------
 # Minimal stub implementations
@@ -94,9 +93,6 @@ class _StubStockPool:
     def get_factor_selected(self) -> list[str]:
         return []
 
-    def get_event_triggered(self) -> list[str]:
-        return []
-
     def get_active_pool(self) -> list[str]:
         return []
 
@@ -124,14 +120,25 @@ class _StubStrategy:
         return pd.DataFrame(), []
 
 
-class _StubLLMEngine:
-    async def analyze_news(
-        self, news: list[NewsItem], watchlist: list[str]
-    ) -> list[TradeSignal]:
-        return []
+class _StubLLMJudge:
+    async def judge_stock(
+        self, symbol: str, name: str,
+        factor_score: float, factor_rank: int,
+        factor_details: dict[str, float],
+        stock_news: list[NewsItem], announcements: list[NewsItem],
+        telegraph: list[NewsItem], global_market: pd.DataFrame,
+        price: float,
+    ) -> TradeSignal:
+        return TradeSignal(
+            timestamp=datetime(2026, 1, 1), symbol=symbol, name=name,
+            action=Action.HOLD, signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0, price=price, confidence=0.5,
+            source="stub", reason="stub",
+        )
 
-    async def analyze_announcement(
-        self, announcements: list[NewsItem], watchlist: list[str]
+    async def judge_pool(
+        self, candidates: list, telegraph: list[NewsItem],
+        global_market: pd.DataFrame,
     ) -> list[TradeSignal]:
         return []
 
@@ -141,17 +148,6 @@ class _StubAnomaly:
         self,
         a_share_quotes: pd.DataFrame,
         global_quotes: pd.DataFrame | None = None,
-    ) -> list[TradeSignal]:
-        return []
-
-
-class _StubMerger:
-    def merge(
-        self,
-        factor_signals: list[TradeSignal],
-        event_signals: list[TradeSignal],
-        anomaly_signals: list[TradeSignal],
-        news_availability: dict[str, bool],
     ) -> list[TradeSignal]:
         return []
 
@@ -313,19 +309,14 @@ class TestProtocolCompliance:
             Strategy, _StubStrategy, label="Strategy"
         )
 
-    def test_llm_event_engine(self) -> None:
+    def test_llm_judge_engine(self) -> None:
         _assert_signatures_match(
-            LLMEventEngine, _StubLLMEngine, label="LLMEventEngine"
+            LLMJudgeEngine, _StubLLMJudge, label="LLMJudgeEngine"
         )
 
     def test_anomaly_detector(self) -> None:
         _assert_signatures_match(
             AnomalyDetector, _StubAnomaly, label="AnomalyDetector"
-        )
-
-    def test_signal_merger(self) -> None:
-        _assert_signatures_match(
-            SignalMerger, _StubMerger, label="SignalMerger"
         )
 
     def test_notification_provider(self) -> None:
@@ -364,7 +355,6 @@ class TestStubInvocation:
         sp.add_to_watchlist("000001")
         sp.remove_from_watchlist("000001")
         assert isinstance(sp.get_factor_selected(), list)
-        assert isinstance(sp.get_event_triggered(), list)
         assert isinstance(sp.get_active_pool(), list)
 
     def test_factor_engine_stubs_return(self) -> None:
@@ -378,20 +368,14 @@ class TestStubInvocation:
         assert isinstance(pool_df, pd.DataFrame)
         assert isinstance(signals, list)
 
-    def test_llm_engine_stubs_return(self) -> None:
-        e = _StubLLMEngine()
-        result = asyncio.run(e.analyze_news([], []))
+    def test_llm_judge_stubs_return(self) -> None:
+        e = _StubLLMJudge()
+        result = asyncio.run(e.judge_pool([], [], pd.DataFrame()))
         assert isinstance(result, list)
-        result2 = asyncio.run(e.analyze_announcement([], []))
-        assert isinstance(result2, list)
 
     def test_anomaly_stubs_return(self) -> None:
         a = _StubAnomaly()
         assert isinstance(a.detect(pd.DataFrame()), list)
-
-    def test_merger_stubs_return(self) -> None:
-        m = _StubMerger()
-        assert isinstance(m.merge([], [], [], {}), list)
 
     def test_notifier_stubs_return(self) -> None:
         n = _StubNotifier()
