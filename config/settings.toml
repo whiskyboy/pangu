@@ -22,11 +22,6 @@ fundamental_factors = ["PE_TTM", "PB", "ROE_TTM"]
 factor_weights = { RSI_14 = 0.15, MACD = 0.20, BBANDS = 0.10, OBV = 0.10, ATR_14 = 0.10, BIAS_20 = 0.10, PE_TTM = 0.10, PB = 0.05, ROE_TTM = 0.10 }
 
 [strategy]
-factor_weight = 0.6
-event_weight = 0.4
-no_news_factor_weight = 1.0
-announcement_only_factor = 0.8
-announcement_only_event = 0.2
 buy_threshold = 0.7
 sell_threshold = 0.3
 top_n = 3
