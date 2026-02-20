@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from trading_agent.data.market_baostock import BaoStockMarketDataProvider
+from trading_agent.data.market.baostock import BaoStockMarketDataProvider
 from trading_agent.utils import CircuitBreaker, ThrottleMixin, retry_call
 
 logger = logging.getLogger(__name__)

@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from trading_agent.data.stock_pool_yaml import StockPoolManager
+from trading_agent.data.stock_pool.yaml_pool import StockPoolManager
 from trading_agent.data.storage import Database
 
 # ---------------------------------------------------------------------------

@@ -29,10 +29,10 @@ if _env_path.exists():
                 os.environ.setdefault(key, val.strip())
 
 from trading_agent.config import load_settings
-from trading_agent.data.fundamental_akshare import AkShareFundamentalProvider
-from trading_agent.data.market_akshare import AkShareMarketDataProvider
-from trading_agent.data.news_akshare import AkShareNewsDataProvider
-from trading_agent.data.stock_pool_yaml import StockPoolManager
+from trading_agent.data.fundamental import AkShareFundamentalProvider
+from trading_agent.data.market import AkShareMarketDataProvider
+from trading_agent.data.news import AkShareNewsDataProvider
+from trading_agent.data.stock_pool import StockPoolManager
 from trading_agent.data.storage import Database
 from trading_agent.factor.fundamental import FundamentalFactorEngine
 from trading_agent.factor.macro import MacroFactorEngine
@@ -40,9 +40,9 @@ from trading_agent.factor.technical import PandasTAFactorEngine
 from trading_agent.notification import NotificationManager
 from trading_agent.notification.feishu import FeishuNotifier
 from trading_agent.scheduler import Components, TradingScheduler
-from trading_agent.strategy.multi_factor import MultiFactorStrategy
-from trading_agent.strategy.llm_engine import LLMClient
-from trading_agent.strategy.llm_judge import LLMJudgeEngineImpl
+from trading_agent.strategy.factor import MultiFactorStrategy
+from trading_agent.strategy.llm import LLMClient
+from trading_agent.strategy.llm import LLMJudgeEngineImpl
 
 logging.basicConfig(
     level=logging.INFO,

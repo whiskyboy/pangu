@@ -15,7 +15,7 @@ from typing import Any, Protocol
 import pandas as pd
 
 from trading_agent.models import Action, NewsItem, SignalStatus, TradeSignal
-from trading_agent.strategy.prompts import (
+from trading_agent.strategy.llm.prompts import (
     TRADING_JUDGE_SYSTEM_PROMPT,
     build_stock_prompt,
 )

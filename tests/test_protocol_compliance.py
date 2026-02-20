@@ -13,10 +13,10 @@ from datetime import datetime
 
 import pandas as pd
 
-from trading_agent.data.fundamental import FundamentalDataProvider
-from trading_agent.data.market import MarketDataProvider
-from trading_agent.data.news import NewsDataProvider
-from trading_agent.data.stock_pool import StockPool
+from trading_agent.data.fundamental.protocol import FundamentalDataProvider
+from trading_agent.data.market.protocol import MarketDataProvider
+from trading_agent.data.news.protocol import NewsDataProvider
+from trading_agent.data.stock_pool.protocol import StockPool
 from trading_agent.factor.technical import FactorEngine
 from trading_agent.models import (
     Action,
@@ -27,8 +27,8 @@ from trading_agent.models import (
     TradeSignal,
 )
 from trading_agent.notification.feishu import NotificationProvider
-from trading_agent.strategy.factor_strategy import Strategy
-from trading_agent.strategy.llm_engine import LLMJudgeEngine
+from trading_agent.strategy.factor.protocol import Strategy
+from trading_agent.strategy.llm.client import LLMJudgeEngine
 
 # ---------------------------------------------------------------------------
 # Minimal stub implementations

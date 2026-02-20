@@ -16,23 +16,23 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from trading_agent.data.fundamental_akshare import AkShareFundamentalProvider
-from trading_agent.data.market_akshare import AkShareMarketDataProvider
-from trading_agent.data.news_akshare import AkShareNewsDataProvider
-from trading_agent.data.stock_pool_yaml import StockPoolManager
+from trading_agent.data.fundamental import AkShareFundamentalProvider
+from trading_agent.data.market import AkShareMarketDataProvider
+from trading_agent.data.news import AkShareNewsDataProvider
+from trading_agent.data.stock_pool import StockPoolManager
 from trading_agent.data.storage import Database
 from trading_agent.factor.fundamental import FundamentalFactorEngine
 from trading_agent.factor.macro import MacroFactorEngine
 from trading_agent.factor.technical import PandasTAFactorEngine
 from trading_agent.notification import NotificationManager
-from trading_agent.strategy.multi_factor import MultiFactorStrategy
-from trading_agent.strategy.llm_judge import LLMJudgeEngineImpl
+from trading_agent.strategy.factor import MultiFactorStrategy
+from trading_agent.strategy.llm import LLMJudgeEngineImpl
 from trading_agent.tasks import (
-    t1_global_market,
-    t2_news,
-    t3_domestic_market,
-    t4_signals,
-    t5_reference,
+    sync_global_market,
+    poll_news,
+    sync_domestic_market,
+    generate_signals,
+    sync_reference_data,
 )
 from trading_agent.tz import now as _now
 from trading_agent.tz import today_str
@@ -139,19 +139,19 @@ class TradingScheduler:
     # ------------------------------------------------------------------
 
     async def sync_global_market(self) -> None:
-        await t1_global_market.sync_global_market(self._c)
+        await sync_global_market(self._c)
 
     async def poll_news(self) -> None:
-        await t2_news.poll_news(self._c)
+        await poll_news(self._c)
 
     async def sync_domestic_market(self) -> None:
-        await t3_domestic_market.sync_domestic_market(self._c)
+        await sync_domestic_market(self._c)
 
     async def generate_signals(self) -> None:
-        await t4_signals.generate_signals(self._c)
+        await generate_signals(self._c)
 
     async def sync_reference_data(self) -> None:
-        await t5_reference.sync_reference_data(self._c)
+        await sync_reference_data(self._c)
 
     # ------------------------------------------------------------------
     # Manual trigger (for CLI / first-run)

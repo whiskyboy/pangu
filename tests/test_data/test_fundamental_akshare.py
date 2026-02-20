@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.data.fundamental_akshare import AkShareFundamentalProvider
+from trading_agent.data.fundamental.akshare import AkShareFundamentalProvider
 from trading_agent.data.storage import Database
 
 # ---------------------------------------------------------------------------

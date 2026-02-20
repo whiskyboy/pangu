@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from trading_agent.models import Action, SignalStatus
-from trading_agent.strategy.multi_factor import (
+from trading_agent.strategy.factor.multi_factor import (
     MultiFactorStrategy,
     _minmax_normalize,
     _weighted_score,

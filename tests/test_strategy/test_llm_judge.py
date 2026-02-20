@@ -14,14 +14,14 @@ import pytest
 @pytest.fixture(autouse=True)
 def _no_sleep():
     """Mock asyncio.sleep to avoid real delays in tests."""
-    with patch("trading_agent.strategy.llm_engine.asyncio.sleep", new_callable=AsyncMock):
+    with patch("trading_agent.strategy.llm.client.asyncio.sleep", new_callable=AsyncMock):
         yield
 
 
 from trading_agent.models import Action, NewsCategory, NewsItem, Region, SignalStatus
 from tests.fakes import FakeLLMJudgeEngine
-from trading_agent.strategy.llm_engine import LLMClient
-from trading_agent.strategy.llm_judge import LLMJudgeEngineImpl, _KNOWN_FACTORS
+from trading_agent.strategy.llm.client import LLMClient
+from trading_agent.strategy.llm.judge import LLMJudgeEngineImpl, _KNOWN_FACTORS
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ class TestLLMJudgeEngineImpl:
     async def test_judge_stock_factor_fallback_on_internal_error(self, engine):
         """Factor fallback triggers when build_stock_prompt or _parse_signal fails."""
         # patching at llm_engine module level
-        with patch("trading_agent.strategy.llm_judge.build_stock_prompt",
+        with patch("trading_agent.strategy.llm.judge.build_stock_prompt",
                           side_effect=TypeError("unexpected error")):
             signal = await engine.judge_stock(
                 symbol="601899", name="紫金矿业",
@@ -204,7 +204,7 @@ class TestLLMJudgeEngineImpl:
     @pytest.mark.asyncio
     async def test_judge_stock_factor_fallback_sell(self, engine):
         # patching at llm_judge module level
-        with patch("trading_agent.strategy.llm_judge.build_stock_prompt",
+        with patch("trading_agent.strategy.llm.judge.build_stock_prompt",
                           side_effect=TypeError("unexpected error")):
             signal = await engine.judge_stock(
                 symbol="000001", name="平安银行",
@@ -219,7 +219,7 @@ class TestLLMJudgeEngineImpl:
     @pytest.mark.asyncio
     async def test_judge_stock_factor_fallback_hold(self, engine):
         # patching at llm_judge module level
-        with patch("trading_agent.strategy.llm_judge.build_stock_prompt",
+        with patch("trading_agent.strategy.llm.judge.build_stock_prompt",
                           side_effect=TypeError("unexpected error")):
             signal = await engine.judge_stock(
                 symbol="000001", name="平安银行",
@@ -237,7 +237,7 @@ class TestLLMJudgeEngineImpl:
         resp = _make_llm_response()
         content = json.dumps(resp)
 
-        from trading_agent.strategy.prompts import build_stock_prompt as real_build
+        from trading_agent.strategy.llm.prompts import build_stock_prompt as real_build
         captured_details: list[dict] = []
 
         def capture_build(*args, **kwargs):
@@ -251,7 +251,7 @@ class TestLLMJudgeEngineImpl:
         with (
             patch("litellm.acompletion", new_callable=AsyncMock,
                   return_value=_make_completion(content)),
-            patch("trading_agent.strategy.llm_judge.build_stock_prompt",
+            patch("trading_agent.strategy.llm.judge.build_stock_prompt",
                   side_effect=capture_build),
         ):
             await engine.judge_stock(
@@ -472,7 +472,7 @@ class TestFakeLLMJudgeEngine:
 
 class TestBuildEvidencePool:
     def test_basic_build(self):
-        from trading_agent.strategy.llm_engine import LLMClient
+        from trading_agent.strategy.llm.client import LLMClient
 
         engine = LLMJudgeEngineImpl(LLMClient())
         pool_df = pd.DataFrame({
@@ -508,7 +508,7 @@ class TestBuildEvidencePool:
         assert result[1]["prev_factor_score"] == pytest.approx(0.65)
 
     def test_missing_symbol_gets_defaults(self):
-        from trading_agent.strategy.llm_engine import LLMClient
+        from trading_agent.strategy.llm.client import LLMClient
 
         engine = LLMJudgeEngineImpl(LLMClient())
         pool_df = pd.DataFrame(columns=["symbol", "score", "rank"])

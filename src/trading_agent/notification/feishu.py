@@ -22,7 +22,7 @@ from lark_oapi.api.im.v1 import (
 
 from trading_agent.models import Action, SignalStatus, TradeSignal
 from trading_agent.notification import NotificationProvider  # noqa: F401 — backward compat
-from trading_agent.strategy.prompts import FACTOR_LABELS
+from trading_agent.strategy.llm.prompts import FACTOR_LABELS
 
 logger = logging.getLogger(__name__)
 

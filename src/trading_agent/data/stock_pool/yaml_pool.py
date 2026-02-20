@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 if TYPE_CHECKING:
-    from trading_agent.data.fundamental import FundamentalDataProvider
-    from trading_agent.data.market import MarketDataProvider
-    from trading_agent.data.news import NewsDataProvider
+    from trading_agent.data.fundamental.protocol import FundamentalDataProvider
+    from trading_agent.data.market.protocol import MarketDataProvider
+    from trading_agent.data.news.protocol import NewsDataProvider
     from trading_agent.data.storage import Database
 
 logger = logging.getLogger(__name__)
