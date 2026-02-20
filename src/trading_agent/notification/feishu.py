@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 from collections.abc import Callable
 from typing import Protocol
@@ -21,6 +22,7 @@ from lark_oapi.api.im.v1 import (
 )
 
 from trading_agent.models import Action, SignalStatus, TradeSignal
+from trading_agent.strategy.prompts import FACTOR_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +69,13 @@ def format_signal_card(signal: TradeSignal) -> dict:
         f"**信号状态**: {status}",
     ]
 
+    meta = signal.metadata or {}
+
     if signal.factor_score is not None:
-        lines.append(f"**因子评分**: {signal.factor_score:.2f}")
+        rank_str = ""
+        if meta.get("factor_rank") is not None and meta.get("pool_size"):
+            rank_str = f"  排名: {meta['factor_rank']}/{meta['pool_size']}"
+        lines.append(f"**因子评分**: {signal.factor_score:.2f}{rank_str}")
 
     action_verb = "买入" if signal.action is Action.BUY else "卖出" if signal.action is Action.SELL else "观望"
     lines.append(f"**建议操作**: 以 ¥{signal.price:,.2f} {action_verb}")
@@ -86,13 +93,59 @@ def format_signal_card(signal: TradeSignal) -> dict:
         lines.append(f"\n📊 **分析**: {signal.reason}")
 
     # Metadata extras
-    meta = signal.metadata or {}
     if "news_title" in meta:
         lines.append(f"📰 **事件**: {meta['news_title']}")
 
     lines.append(f"\n_信号来源: {signal.source}_")
 
     content = "\n".join(lines)
+
+    elements: list[dict] = [{"tag": "markdown", "content": content}]
+
+    # LLM analysis collapsible section
+    panel_lines: list[str] = []
+
+    # Factor details at top of panel
+    factor_details = meta.get("factor_details")
+    if factor_details:
+        factor_items = []
+        for key, val in factor_details.items():
+            label = FACTOR_LABELS.get(key, key)
+            if isinstance(val, float) and math.isnan(val):
+                factor_items.append(f"{label}: 缺失")
+            elif isinstance(val, float):
+                factor_items.append(f"{label}: {val:.4f}")
+            else:
+                factor_items.append(f"{label}: {val}")
+        panel_lines.append(f"📊 **关键因子**: {' | '.join(factor_items)}")
+
+    # LLM reasoning
+    if meta.get("bull_reason"):
+        panel_lines.append(f"🐂 **牛方观点**: {meta['bull_reason']}")
+    if meta.get("bear_reason"):
+        panel_lines.append(f"🐻 **熊方观点**: {meta['bear_reason']}")
+    if meta.get("judge_conclusion"):
+        panel_lines.append(f"⚖️ **裁判结论**: {meta['judge_conclusion']}")
+    if meta.get("short_term_outlook"):
+        panel_lines.append(f"📅 **短期展望**: {meta['short_term_outlook']}")
+    if meta.get("mid_term_outlook"):
+        panel_lines.append(f"📆 **中期展望**: {meta['mid_term_outlook']}")
+
+    if panel_lines:
+        elements.append({"tag": "hr"})
+        elements.append({
+            "tag": "collapsible_panel",
+            "expanded": False,
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "🤖 LLM 综合分析",
+                },
+            },
+            "elements": [
+                {"tag": "markdown", "content": "\n".join(panel_lines)},
+            ],
+        })
 
     return {
         "config": {"wide_screen_mode": True},
@@ -104,9 +157,7 @@ def format_signal_card(signal: TradeSignal) -> dict:
                 else "grey"
             ),
         },
-        "elements": [
-            {"tag": "markdown", "content": content},
-        ],
+        "elements": elements,
     }
 
 

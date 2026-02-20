@@ -45,6 +45,38 @@ def _sell_signal() -> TradeSignal:
     )
 
 
+def _llm_signal() -> TradeSignal:
+    """Signal with LLM judge metadata."""
+    return TradeSignal(
+        timestamp=datetime(2026, 2, 16, 8, 15),
+        symbol="601899",
+        name="紫金矿业",
+        action=Action.BUY,
+        signal_status=SignalStatus.NEW_ENTRY,
+        days_in_top_n=0,
+        price=18.5,
+        confidence=0.78,
+        source="llm_judge",
+        reason="金价趋势性上涨构成核心驱动，基本面支撑充分",
+        factor_score=0.82,
+        metadata={
+            "bull_reason": "国际金价持续走高，公司矿产金产量稳步增长",
+            "bear_reason": "PE_TTM偏高，短期涨幅较大存在回调风险",
+            "judge_conclusion": "金价趋势性上涨构成核心驱动，基本面支撑充分",
+            "short_term_outlook": "震荡偏强",
+            "mid_term_outlook": "看涨",
+            "factor_rank": 1,
+            "pool_size": 5,
+            "factor_details": {
+                "rsi_14": 49.12,
+                "macd_hist": 0.035,
+                "pe_ttm": 22.0,
+                "pb": 4.42,
+            },
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Card formatting tests
 # ---------------------------------------------------------------------------
@@ -92,6 +124,11 @@ class TestFormatSignalCard:
         content = card["elements"][0]["content"]
         assert "0.85" in content
 
+    def test_llm_card_contains_factor_rank(self) -> None:
+        card = format_signal_card(_llm_signal())
+        content = card["elements"][0]["content"]
+        assert "排名: 1/5" in content
+
     def test_card_contains_signal_status(self) -> None:
         card = format_signal_card(_buy_signal())
         content = card["elements"][0]["content"]
@@ -123,6 +160,52 @@ class TestFormatSignalCard:
         )
         card = format_signal_card(sig)
         assert card["header"]["template"] == "grey"
+
+    def test_llm_card_has_collapsible_panel(self) -> None:
+        card = format_signal_card(_llm_signal())
+        elements = card["elements"]
+        # main content + hr + collapsible panel
+        assert len(elements) == 3
+        assert elements[1]["tag"] == "hr"
+        panel = elements[2]
+        assert panel["tag"] == "collapsible_panel"
+        assert panel["expanded"] is False
+        assert "LLM 综合分析" in panel["header"]["title"]["content"]
+
+    def test_llm_card_contains_bull_bear_judge(self) -> None:
+        card = format_signal_card(_llm_signal())
+        panel_content = card["elements"][2]["elements"][0]["content"]
+        assert "牛方观点" in panel_content
+        assert "金价持续走高" in panel_content
+        assert "熊方观点" in panel_content
+        assert "PE_TTM偏高" in panel_content
+        assert "裁判结论" in panel_content
+        assert "核心驱动" in panel_content
+
+    def test_llm_card_contains_outlook(self) -> None:
+        card = format_signal_card(_llm_signal())
+        panel_content = card["elements"][2]["elements"][0]["content"]
+        assert "短期展望" in panel_content
+        assert "震荡偏强" in panel_content
+        assert "中期展望" in panel_content
+        assert "看涨" in panel_content
+
+    def test_llm_card_contains_factor_details(self) -> None:
+        card = format_signal_card(_llm_signal())
+        panel_content = card["elements"][2]["elements"][0]["content"]
+        assert "关键因子" in panel_content
+        assert "RSI(14): 49.1200" in panel_content
+        assert "PE(TTM): 22.0000" in panel_content
+
+    def test_no_panel_without_llm_metadata(self) -> None:
+        card = format_signal_card(_sell_signal())
+        # Only 1 element (main content), no hr/panel
+        assert len(card["elements"]) == 1
+
+    def test_llm_card_json_serializable(self) -> None:
+        card = format_signal_card(_llm_signal())
+        serialized = json.dumps(card, ensure_ascii=False)
+        assert "collapsible_panel" in serialized
 
 
 # ---------------------------------------------------------------------------

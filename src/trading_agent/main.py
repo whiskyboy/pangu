@@ -1,4 +1,4 @@
-"""TradingAgent main entry point — M4.5 integration.
+"""TradingAgent main entry point — M4.6 integration.
 
 Runs a single pass through the core signal pipeline using real AkShare
 data providers, real factor engines, and LLM comprehensive judge engine.
@@ -75,7 +75,7 @@ async def smoke_test() -> None:
     Real: market, news, fundamental, technical/fundamental/macro factors,
           multi-factor strategy, LLM comprehensive judge engine
     """
-    logger.info("=== TradingAgent M4.5 Integration ===")
+    logger.info("=== TradingAgent M4.6 Integration ===")
 
     # 1. Load config
     settings = load_settings()
@@ -306,22 +306,27 @@ async def smoke_test() -> None:
     _print_signal_summary(signals)
 
     # 19. Save signals + push notifications
-    actionable = [s for s in signals if s.action != Action.HOLD]
     for signal in signals:
         db.save_trade_signal(signal)
 
-    if actionable:
-        for signal in actionable:
+    # Push: watchlist stocks always pushed (incl. HOLD); sort BUY > HOLD > SELL, then by factor_score desc
+    _ACTION_ORDER = {Action.BUY: 0, Action.HOLD: 1, Action.SELL: 2}
+    watchlist_set = set(watchlist)
+    to_push = [s for s in signals if s.action != Action.HOLD or s.symbol in watchlist_set]
+    to_push.sort(key=lambda s: (_ACTION_ORDER.get(s.action, 9), -(s.factor_score or 0)))
+
+    if to_push:
+        for signal in to_push:
             result = await notif_manager.notify(signal)
             if result:
                 logger.info("Push result for %s: %s", signal.symbol, result)
     else:
-        logger.info("No actionable signals to push (all HOLD)")
+        logger.info("No signals to push")
 
     # 20. DB summary
     _print_db_summary(db)
 
-    logger.info("=== M4.5 Integration complete ===")
+    logger.info("=== M4.6 Integration complete ===")
 
 
 def _print_db_summary(db: Database) -> None:

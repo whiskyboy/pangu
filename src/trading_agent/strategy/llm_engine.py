@@ -310,7 +310,8 @@ class LLMJudgeEngineImpl:
                 TRADING_JUDGE_SYSTEM_PROMPT, user_prompt,
             )
             return self._parse_signal(
-                result, symbol, name, factor_score, price, _now(),
+                result, symbol, name, factor_score, factor_rank,
+                filtered_details, price, _now(),
             )
         except Exception:  # noqa: BLE001
             logger.warning("LLM judge failed for %s, using factor fallback",
@@ -333,6 +334,7 @@ class LLMJudgeEngineImpl:
         """
         signals: list[TradeSignal] = []
         ok, fail = 0, 0
+        pool_size = len(candidates)
 
         for c in candidates:
             try:
@@ -348,6 +350,8 @@ class LLMJudgeEngineImpl:
                     global_market=global_market,
                     price=c["price"],
                 )
+                if signal.metadata is not None:
+                    signal.metadata["pool_size"] = pool_size
                 signals.append(signal)
                 ok += 1
             except Exception:  # noqa: BLE001
@@ -369,6 +373,8 @@ class LLMJudgeEngineImpl:
         symbol: str,
         name: str,
         factor_score: float,
+        factor_rank: int,
+        factor_details: dict[str, float],
         price: float,
         now: Any,
     ) -> TradeSignal:
@@ -387,7 +393,7 @@ class LLMJudgeEngineImpl:
         bull = result.get("bull_reason", "")
         bear = result.get("bear_reason", "")
         conclusion = result.get("judge_conclusion", "")
-        reason = f"[牛] {bull} [熊] {bear} [裁判] {conclusion}"
+        reason = conclusion
 
         return TradeSignal(
             timestamp=now,
@@ -407,6 +413,8 @@ class LLMJudgeEngineImpl:
                 "judge_conclusion": conclusion,
                 "short_term_outlook": result.get("short_term_outlook", ""),
                 "mid_term_outlook": result.get("mid_term_outlook", ""),
+                "factor_rank": factor_rank,
+                "factor_details": factor_details,
             },
         )
 

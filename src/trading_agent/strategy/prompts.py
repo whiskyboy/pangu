@@ -129,7 +129,7 @@ def build_stock_prompt(
 # Section formatters
 # ---------------------------------------------------------------------------
 
-_FACTOR_LABELS: dict[str, str] = {
+FACTOR_LABELS: dict[str, str] = {
     "rsi_14": "RSI(14)",
     "macd_hist": "MACD 柱",
     "bias_20": "BIAS(20)",
@@ -154,7 +154,7 @@ def _format_factor_section(
     if details:
         lines.append("- 因子细项:")
         for key, val in details.items():
-            label = _FACTOR_LABELS.get(key, key)
+            label = FACTOR_LABELS.get(key, key)
             if isinstance(val, float) and math.isnan(val):
                 lines.append(f"  - {label}: 数据缺失")
             else:

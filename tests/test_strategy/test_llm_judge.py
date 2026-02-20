@@ -112,10 +112,9 @@ class TestLLMJudgeEngineImpl:
         assert signal.symbol == "601899"
         assert signal.price == 39.5
         assert signal.factor_score == 0.82
-        assert "[牛]" in signal.reason
-        assert "[熊]" in signal.reason
-        assert "[裁判]" in signal.reason
+        assert signal.reason == "综合看多"
         assert signal.metadata["bull_reason"] == "利好明确"
+        assert signal.metadata["factor_rank"] == 2
 
     @pytest.mark.asyncio
     async def test_judge_stock_sell_signal(self, engine):
