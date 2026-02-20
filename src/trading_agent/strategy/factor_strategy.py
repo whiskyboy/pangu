@@ -328,11 +328,6 @@ class MultiFactorStrategy:
                     now, sym, Action.SELL, SignalStatus.EXIT, price, score, atr,
                     f"exit top-{self._top_n}: rank={rank} score={score:.3f}",
                 ))
-            elif score <= self._sell_threshold:
-                signals.append(self._make_signal(
-                    now, sym, Action.SELL, SignalStatus.EXIT, price, score, atr,
-                    f"low score: rank={rank} score={score:.3f}",
-                ))
 
         return signals
 

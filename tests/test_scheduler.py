@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.scheduler import Components, TradingScheduler, _load_watchlist_maps
+from trading_agent.scheduler import Components, TradingScheduler
 
 
 # ---------------------------------------------------------------------------
@@ -164,22 +164,21 @@ class TestTradingDayGate:
 
 class TestT1:
     @pytest.mark.asyncio
-    async def test_fetches_and_caches_snapshot(self, scheduler: TradingScheduler) -> None:
+    async def test_fetches_snapshot(self, scheduler: TradingScheduler) -> None:
         await scheduler.sync_global_market()
         scheduler._c.market.get_global_snapshot.assert_called_once()
-        assert not scheduler._c._global_snapshot.empty
-        assert len(scheduler._c._macro_factors) > 0
 
     @pytest.mark.asyncio
-    async def test_saves_snapshot_to_db(self, scheduler: TradingScheduler) -> None:
+    async def test_computes_macro_factors(self, scheduler: TradingScheduler) -> None:
         await scheduler.sync_global_market()
-        scheduler._c.db.save_global_snapshots.assert_called_once()
+        scheduler._c.macro_engine.compute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handles_failure(self, scheduler: TradingScheduler) -> None:
         scheduler._c.market.get_global_snapshot.side_effect = RuntimeError("network")
-        await scheduler.sync_global_market()
-        assert scheduler._c._global_snapshot.empty
+        await scheduler.sync_global_market()  # should not raise
+        # macro_engine still called with empty DataFrame
+        scheduler._c.macro_engine.compute.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +244,7 @@ class TestT4:
         scheduler._c.db.load_factor_pool_previous_day = MagicMock(
             return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
         )
+        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
 
         await scheduler.generate_signals()
 
@@ -253,31 +253,54 @@ class TestT4:
         scheduler._c.factor_strategy.generate_signals.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_uses_cached_global_data(self, scheduler: TradingScheduler) -> None:
-        # Pre-cache global data (as T1 would)
-        scheduler._c._global_snapshot = pd.DataFrame({"name": ["test"]})
-        scheduler._c._macro_factors = {"global_risk": 0.0}
+    async def test_reads_telegraph_from_db(self, scheduler: TradingScheduler) -> None:
+        """T4 should read telegraph from DB (T2 accumulated), not API."""
         scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
         scheduler._c.db.load_factor_pool_previous_day = MagicMock(
             return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
         )
+        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
 
         await scheduler.generate_signals()
 
-        # Should NOT fetch global snapshot again
-        scheduler._c.market.get_global_snapshot.assert_not_called()
+        scheduler._c.db.load_recent_news.assert_called_once_with(hours=24)
 
     @pytest.mark.asyncio
-    async def test_fetches_fresh_global_when_empty(self, scheduler: TradingScheduler) -> None:
-        scheduler._c._global_snapshot = pd.DataFrame()  # empty
+    async def test_uses_factor_signals_for_candidates(self, scheduler: TradingScheduler) -> None:
+        """LLM candidates = factor_signals symbols + watchlist, not full pool."""
+        from trading_agent.models import Action, SignalStatus, TradeSignal
+        from trading_agent.tz import now
+
+        # Factor strategy returns pool of 3 stocks but only 1 signal
+        buy_sig = TradeSignal(
+            timestamp=now(), symbol="000001", name="平安银行",
+            action=Action.BUY, signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0, price=10.0, confidence=0.8,
+            source="factor", reason="top",
+        )
+        scheduler._c.factor_strategy.generate_signals.return_value = (
+            pd.DataFrame({
+                "symbol": ["000001", "000002", "000003"],
+                "score": [0.9, 0.7, 0.5],
+                "rank": [1, 2, 3],
+            }),
+            [buy_sig],  # only 000001 has a factor signal
+        )
         scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
         scheduler._c.db.load_factor_pool_previous_day = MagicMock(
             return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
         )
+        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
 
         await scheduler.generate_signals()
 
-        scheduler._c.market.get_global_snapshot.assert_called()
+        # build_evidence_pool called with factor signal (000001) + watchlist (600519)
+        call_args = scheduler._c.judge_engine.build_evidence_pool.call_args
+        candidate_symbols = call_args[0][0]
+        assert "000001" in candidate_symbols  # factor signal
+        assert "600519" in candidate_symbols  # watchlist
+        assert "000002" not in candidate_symbols  # not selected by factor strategy
+        assert "000003" not in candidate_symbols  # not selected by factor strategy
 
     @pytest.mark.asyncio
     async def test_signal_status_new_entry(self, scheduler: TradingScheduler) -> None:
@@ -296,6 +319,7 @@ class TestT4:
         scheduler._c.db.load_factor_pool_previous_day = MagicMock(
             return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
         )
+        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
         # Factor strategy returns 600519 in the pool
         scheduler._c.factor_strategy.generate_signals.return_value = (
             pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
@@ -326,6 +350,7 @@ class TestT4:
                 "symbol": ["600519"], "score": [0.75], "rank": [1],
             }),
         )
+        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
         scheduler._c.factor_strategy.generate_signals.return_value = (
             pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
             [],
@@ -377,6 +402,7 @@ class TestRunOnce:
         scheduler._c.db.load_factor_pool_previous_day = MagicMock(
             return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
         )
+        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
 
         await scheduler.run_once()
 
@@ -384,25 +410,6 @@ class TestRunOnce:
         scheduler._c.stock_pool.sync_trading_calendar.assert_called()  # T5
         scheduler._c.market.get_daily_bars.assert_called()  # T3
         scheduler._c.fundamental.get_valuation.assert_called()  # T3
-        scheduler._c.market.get_global_snapshot.assert_called()  # T1
+        scheduler._c.market.get_global_snapshot.assert_called()  # T1 + T4
         scheduler._c.news.get_latest_news.assert_called()  # T2
         scheduler._c.factor_strategy.generate_signals.assert_called()  # T4
-
-
-# ---------------------------------------------------------------------------
-# Helper: _load_watchlist_maps
-# ---------------------------------------------------------------------------
-
-
-class TestLoadWatchlistMaps:
-    def test_loads_from_real_file(self) -> None:
-        name_map, sector_map = _load_watchlist_maps("config/watchlist.yaml")
-        assert len(name_map) > 0
-        # All values should be strings
-        for v in name_map.values():
-            assert isinstance(v, str)
-
-    def test_missing_file_returns_empty(self, tmp_path) -> None:
-        name_map, sector_map = _load_watchlist_maps(str(tmp_path / "nonexistent.yaml"))
-        assert name_map == {}
-        assert sector_map == {}

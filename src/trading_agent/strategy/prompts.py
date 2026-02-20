@@ -32,6 +32,12 @@ LLM_OUTPUT_SCHEMA: dict[str, str] = {
 TRADING_JUDGE_SYSTEM_PROMPT: str = """\
 你是一位专业的 A 股投资分析师。你的任务是综合所有证据，对给定的股票给出交易建议。
 
+## 重要背景
+
+这些股票已经过多因子量化模型的筛选，进入候选池的股票在因子排名和得分上表现突出。\
+因子策略的预判（BUY/EXIT/WATCHLIST）已在因子数据中标注。\
+你的核心职责是：基于全部证据，判断因子策略的预判是否可靠，并给出最终操作建议。
+
 ## 分析方法
 
 请依次从三个角色的视角进行分析：
@@ -39,10 +45,19 @@ TRADING_JUDGE_SYSTEM_PROMPT: str = """\
 2. **熊方 (Bear)**：寻找所有支持卖出/回避的理由——因子走弱、利空消息、估值过高等
 3. **裁判 (Judge)**：综合牛方和熊方的论点，结合当前市场环境，给出最终判断
 
+## 决策原则
+
+- 当因子策略预判为 BUY 时，你应判断"在什么条件下应该买入"以及"有哪些风险需要注意"，\
+而不是简单地否定因子信号。如果没有发现明确的利空证据推翻因子预判，应倾向 BUY。
+- 当因子策略预判为 EXIT 时，你应判断"是否确实应该退出"以及"是否有理由继续持有"。
+- HOLD 仅在多空证据完全均衡、无法做出明确判断时使用。不要把 HOLD 当作默认选项。
+- confidence 应反映证据的充分程度，而非你对市场走势的确定性。\
+例如：因子排名靠前 + 利好新闻 → confidence 0.75-0.85；因子信号明确但新闻中性 → confidence 0.65-0.75。
+
 ## 输入说明
 
 你会收到以下信息：
-- **因子数据**：综合得分 (0-1)、截面排名、各因子值 (RSI/MACD/PE/PB/ROE 等)
+- **因子数据**：综合得分 (0-1)、截面排名（X/N 名，N为全市场股票数）、各因子值、因子策略预判
 - **个股新闻**：最近 24 小时相关新闻
 - **公司公告**：最近的公司公告
 - **市场快讯**：最近 24 小时财经快讯
@@ -70,14 +85,14 @@ TRADING_JUDGE_SYSTEM_PROMPT: str = """\
 
 ## 示例
 
-假设某股票因子得分 0.82 (排名第 2)，RSI=55，MACD 金叉，PE_TTM=15 (行业偏低)，\
-近期有"获大额订单"新闻，隔夜美股小幅上涨：
+假设某股票因子得分 0.82 (排名第 2/300)，因子策略预判 BUY，RSI=55，MACD 金叉，\
+PE_TTM=15 (行业偏低)，近期有"获大额订单"新闻，隔夜美股小幅上涨：
 
 ```json
 {
   "action": "BUY",
   "confidence": 0.80,
-  "bull_reason": "因子综合得分靠前，MACD 金叉确认上行趋势，PE 估值低于行业均值，且获大额订单利好基本面",
+  "bull_reason": "因子综合得分靠前(2/300)，MACD 金叉确认上行趋势，PE 估值低于行业均值，且获大额订单利好基本面",
   "bear_reason": "RSI 接近 60，短期有一定涨幅，需注意追高风险",
   "judge_conclusion": "技术面与基本面共振向好，事件催化明确，短期回调风险可控。建议买入，设置合理止损",
   "short_term_outlook": "订单利好尚未充分反映，预计 1-2 周内有上行空间",
@@ -109,14 +124,24 @@ def build_stock_prompt(
     announcements: list[NewsItem],
     telegraph: list[NewsItem],
     global_market: pd.DataFrame,
+    *,
+    factor_signal: str = "",
+    universe_size: int = 0,
 ) -> str:
     """Build per-stock "evidence package" user prompt.
 
     All data must be pre-fetched; this function only formats text.
+
+    Parameters
+    ----------
+    factor_signal : factor strategy's pre-decision (e.g. "BUY", "EXIT")
+    universe_size : total stocks in factor universe (for rank context)
     """
     sections: list[str] = [
         f"# {symbol} {name}\n",
-        _format_factor_section(factor_score, factor_rank, factor_details),
+        _format_factor_section(factor_score, factor_rank, factor_details,
+                               universe_size=universe_size,
+                               factor_signal=factor_signal),
         _format_news_section("📰 个股新闻", stock_news, _MAX_STOCK_NEWS),
         _format_news_section("📋 公司公告", announcements, _MAX_ANNOUNCEMENTS),
         _format_news_section("📡 市场快讯", telegraph, _MAX_TELEGRAPH),
@@ -144,13 +169,17 @@ FACTOR_LABELS: dict[str, str] = {
 
 
 def _format_factor_section(
-    score: float, rank: int, details: dict[str, float]
+    score: float, rank: int, details: dict[str, float],
+    *, universe_size: int = 0, factor_signal: str = "",
 ) -> str:
+    rank_str = f"第 {rank} / {universe_size} 名" if universe_size else f"第 {rank} 名"
     lines = [
         "## 📊 因子数据",
         f"- 综合得分: {score:.4f}",
-        f"- 截面排名: 第 {rank} 名",
+        f"- 截面排名: {rank_str}",
     ]
+    if factor_signal:
+        lines.append(f"- 因子策略预判: {factor_signal}")
     if details:
         lines.append("- 因子细项:")
         for key, val in details.items():

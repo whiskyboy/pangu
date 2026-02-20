@@ -128,6 +128,7 @@ class _StubLLMJudge:
         stock_news: list[NewsItem], announcements: list[NewsItem],
         telegraph: list[NewsItem], global_market: pd.DataFrame,
         price: float,
+        *, factor_signal: str = "", universe_size: int = 0,
     ) -> TradeSignal:
         return TradeSignal(
             timestamp=datetime(2026, 1, 1), symbol=symbol, name=name,
@@ -139,6 +140,7 @@ class _StubLLMJudge:
     async def judge_pool(
         self, candidates: list, telegraph: list[NewsItem],
         global_market: pd.DataFrame,
+        *, universe_size: int = 0,
     ) -> list[TradeSignal]:
         return []
 

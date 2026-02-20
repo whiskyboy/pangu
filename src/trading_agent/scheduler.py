@@ -11,13 +11,11 @@ Registers 5 cron tasks:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from trading_agent.data.fundamental import AkShareFundamentalProvider
@@ -59,9 +57,6 @@ class Components:
     judge_engine: LLMJudgeEngineImpl
     notif_manager: NotificationManager
     watchlist_path: str = "config/watchlist.yaml"
-    # Cached data shared between tasks (T1 → T4)
-    _global_snapshot: pd.DataFrame = field(default_factory=pd.DataFrame)
-    _macro_factors: dict[str, float] = field(default_factory=dict)
 
 
 class TradingScheduler:
@@ -153,19 +148,14 @@ class TradingScheduler:
         logger.info("[T1] Syncing global market...")
         try:
             snapshot = self._c.market.get_global_snapshot()
-            self._c._global_snapshot = snapshot
-            if not snapshot.empty:
-                self._c.db.save_global_snapshots(snapshot)
             logger.info("[T1] Global snapshot: %d rows", len(snapshot))
         except Exception:  # noqa: BLE001
             logger.warning("[T1] Global snapshot failed", exc_info=True)
-            self._c._global_snapshot = pd.DataFrame()
+            snapshot = pd.DataFrame()
 
-        self._c._macro_factors = self._c.macro_engine.compute(
-            self._c._global_snapshot,
-        )
+        macro_factors = self._c.macro_engine.compute(snapshot)
         logger.info("[T1] Macro factors: %s",
-                    {k: round(v, 4) for k, v in self._c._macro_factors.items()})
+                    {k: round(v, 4) for k, v in macro_factors.items()})
         logger.info("[T1] Done")
 
     # ------------------------------------------------------------------
@@ -272,22 +262,17 @@ class TradingScheduler:
             fund_raw = fund_raw.set_index("symbol")
         fund_df = c.fund_engine.compute(fund_raw)
 
-        # 4. Global snapshot + macro (use cached from T1, or fetch fresh)
-        global_snapshot = self._c._global_snapshot
-        macro_factors = self._c._macro_factors
-        if global_snapshot.empty or not macro_factors:
-            logger.info("[T4] No cached global data, fetching fresh...")
-            try:
-                global_snapshot = c.market.get_global_snapshot()
-                macro_factors = c.macro_engine.compute(global_snapshot)
-            except Exception:  # noqa: BLE001
-                logger.warning("[T4] Global snapshot failed", exc_info=True)
-                global_snapshot = pd.DataFrame()
-                macro_factors = c.macro_engine.compute(global_snapshot)
+        # 4. Global snapshot + macro (Provider reads DB cache from T1)
+        try:
+            global_snapshot = c.market.get_global_snapshot()
+        except Exception:  # noqa: BLE001
+            logger.warning("[T4] Global snapshot failed", exc_info=True)
+            global_snapshot = pd.DataFrame()
+        macro_factors = c.macro_engine.compute(global_snapshot)
 
-        # 5. Fetch telegraph
-        telegraph = c.news.get_latest_news(limit=50)
-        logger.info("[T4] Telegraph: %d items", len(telegraph))
+        # 5. Load telegraph from DB (T2 accumulated 24h news)
+        telegraph = c.db.load_recent_news(hours=24)
+        logger.info("[T4] Telegraph (from DB): %d items", len(telegraph))
 
         # 6. Factor ranking across full universe
         prev_pool = c.db.load_factor_pool_previous_day()
@@ -325,12 +310,28 @@ class TradingScheduler:
             {s: sector_map.get(s, "") for s in factor_universe},
         )
 
-        # 9. Build LLM candidates (factor pool top-N + watchlist + EXIT, deduplicated)
+        # 9. Build LLM candidates (factor-selected signals + watchlist + EXIT)
+        factor_signal_symbols = [s.symbol for s in _factor_signals]
         candidate_symbols = list(dict.fromkeys(
-            list(pool_df["symbol"]) + watchlist if not pool_df.empty else watchlist
+            factor_signal_symbols + watchlist
         ))
         exit_symbols = [s for s in (prev_symbols - curr_symbols) if s not in candidate_symbols]
         candidate_symbols.extend(exit_symbols)
+        logger.info("[T4] LLM candidates: %d (factor=%d, watchlist=%d, exit=%d)",
+                    len(candidate_symbols), len(factor_signal_symbols),
+                    len(watchlist), len(exit_symbols))
+
+        # Build factor signal map for prompt context
+        _buy_syms = {s.symbol for s in _factor_signals if s.action == Action.BUY}
+        _exit_syms = set(exit_symbols)
+        factor_signal_map: dict[str, str] = {}
+        for sym in candidate_symbols:
+            if sym in _buy_syms:
+                factor_signal_map[sym] = "BUY"
+            elif sym in _exit_syms:
+                factor_signal_map[sym] = "EXIT"
+            else:
+                factor_signal_map[sym] = "WATCHLIST"
 
         # Default status for watchlist stocks outside any factor pool
         for sym in candidate_symbols:
@@ -353,12 +354,14 @@ class TradingScheduler:
         evidence_pool = c.judge_engine.build_evidence_pool(
             candidate_symbols, pool_df, factor_matrix,
             status_map, tech_df, name_map, stock_news_map,
+            factor_signal_map=factor_signal_map,
         )
         logger.info("[T4] Evidence pool: %d stocks", len(evidence_pool))
 
         # 10. LLM comprehensive judge
         signals: list[TradeSignal] = await c.judge_engine.judge_pool(
             evidence_pool, telegraph=telegraph, global_market=global_snapshot,
+            universe_size=len(pool_df),
         )
 
         # Inject signal status into TradeSignal objects
@@ -419,9 +422,28 @@ class TradingScheduler:
         Order follows data dependencies:
           T5 calendar → T3 domestic (K-lines + fundamentals) →
           T1 global → T2 news → T4 signals
+
+        T5 is skipped if CSI300 constituents were synced within the last 7 days.
         """
         logger.info("=== run_once: executing all tasks ===")
-        await self.sync_reference_data()
+
+        # Skip T5 if CSI300 recently synced
+        skip_t5 = False
+        try:
+            rows = self._c.db.load_index_constituents("000300")
+            if rows and isinstance(rows, list) and len(rows) > 0:
+                import datetime as _dt_mod
+                latest = max(r.get("updated_date", "") for r in rows)
+                latest_date = _dt_mod.date.fromisoformat(latest)
+                days_ago = (_now().date() - latest_date).days
+                if days_ago <= 7:
+                    logger.info("[T5] CSI300 synced %d day(s) ago, skipping", days_ago)
+                    skip_t5 = True
+        except Exception:  # noqa: BLE001
+            pass
+        if not skip_t5:
+            await self.sync_reference_data()
+
         await self.sync_domestic_market()
         await self.sync_global_market()
         await self.poll_news()
@@ -432,20 +454,6 @@ class TradingScheduler:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
-
-
-def _load_watchlist_maps(path: str) -> tuple[dict[str, str], dict[str, str]]:
-    """Load name and sector maps from watchlist YAML."""
-    name_map: dict[str, str] = {}
-    sector_map: dict[str, str] = {}
-    wl_path = Path(path)
-    if wl_path.exists():
-        wl_data = yaml.safe_load(wl_path.read_text()) or {}
-        for item in wl_data.get("watchlist", []):
-            sym = item["symbol"]
-            name_map[sym] = item.get("name", sym)
-            sector_map[sym] = item.get("sector", "")
-    return name_map, sector_map
 
 
 def _print_signal_summary(signals: list[TradeSignal]) -> None:

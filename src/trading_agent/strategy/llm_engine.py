@@ -252,6 +252,9 @@ class LLMJudgeEngine(Protocol):
         telegraph: list[NewsItem],
         global_market: pd.DataFrame,
         price: float,
+        *,
+        factor_signal: str = "",
+        universe_size: int = 0,
     ) -> TradeSignal:
         """Judge a single stock and return a TradeSignal."""
         ...
@@ -261,6 +264,8 @@ class LLMJudgeEngine(Protocol):
         candidates: list[dict[str, Any]],
         telegraph: list[NewsItem],
         global_market: pd.DataFrame,
+        *,
+        universe_size: int = 0,
     ) -> list[TradeSignal]:
         """Judge a pool of candidates and return signals."""
         ...
@@ -287,6 +292,9 @@ class LLMJudgeEngineImpl:
         telegraph: list[NewsItem],
         global_market: pd.DataFrame,
         price: float,
+        *,
+        factor_signal: str = "",
+        universe_size: int = 0,
     ) -> TradeSignal:
         """Judge a single stock. Always returns a TradeSignal (never None)."""
         try:
@@ -304,10 +312,13 @@ class LLMJudgeEngineImpl:
                 announcements=announcements,
                 telegraph=telegraph,
                 global_market=global_market,
+                factor_signal=factor_signal,
+                universe_size=universe_size,
             )
 
-            result = await self._client.call(
-                TRADING_JUDGE_SYSTEM_PROMPT, user_prompt,
+            result = await asyncio.wait_for(
+                self._client.call(TRADING_JUDGE_SYSTEM_PROMPT, user_prompt),
+                timeout=60,
             )
             return self._parse_signal(
                 result, symbol, name, factor_score, factor_rank,
@@ -325,16 +336,22 @@ class LLMJudgeEngineImpl:
         candidates: list[dict[str, Any]],
         telegraph: list[NewsItem],
         global_market: pd.DataFrame,
+        *,
+        universe_size: int = 0,
     ) -> list[TradeSignal]:
         """Judge a pool of candidates sequentially.
 
         Each candidate dict must contain:
             symbol, name, factor_score, factor_rank, factor_details,
             stock_news, announcements, price
+
+        Parameters
+        ----------
+        universe_size : total number of stocks in the factor universe (for rank display)
         """
         signals: list[TradeSignal] = []
         ok, fail = 0, 0
-        pool_size = len(candidates)
+        pool_size = universe_size or len(candidates)
 
         for c in candidates:
             try:
@@ -349,6 +366,8 @@ class LLMJudgeEngineImpl:
                     telegraph=telegraph,
                     global_market=global_market,
                     price=c["price"],
+                    factor_signal=c.get("factor_signal", ""),
+                    universe_size=universe_size,
                 )
                 if signal.metadata is not None:
                     signal.metadata["pool_size"] = pool_size
@@ -372,6 +391,8 @@ class LLMJudgeEngineImpl:
         tech_df: dict[str, pd.DataFrame],
         name_map: dict[str, str],
         stock_news_map: dict[str, tuple[list, list]],
+        *,
+        factor_signal_map: dict[str, str] | None = None,
     ) -> list[dict]:
         """Build evidence packages for judge_pool. Pure data in, pure data out.
 
@@ -384,7 +405,9 @@ class LLMJudgeEngineImpl:
         tech_df : symbol → computed tech DataFrame (with 'close' column)
         name_map : symbol → display name
         stock_news_map : symbol → (stock_news, announcements)
+        factor_signal_map : symbol → factor signal label (BUY/EXIT/WATCHLIST)
         """
+        _fsm = factor_signal_map or {}
         evidence_pool: list[dict] = []
         for sym in candidate_symbols:
             row = pool_df[pool_df["symbol"] == sym] if not pool_df.empty else pd.DataFrame()
@@ -408,6 +431,7 @@ class LLMJudgeEngineImpl:
                 "factor_score": f_score,
                 "factor_rank": f_rank,
                 "factor_details": f_details,
+                "factor_signal": _fsm.get(sym, ""),
                 "signal_status": sig_status.value,
                 "days_in_top_n": days_in_top,
                 "prev_factor_score": prev_score,

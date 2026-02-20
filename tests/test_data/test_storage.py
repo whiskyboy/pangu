@@ -325,6 +325,36 @@ class TestTradeSignals:
         assert got.factor_score == pytest.approx(0.9)
         assert got.prev_factor_score == pytest.approx(0.8)
 
+    def test_dedup_same_symbol_action_date(self, db: Database) -> None:
+        """Same (symbol, action, date) → INSERT OR REPLACE, only 1 row."""
+        sig1 = _make_signal("600519", Action.BUY)
+        sig2 = _make_signal("600519", Action.BUY)
+        db.save_trade_signal(sig1)
+        db.save_trade_signal(sig2)
+        loaded = db.load_signals("2026-02-16")
+        assert len(loaded) == 1
+
+    def test_dedup_allows_different_action(self, db: Database) -> None:
+        """Same symbol+date but different action → 2 rows."""
+        db.save_trade_signal(_make_signal("600519", Action.BUY))
+        db.save_trade_signal(_make_signal("600519", Action.SELL))
+        loaded = db.load_signals("2026-02-16")
+        assert len(loaded) == 2
+
+    def test_dedup_allows_different_date(self, db: Database) -> None:
+        """Same symbol+action but different date → 2 rows."""
+        sig1 = _make_signal("600519", Action.BUY)
+        sig2 = TradeSignal(
+            timestamp=datetime(2026, 2, 17, 10, 0, 0, tzinfo=timezone.utc),
+            symbol="600519", name="贵州茅台", action=Action.BUY,
+            signal_status=SignalStatus.NEW_ENTRY, days_in_top_n=0,
+            price=1800.0, confidence=0.85, source="factor", reason="test",
+        )
+        db.save_trade_signal(sig1)
+        db.save_trade_signal(sig2)
+        all_signals = db.load_signals("2026-02-16") + db.load_signals("2026-02-17")
+        assert len(all_signals) == 2
+
 
 # ------------------------------------------------------------------
 # trading_calendar

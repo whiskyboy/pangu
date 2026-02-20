@@ -796,7 +796,15 @@ class AkShareMarketDataProvider:
         return df
 
     def get_global_snapshot(self) -> pd.DataFrame:
-        """Aggregate all international quotes into a single snapshot."""
+        """Aggregate all international quotes, with SQLite cache for today."""
+        # Check DB cache: if we already have snapshots saved today, return them
+        if self._storage is not None:
+            from trading_agent.tz import today_str
+            today = today_str()
+            cached = self._storage.load_latest_global_snapshots()
+            if not cached.empty and (cached["date"] >= today).any():
+                return cached
+
         frames = [self.get_us_indices(), self.get_hk_indices(), self.get_commodity_futures()]
         frames = [f for f in frames if not f.empty]
         if not frames:

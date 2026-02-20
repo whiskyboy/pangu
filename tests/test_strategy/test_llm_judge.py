@@ -308,6 +308,27 @@ class TestLLMJudgeEngineImpl:
         assert "mid_term_outlook" in signal.metadata
         assert signal.metadata["judge_conclusion"] == "综合看多"
 
+    @pytest.mark.asyncio
+    async def test_judge_stock_timeout_fallback(self, engine):
+        """LLM call exceeding timeout should fall back to factor-based signal."""
+        import asyncio
+
+        # Patch at the client.call level (wraps the whole LLM flow)
+        async def hanging_call(*args, **kwargs):
+            raise asyncio.TimeoutError()
+
+        engine._client.call = hanging_call
+        signal = await engine.judge_stock(
+            symbol="601899", name="紫金矿业",
+            factor_score=0.82, factor_rank=2,
+            factor_details={"rsi_14": 55.0},
+            stock_news=[], announcements=[],
+            telegraph=[], global_market=_GLOBAL_DF, price=39.5,
+        )
+
+        assert signal.source == "factor_fallback"
+        assert signal.action == Action.BUY  # factor_score >= 0.7
+
 
 # ---------------------------------------------------------------------------
 # judge_pool tests

@@ -76,7 +76,9 @@ CREATE TABLE IF NOT EXISTS trade_signals (
     factor_score     REAL,
     prev_factor_score REAL,
     pushed           INTEGER DEFAULT 0,
-    metadata         TEXT
+    metadata         TEXT,
+    signal_date      TEXT,
+    UNIQUE (symbol, action, signal_date)
 );
 
 CREATE TABLE IF NOT EXISTS backtest_results (
@@ -183,6 +185,48 @@ class Database:
                 "ALTER TABLE news_items ADD COLUMN category TEXT DEFAULT 'news'"
             )
             self._conn.commit()
+
+        # Migrate trade_signals: add signal_date + UNIQUE constraint
+        sig_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(trade_signals)").fetchall()
+        }
+        if "signal_date" not in sig_cols:
+            # SQLite can't ALTER TABLE ADD UNIQUE, so recreate the table
+            self._conn.executescript("""
+                CREATE TABLE IF NOT EXISTS trade_signals_new (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp        TEXT NOT NULL,
+                    symbol           TEXT NOT NULL,
+                    name             TEXT,
+                    action           TEXT NOT NULL,
+                    signal_status    TEXT,
+                    days_in_top_n    INTEGER DEFAULT 0,
+                    price            REAL,
+                    confidence       REAL,
+                    source           TEXT,
+                    reason           TEXT,
+                    stop_loss        REAL,
+                    take_profit      REAL,
+                    factor_score     REAL,
+                    prev_factor_score REAL,
+                    pushed           INTEGER DEFAULT 0,
+                    metadata         TEXT,
+                    signal_date      TEXT,
+                    UNIQUE (symbol, action, signal_date)
+                );
+                INSERT OR IGNORE INTO trade_signals_new
+                    (timestamp, symbol, name, action, signal_status, days_in_top_n,
+                     price, confidence, source, reason, stop_loss, take_profit,
+                     factor_score, prev_factor_score, pushed, metadata, signal_date)
+                SELECT timestamp, symbol, name, action, signal_status, days_in_top_n,
+                       price, confidence, source, reason, stop_loss, take_profit,
+                       factor_score, prev_factor_score, pushed, metadata,
+                       substr(timestamp, 1, 10)
+                FROM trade_signals;
+                DROP TABLE trade_signals;
+                ALTER TABLE trade_signals_new RENAME TO trade_signals;
+            """)
 
     # ------------------------------------------------------------------
     # daily_bars
@@ -344,14 +388,18 @@ class Database:
     # ------------------------------------------------------------------
 
     def save_trade_signal(self, signal: TradeSignal) -> int:
-        """Insert a trade signal. Returns the inserted row id."""
+        """Insert or replace a trade signal. Dedup by (symbol, action, date).
+
+        Returns the inserted/replaced row id.
+        """
+        signal_date = signal.timestamp.strftime("%Y-%m-%d")
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO trade_signals "
+                "INSERT OR REPLACE INTO trade_signals "
                 "(timestamp, symbol, name, action, signal_status, days_in_top_n, "
                 "price, confidence, source, reason, "
-                "stop_loss, take_profit, factor_score, prev_factor_score, pushed, metadata) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                "stop_loss, take_profit, factor_score, prev_factor_score, pushed, metadata, signal_date) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
                 (
                     signal.timestamp.isoformat(),
                     signal.symbol,
@@ -368,6 +416,7 @@ class Database:
                     signal.factor_score,
                     signal.prev_factor_score,
                     json.dumps(signal.metadata),
+                    signal_date,
                 ),
             )
             self._conn.commit()

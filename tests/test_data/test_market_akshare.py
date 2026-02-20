@@ -502,6 +502,30 @@ class TestGetGlobalSnapshot:
         all_stored = db.load_latest_global_snapshots()
         assert len(all_stored) == 10
 
+    @patch("akshare.futures_foreign_commodity_realtime")
+    @patch("akshare.stock_hk_index_spot_sina")
+    @patch("akshare.index_us_stock_sina")
+    def test_reads_from_db_cache(
+        self, mock_us: MagicMock, mock_hk: MagicMock, mock_commodity: MagicMock,
+        db: Database,
+    ) -> None:
+        """Second call on the same day should read from DB, not API."""
+        mock_us.return_value = _fake_us_index_df()
+        mock_hk.return_value = _fake_hk_index_df()
+        mock_commodity.return_value = _fake_commodity_df()
+        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
+
+        # First call: fetches from API + saves to DB
+        df1 = provider.get_global_snapshot()
+        assert len(df1) == 10
+        call_count = mock_us.call_count
+
+        # Second call: should read from DB cache
+        df2 = provider.get_global_snapshot()
+        assert len(df2) == 10
+        # API should NOT be called again
+        assert mock_us.call_count == call_count
+
 
 # ---------------------------------------------------------------------------
 # _to_bs_code helper

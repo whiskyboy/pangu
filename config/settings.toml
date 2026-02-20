@@ -24,7 +24,7 @@ factor_weights = { RSI_14 = 0.15, MACD = 0.20, BBANDS = 0.10, OBV = 0.10, ATR_14
 [strategy]
 buy_threshold = 0.7
 sell_threshold = 0.3
-top_n = 3
+top_n = 10
 risk_dampen_threshold = -1.0
 max_signals_per_day_per_stock_per_direction = 1
 
