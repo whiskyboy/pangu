@@ -43,10 +43,10 @@ class NewsDataProvider(Protocol):
 # AkShare real implementation — PRD §4.1.3
 # ---------------------------------------------------------------------------
 
-from trading_agent.data.market import CircuitBreaker, _retry_call  # noqa: E402
+from trading_agent.utils import CircuitBreaker, ThrottleMixin, retry_call  # noqa: E402
 
 
-class AkShareNewsDataProvider:
+class AkShareNewsDataProvider(ThrottleMixin):
     """Real news data backed by AkShare + optional SQLite persistence.
 
     All CLS telegraph news are fetched via a single
@@ -69,17 +69,8 @@ class AkShareNewsDataProvider:
 
         self._ak = akshare
         self._storage = storage
-        self._interval = request_interval
-        self._last_call: float = 0.0
+        self.__init_throttle__(request_interval)
         self._circuit = CircuitBreaker()
-        self._throttle_lock = threading.Lock()
-
-    def _throttle(self) -> None:
-        with self._throttle_lock:
-            elapsed = time.monotonic() - self._last_call
-            if elapsed < self._interval:
-                time.sleep(self._interval - elapsed)
-            self._last_call = time.monotonic()
 
     # -- helpers --
 
@@ -118,7 +109,7 @@ class AkShareNewsDataProvider:
         """Fetch all CLS telegraph news (single API call), classify region."""
         try:
             self._throttle()
-            df = _retry_call(
+            df = retry_call(
                 lambda: self._ak.stock_info_global_cls(symbol="全部"),
                 circuit=self._circuit,
             )
@@ -148,7 +139,7 @@ class AkShareNewsDataProvider:
         """Fetch news for a specific stock via stock_news_em."""
         try:
             self._throttle()
-            df = _retry_call(
+            df = retry_call(
                 lambda: self._ak.stock_news_em(symbol=symbol),
                 circuit=self._circuit,
             )
@@ -193,7 +184,7 @@ class AkShareNewsDataProvider:
 
         try:
             self._throttle()
-            df = _retry_call(
+            df = retry_call(
                 lambda: self._ak.stock_zh_a_disclosure_report_cninfo(
                     symbol=symbol,
                     market="沪深京",

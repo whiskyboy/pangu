@@ -107,13 +107,11 @@ class StockPoolManager:
 
     def _backfill_missing_data(self) -> None:
         """Check watchlist stocks for missing or stale data and pull if needed."""
-        from datetime import timedelta
-
-        from trading_agent.tz import now as _now
+        from trading_agent.utils import date_str
         from trading_agent.tz import today_str
 
         today = today_str()
-        cutoff = (_now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        cutoff = date_str(days_ago=7)
 
         for symbol in self.get_watchlist():
             bars = self._storage.load_daily_bars(symbol, "2000-01-01", today)
@@ -136,12 +134,10 @@ class StockPoolManager:
 
         Failures are logged but do not prevent the stock from being added.
         """
-        from datetime import timedelta
+        from trading_agent.utils import date_str
 
-        from trading_agent.tz import now as _now
-
-        end = _now().strftime("%Y-%m-%d")
-        start = (_now() - timedelta(days=200)).strftime("%Y-%m-%d")
+        end = date_str()
+        start = date_str(days_ago=200)
 
         # 1. Historical daily bars (~120 trading days ≈ 200 calendar days)
         try:
@@ -159,7 +155,7 @@ class StockPoolManager:
             if val or (fin is not None and not fin.empty):
                 import pandas as pd
 
-                today = _now().strftime("%Y-%m-%d")
+                today = date_str()
                 row: dict[str, Any] = {"date": today}
                 if val:
                     row.update({
@@ -256,14 +252,14 @@ class StockPoolManager:
         """
         import akshare as ak
 
-        from trading_agent.data.market import CircuitBreaker, _retry_call
+        from trading_agent.utils import CircuitBreaker, retry_call
 
         circuit = CircuitBreaker()
         result: list[str] = []
 
         for symbol in symbols:
             try:
-                df = _retry_call(
+                df = retry_call(
                     lambda s=symbol: ak.stock_individual_info_em(symbol=s),
                     circuit=circuit,
                 )
@@ -317,9 +313,9 @@ class StockPoolManager:
         """
         import akshare as ak
 
-        from trading_agent.data.market import CircuitBreaker, _retry_call
+        from trading_agent.utils import CircuitBreaker, retry_call
 
-        df = _retry_call(
+        df = retry_call(
             lambda: ak.tool_trade_date_hist_sina(),
             circuit=CircuitBreaker(),
         )
@@ -346,11 +342,11 @@ class StockPoolManager:
         """
         import akshare as ak
 
-        from trading_agent.data.market import CircuitBreaker, _retry_call
+        from trading_agent.utils import CircuitBreaker, retry_call
         from trading_agent.tz import today_str
 
         circuit = CircuitBreaker()
-        df = _retry_call(
+        df = retry_call(
             lambda: ak.index_stock_cons(symbol="000300"),
             circuit=circuit,
         )
@@ -366,7 +362,7 @@ class StockPoolManager:
             name = str(row["品种名称"])
             sector = ""
             try:
-                info_df = _retry_call(
+                info_df = retry_call(
                     lambda s=symbol: ak.stock_individual_info_em(symbol=s),
                     circuit=circuit,
                 )

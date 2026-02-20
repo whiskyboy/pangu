@@ -32,6 +32,7 @@ from trading_agent.strategy.factor_strategy import MultiFactorStrategy
 from trading_agent.strategy.llm_engine import LLMJudgeEngineImpl
 from trading_agent.tz import now as _now
 from trading_agent.tz import today_str
+from trading_agent.utils import date_str
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ class TradingScheduler:
         c = self._c
         pool = c.stock_pool.get_factor_universe()
         today = today_str()
-        start = (_now() - timedelta(days=_BARS_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
         total = len(pool)
         logger.info("[T3] Sync universe: %d stocks", total)
 
@@ -225,7 +226,7 @@ class TradingScheduler:
         logger.info("[T4] Generating signals...")
         c = self._c
         today = today_str()
-        start = (_now() - timedelta(days=_BARS_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
 
         # 1. Get stock pools
         watchlist = c.stock_pool.get_watchlist()

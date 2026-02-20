@@ -29,10 +29,10 @@ class FundamentalDataProvider(Protocol):
 # AkShare real implementation — PRD §4.1.2
 # ---------------------------------------------------------------------------
 
-from trading_agent.data.market import CircuitBreaker, _retry_call  # noqa: E402
+from trading_agent.utils import CircuitBreaker, ThrottleMixin, retry_call  # noqa: E402
 
 
-class AkShareFundamentalProvider:
+class AkShareFundamentalProvider(ThrottleMixin):
     """Fundamental data backed by AkShare + optional SQLite persistence.
 
     API mapping:
@@ -53,17 +53,8 @@ class AkShareFundamentalProvider:
 
         self._ak = akshare
         self._storage = storage
-        self._interval = request_interval
-        self._last_call: float = 0.0
+        self.__init_throttle__(request_interval)
         self._circuit = CircuitBreaker()
-        self._throttle_lock = threading.Lock()
-
-    def _throttle(self) -> None:
-        with self._throttle_lock:
-            elapsed = time.monotonic() - self._last_call
-            if elapsed < self._interval:
-                time.sleep(self._interval - elapsed)
-            self._last_call = time.monotonic()
 
     @staticmethod
     def _safe_float(value: Any) -> float | None:
@@ -79,7 +70,7 @@ class AkShareFundamentalProvider:
     def _fetch_individual_info(self, symbol: str) -> dict[str, Any]:
         """Fetch market cap / basic info via stock_individual_info_em."""
         self._throttle()
-        df = _retry_call(
+        df = retry_call(
             lambda: self._ak.stock_individual_info_em(symbol=symbol),
             circuit=self._circuit,
         )
@@ -98,7 +89,7 @@ class AkShareFundamentalProvider:
 
         from trading_agent.tz import now as _now
         current_year = str(_now().year - 1)
-        df = _retry_call(
+        df = retry_call(
             lambda: self._ak.stock_financial_analysis_indicator(
                 symbol=symbol, start_year=current_year,
             ),

@@ -620,7 +620,8 @@ class Database:
 
     def load_factor_pool_previous_day(self) -> pd.DataFrame:
         """Load factor pool for the most recent date *before* today."""
-        today = _now().strftime("%Y-%m-%d")
+        from trading_agent.utils import date_str
+        today = date_str()
         with self._lock:
             row = self._conn.execute(
                 "SELECT MAX(date) FROM factor_pool WHERE date < ?", (today,)
