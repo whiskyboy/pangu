@@ -385,3 +385,106 @@ class StockPoolManager:
         logger.info("sync_trading_calendar: %d new dates saved (%d total)", count, len(dates))
         return count
 
+    # -- CSI300 constituents --
+
+    def sync_csi300_constituents(self) -> int:
+        """Fetch CSI300 constituents and their sector from AkShare.
+
+        Uses ``index_stock_cons("000300")`` for the constituent list and
+        ``stock_individual_info_em(symbol)`` per stock for the sector
+        ("行业") field.  Results are persisted in the ``index_constituents``
+        DB table.
+
+        Returns the number of rows saved.
+        """
+        import akshare as ak
+
+        from trading_agent.data.market import CircuitBreaker, _retry_call
+        from trading_agent.tz import today_str
+
+        circuit = CircuitBreaker()
+        df = _retry_call(
+            lambda: ak.index_stock_cons(symbol="000300"),
+            circuit=circuit,
+        )
+        if df is None or df.empty:
+            logger.warning("sync_csi300: no constituents returned")
+            return 0
+
+        today = today_str()
+        rows: list[dict[str, str]] = []
+        total = len(df)
+        for idx, (_, row) in enumerate(df.iterrows(), 1):
+            symbol = str(row["品种代码"])
+            name = str(row["品种名称"])
+            sector = ""
+            try:
+                info_df = _retry_call(
+                    lambda s=symbol: ak.stock_individual_info_em(symbol=s),
+                    circuit=circuit,
+                )
+                if info_df is not None and not info_df.empty:
+                    info_map = {str(r["item"]): str(r["value"]) for _, r in info_df.iterrows()}
+                    sector = info_map.get("行业", "")
+            except Exception:  # noqa: BLE001
+                logger.warning("sync_csi300: sector lookup failed for %s", symbol)
+            rows.append({
+                "symbol": symbol,
+                "name": name,
+                "index_code": "000300",
+                "sector": sector,
+                "updated_date": today,
+            })
+            if idx % 50 == 0:
+                logger.info("sync_csi300: %d/%d stocks processed", idx, total)
+
+        count = self._storage.save_index_constituents(rows)
+        logger.info("sync_csi300: %d constituents saved", count)
+        return count
+
+    def get_csi300_stocks(self) -> list[str]:
+        """Return CSI300 constituent symbols from DB."""
+        rows = self._storage.load_index_constituents("000300")
+        return [r["symbol"] for r in rows]
+
+    def get_sector_map(self) -> dict[str, str]:
+        """Return symbol → sector mapping from DB index_constituents."""
+        rows = self._storage.load_index_constituents("000300")
+        return {r["symbol"]: r["sector"] or "" for r in rows}
+
+    def get_name_sector_maps(self) -> tuple[dict[str, str], dict[str, str]]:
+        """Return unified (name_map, sector_map) from DB + watchlist YAML.
+
+        Priority: DB (index_constituents) first, then watchlist YAML fills
+        any gaps for stocks not in DB (e.g. watchlist stocks outside CSI300).
+        """
+        name_map: dict[str, str] = {}
+        sector_map: dict[str, str] = {}
+        # 1. DB constituents (CSI300 etc.)
+        for row in self._storage.load_index_constituents("000300"):
+            sym = row["symbol"]
+            if row.get("name"):
+                name_map[sym] = row["name"]
+            if row.get("sector"):
+                sector_map[sym] = row["sector"]
+        # 2. Watchlist YAML fills gaps
+        for entry in self._entries:
+            sym = entry.get("symbol", "")
+            if not sym:
+                continue
+            if sym not in name_map and entry.get("name"):
+                name_map[sym] = entry["name"]
+            if sym not in sector_map and entry.get("sector"):
+                sector_map[sym] = entry["sector"]
+        return name_map, sector_map
+
+    def get_factor_universe(self) -> list[str]:
+        """Return watchlist + CSI300 (deduplicated) for factor computation."""
+        seen: set[str] = set()
+        result: list[str] = []
+        for sym in self.get_watchlist() + self.get_csi300_stocks():
+            if sym not in seen:
+                seen.add(sym)
+                result.append(sym)
+        return result
+

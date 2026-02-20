@@ -363,6 +363,60 @@ class LLMJudgeEngineImpl:
                     ok, len(candidates), fail)
         return signals
 
+    def build_evidence_pool(
+        self,
+        candidate_symbols: list[str],
+        pool_df: pd.DataFrame,
+        factor_matrix: pd.DataFrame,
+        status_map: dict[str, tuple[SignalStatus, int, float | None]],
+        tech_df: dict[str, pd.DataFrame],
+        name_map: dict[str, str],
+        stock_news_map: dict[str, tuple[list, list]],
+    ) -> list[dict]:
+        """Build evidence packages for judge_pool. Pure data in, pure data out.
+
+        Parameters
+        ----------
+        candidate_symbols : ordered list of symbols to evaluate
+        pool_df : factor pool DataFrame (symbol, score, rank)
+        factor_matrix : full factor matrix indexed by symbol
+        status_map : symbol → (SignalStatus, days_in_top_n, prev_factor_score)
+        tech_df : symbol → computed tech DataFrame (with 'close' column)
+        name_map : symbol → display name
+        stock_news_map : symbol → (stock_news, announcements)
+        """
+        evidence_pool: list[dict] = []
+        for sym in candidate_symbols:
+            row = pool_df[pool_df["symbol"] == sym] if not pool_df.empty else pd.DataFrame()
+            f_score = float(row["score"].iloc[0]) if not row.empty else 0.5
+            f_rank = int(row["rank"].iloc[0]) if not row.empty else len(pool_df) + 1
+            f_details = (
+                factor_matrix.loc[sym].to_dict()
+                if sym in factor_matrix.index else {}
+            )
+            sig_status, days_in_top, prev_score = status_map.get(
+                sym, (SignalStatus.NEW_ENTRY, 0, None),
+            )
+            s_news, s_anns = stock_news_map.get(sym, ([], []))
+
+            bars = tech_df.get(sym)
+            price = float(bars["close"].iloc[-1]) if bars is not None and not bars.empty else 0.0
+
+            evidence_pool.append({
+                "symbol": sym,
+                "name": name_map.get(sym, sym),
+                "factor_score": f_score,
+                "factor_rank": f_rank,
+                "factor_details": f_details,
+                "signal_status": sig_status.value,
+                "days_in_top_n": days_in_top,
+                "prev_factor_score": prev_score,
+                "stock_news": s_news,
+                "announcements": s_anns,
+                "price": price,
+            })
+        return evidence_pool
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -448,6 +502,7 @@ class LLMJudgeEngineImpl:
             factor_score=factor_score,
             metadata={"fallback": True},
         )
+
 
 
 # ---------------------------------------------------------------------------

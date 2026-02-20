@@ -150,7 +150,7 @@ async def _run_scheduler() -> None:
     scheduler = TradingScheduler(components, timezone=tz)
 
     # First run: sync calendar to ensure trading day checks work
-    await scheduler.sync_calendar()
+    await scheduler.sync_reference_data()
 
     scheduler.start()
     logger.info("TradingScheduler running — press Ctrl+C to stop")
@@ -179,10 +179,22 @@ async def _run_once() -> None:
     await scheduler.run_once()
 
 
+async def _run_init() -> None:
+    """First-time initialization: sync reference data + domestic market only."""
+    components, _tz = _build_components()
+    scheduler = TradingScheduler(components, timezone=_tz)
+    logger.info("=== init: syncing reference data + domestic market ===")
+    await scheduler.sync_reference_data()
+    await scheduler.sync_domestic_market()
+    logger.info("=== init complete ===")
+
+
 def main() -> None:
     """Entry point for ``python -m trading_agent.main``."""
-    once = "--once" in sys.argv
-    if once:
+    if "--init" in sys.argv:
+        logger.info("=== TradingAgent — init mode ===")
+        asyncio.run(_run_init())
+    elif "--once" in sys.argv:
         logger.info("=== TradingAgent — run once ===")
         asyncio.run(_run_once())
     else:

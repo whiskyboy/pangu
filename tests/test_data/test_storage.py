@@ -39,6 +39,7 @@ class TestInitTables:
             "fundamentals",
             "data_sync_log",
             "trading_calendar",
+            "index_constituents",
         }
         assert expected.issubset(names)
 
@@ -401,3 +402,77 @@ class TestLifecycle:
         db.close()
         with pytest.raises(Exception):
             db._conn.execute("SELECT 1")
+
+
+# ------------------------------------------------------------------
+# index_constituents
+# ------------------------------------------------------------------
+
+
+class TestIndexConstituents:
+    def test_save_and_load(self, db: Database) -> None:
+        rows = [
+            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+            {"symbol": "000858", "name": "五粮液", "index_code": "000300",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+        ]
+        n = db.save_index_constituents(rows)
+        assert n == 2
+
+        loaded = db.load_index_constituents("000300")
+        assert len(loaded) == 2
+        assert loaded[0]["symbol"] == "000858"  # ordered by symbol
+        assert loaded[1]["sector"] == "白酒"
+
+    def test_empty_list(self, db: Database) -> None:
+        assert db.save_index_constituents([]) == 0
+
+    def test_upsert(self, db: Database) -> None:
+        db.save_index_constituents([
+            {"symbol": "600519", "name": "茅台旧", "index_code": "000300",
+             "sector": "白酒", "updated_date": "2026-01-01"},
+        ])
+        db.save_index_constituents([
+            {"symbol": "600519", "name": "茅台新", "index_code": "000300",
+             "sector": "食品饮料", "updated_date": "2026-02-20"},
+        ])
+        loaded = db.load_index_constituents("000300")
+        assert len(loaded) == 1
+        assert loaded[0]["name"] == "茅台新"
+        assert loaded[0]["sector"] == "食品饮料"
+
+    def test_different_index_codes_isolated(self, db: Database) -> None:
+        db.save_index_constituents([
+            {"symbol": "600519", "name": "茅台", "index_code": "000300",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+            {"symbol": "600519", "name": "茅台", "index_code": "000905",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+        ])
+        assert len(db.load_index_constituents("000300")) == 1
+        assert len(db.load_index_constituents("000905")) == 1
+
+
+# ------------------------------------------------------------------
+# factor_pool_previous_day
+# ------------------------------------------------------------------
+
+
+class TestFactorPoolPreviousDay:
+    def test_returns_previous_day_pool(self, db: Database) -> None:
+        from trading_agent.tz import today_str
+        today = today_str()
+
+        db.save_factor_pool("2026-02-18", pd.DataFrame({
+            "symbol": ["600519"], "score": [0.8], "rank": [1],
+        }))
+        db.save_factor_pool(today, pd.DataFrame({
+            "symbol": ["000858"], "score": [0.9], "rank": [1],
+        }))
+        prev = db.load_factor_pool_previous_day()
+        assert len(prev) == 1
+        assert prev.iloc[0]["symbol"] == "600519"
+
+    def test_returns_empty_when_no_previous(self, db: Database) -> None:
+        prev = db.load_factor_pool_previous_day()
+        assert prev.empty

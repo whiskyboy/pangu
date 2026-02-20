@@ -5,13 +5,14 @@ Registers 5 cron tasks:
   T2 poll_news             — 07:00-20:00 hourly
   T3 sync_domestic_market  — 15:30 trading days
   T4 generate_signals      — 08:15 trading days
-  T5 sync_calendar         — 1st of each month
+  T5 sync_reference_data   — 1st of each month
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,16 +28,19 @@ from trading_agent.data.storage import Database
 from trading_agent.factor.fundamental import FundamentalFactorEngine
 from trading_agent.factor.macro import MacroFactorEngine
 from trading_agent.factor.technical import PandasTAFactorEngine
-from trading_agent.models import Action, TradeSignal
+from trading_agent.models import Action, SignalStatus, TradeSignal
 from trading_agent.notification import NotificationManager
 from trading_agent.strategy.factor_strategy import MultiFactorStrategy
 from trading_agent.strategy.llm_engine import LLMJudgeEngineImpl
+from trading_agent.tz import now as _now
 from trading_agent.tz import today_str
 
 logger = logging.getLogger(__name__)
 
 _ACTION_EMOJI = {Action.BUY: "🟢", Action.SELL: "🔴", Action.HOLD: "⚪"}
 _ACTION_ORDER = {Action.BUY: 0, Action.HOLD: 1, Action.SELL: 2}
+# Lookback window for daily bars (~120 trading days)
+_BARS_LOOKBACK_DAYS = 200
 
 
 @dataclass
@@ -120,11 +124,11 @@ class TradingScheduler:
             hour=8, minute=15, id="t4_generate_signals",
             name="T4 信号生成",
         )
-        # T5: sync calendar — 1st of each month at 06:00
+        # T5: sync reference data — 1st of each month at 06:00
         self._scheduler.add_job(
-            self.sync_calendar, "cron",
-            day=1, hour=6, minute=0, id="t5_sync_calendar",
-            name="T5 交易日历同步",
+            self.sync_reference_data, "cron",
+            day=1, hour=6, minute=0, id="t5_sync_reference_data",
+            name="T5 基础数据同步",
         )
 
     # ------------------------------------------------------------------
@@ -150,6 +154,8 @@ class TradingScheduler:
         try:
             snapshot = self._c.market.get_global_snapshot()
             self._c._global_snapshot = snapshot
+            if not snapshot.empty:
+                self._c.db.save_global_snapshots(snapshot)
             logger.info("[T1] Global snapshot: %d rows", len(snapshot))
         except Exception:  # noqa: BLE001
             logger.warning("[T1] Global snapshot failed", exc_info=True)
@@ -174,6 +180,12 @@ class TradingScheduler:
             logger.info("[T2] Telegraph: %d items fetched", len(items))
         except Exception:  # noqa: BLE001
             logger.warning("[T2] News polling failed", exc_info=True)
+        try:
+            deleted = self._c.db.cleanup_old_news(30)
+            if deleted:
+                logger.info("[T2] Cleaned up %d old news items", deleted)
+        except Exception:  # noqa: BLE001
+            logger.warning("[T2] News cleanup failed", exc_info=True)
         logger.info("[T2] Done")
 
     # ------------------------------------------------------------------
@@ -181,17 +193,20 @@ class TradingScheduler:
     # ------------------------------------------------------------------
 
     async def sync_domestic_market(self) -> None:
-        """Sync daily K-lines + fundamentals for watchlist stocks."""
+        """Sync daily K-lines + fundamentals for watchlist + CSI300."""
         logger.info("[T3] Syncing domestic market...")
         c = self._c
-        pool = c.stock_pool.get_active_pool()
+        pool = c.stock_pool.get_factor_universe()
         today = today_str()
+        start = (_now() - timedelta(days=_BARS_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        total = len(pool)
+        logger.info("[T3] Sync universe: %d stocks", total)
 
         # Daily bars
         ok, fail = 0, 0
-        for symbol in pool:
+        for i, symbol in enumerate(pool, 1):
             try:
-                bars = c.market.get_daily_bars(symbol, "2025-06-01", today)
+                bars = c.market.get_daily_bars(symbol, start, today)
                 if bars is not None and not bars.empty:
                     ok += 1
                 else:
@@ -199,6 +214,8 @@ class TradingScheduler:
             except Exception:  # noqa: BLE001
                 fail += 1
                 logger.warning("[T3] %s: daily bars failed", symbol, exc_info=True)
+            if i % 50 == 0:
+                logger.info("[T3] Daily bars: %d/%d processed", i, total)
         logger.info("[T3] Daily bars: %d ok, %d failed", ok, fail)
 
         # Fundamentals
@@ -222,26 +239,28 @@ class TradingScheduler:
         logger.info("[T4] Generating signals...")
         c = self._c
         today = today_str()
+        start = (_now() - timedelta(days=_BARS_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
-        # 1. Get stock pool
+        # 1. Get stock pools
         watchlist = c.stock_pool.get_watchlist()
-        pool = c.stock_pool.get_active_pool()
-        logger.info("[T4] Pool: %d stocks, watchlist: %d", len(pool), len(watchlist))
+        factor_universe = c.stock_pool.get_factor_universe()
+        logger.info("[T4] Factor universe: %d stocks, watchlist: %d",
+                    len(factor_universe), len(watchlist))
 
-        # 2. Fetch bars + compute technical factors
+        # 2. Compute technical factors for full universe (from DB, T3 synced)
         tech_df: dict[str, pd.DataFrame] = {}
-        for symbol in pool:
+        for symbol in factor_universe:
             try:
-                bars = c.market.get_daily_bars(symbol, "2025-06-01", today)
+                bars = c.market.get_daily_bars(symbol, start, today)
                 if bars is not None and not bars.empty:
                     tech_df[symbol] = c.tech_engine.compute(bars)
             except Exception:  # noqa: BLE001
                 logger.warning("[T4] %s: tech failed", symbol, exc_info=True)
-        logger.info("[T4] Tech factors: %d/%d", len(tech_df), len(pool))
+        logger.info("[T4] Tech factors: %d/%d", len(tech_df), len(factor_universe))
 
-        # 3. Fetch fundamentals + compute fundamental factors
+        # 3. Compute fundamental factors for full universe
         fund_rows: list[dict] = []
-        for symbol in pool:
+        for symbol in factor_universe:
             try:
                 val = c.fundamental.get_valuation(symbol)
                 val["symbol"] = symbol
@@ -270,40 +289,57 @@ class TradingScheduler:
         telegraph = c.news.get_latest_news(limit=50)
         logger.info("[T4] Telegraph: %d items", len(telegraph))
 
-        # 6. Factor ranking
-        prev_pool = c.db.load_factor_pool_latest()
+        # 6. Factor ranking across full universe
+        prev_pool = c.db.load_factor_pool_previous_day()
         pool_df, _factor_signals = c.factor_strategy.generate_signals(
             tech_df, fund_df, macro_factors, prev_pool=prev_pool,
         )
-        logger.info("[T4] Factor pool: %d stocks", len(pool_df))
+        logger.info("[T4] Factor pool: %d stocks (universe: %d)",
+                    len(pool_df), len(factor_universe))
 
         if not pool_df.empty:
             c.db.save_factor_pool(today, pool_df)
 
-        # 7. Load name + sector map
-        name_map, sector_map = _load_watchlist_maps(c.watchlist_path)
+        # 6b. Signal status tracking
+        prev_symbols = set(prev_pool["symbol"]) if not prev_pool.empty else set()
+        curr_symbols = set(pool_df["symbol"]) if not pool_df.empty else set()
+        status_map: dict[str, tuple[SignalStatus, int, float | None]] = {}
+        for sym in curr_symbols:
+            prev_row = prev_pool[prev_pool["symbol"] == sym] if not prev_pool.empty else pd.DataFrame()
+            prev_score = float(prev_row["score"].iloc[0]) if not prev_row.empty else None
+            if sym in prev_symbols:
+                status_map[sym] = (SignalStatus.SUSTAINED, 0, prev_score)
+            else:
+                status_map[sym] = (SignalStatus.NEW_ENTRY, 0, prev_score)
+        for sym in prev_symbols - curr_symbols:
+            prev_row = prev_pool[prev_pool["symbol"] == sym]
+            prev_score = float(prev_row["score"].iloc[0]) if not prev_row.empty else None
+            status_map[sym] = (SignalStatus.EXIT, 0, prev_score)
+
+        # 7. Load name + sector map (unified from DB + watchlist YAML)
+        name_map, sector_map = c.stock_pool.get_name_sector_maps()
 
         # 8. Build factor matrix
         factor_matrix = c.factor_strategy._build_factor_matrix(
-            pool, tech_df, fund_df, macro_factors,
-            {s: sector_map.get(s, "") for s in pool},
+            factor_universe, tech_df, fund_df, macro_factors,
+            {s: sector_map.get(s, "") for s in factor_universe},
         )
 
-        # 9. Build LLM candidates (factor pool + watchlist, deduplicated)
+        # 9. Build LLM candidates (factor pool top-N + watchlist + EXIT, deduplicated)
         candidate_symbols = list(dict.fromkeys(
             list(pool_df["symbol"]) + watchlist if not pool_df.empty else watchlist
         ))
+        exit_symbols = [s for s in (prev_symbols - curr_symbols) if s not in candidate_symbols]
+        candidate_symbols.extend(exit_symbols)
 
-        candidates: list[dict] = []
+        # Default status for watchlist stocks outside any factor pool
         for sym in candidate_symbols:
-            row = pool_df[pool_df["symbol"] == sym] if not pool_df.empty else pd.DataFrame()
-            f_score = float(row["score"].iloc[0]) if not row.empty else 0.5
-            f_rank = int(row["rank"].iloc[0]) if not row.empty else len(candidate_symbols)
-            f_details = (
-                factor_matrix.loc[sym].to_dict()
-                if sym in factor_matrix.index else {}
-            )
+            if sym not in status_map:
+                status_map[sym] = (SignalStatus.NEW_ENTRY, 0, None)
 
+        # 9b. Pre-fetch news for candidates (I/O in scheduler, pure data to engine)
+        stock_news_map: dict[str, tuple[list, list]] = {}
+        for sym in candidate_symbols:
             try:
                 s_news = c.news.get_stock_news(sym, limit=10)
             except Exception:  # noqa: BLE001
@@ -312,27 +348,27 @@ class TradingScheduler:
                 s_anns = c.news.get_announcements(sym, limit=5)
             except Exception:  # noqa: BLE001
                 s_anns = []
+            stock_news_map[sym] = (s_news, s_anns)
 
-            bars = tech_df.get(sym)
-            price = float(bars["close"].iloc[-1]) if bars is not None and not bars.empty else 0.0
-
-            candidates.append({
-                "symbol": sym,
-                "name": name_map.get(sym, sym),
-                "factor_score": f_score,
-                "factor_rank": f_rank,
-                "factor_details": f_details,
-                "stock_news": s_news,
-                "announcements": s_anns,
-                "price": price,
-            })
-
-        logger.info("[T4] LLM candidates: %d stocks", len(candidates))
+        evidence_pool = c.judge_engine.build_evidence_pool(
+            candidate_symbols, pool_df, factor_matrix,
+            status_map, tech_df, name_map, stock_news_map,
+        )
+        logger.info("[T4] Evidence pool: %d stocks", len(evidence_pool))
 
         # 10. LLM comprehensive judge
         signals: list[TradeSignal] = await c.judge_engine.judge_pool(
-            candidates, telegraph=telegraph, global_market=global_snapshot,
+            evidence_pool, telegraph=telegraph, global_market=global_snapshot,
         )
+
+        # Inject signal status into TradeSignal objects
+        for signal in signals:
+            st_info = status_map.get(signal.symbol)
+            if st_info:
+                signal.signal_status = st_info[0]
+                signal.days_in_top_n = st_info[1]
+                signal.prev_factor_score = st_info[2]
+
         logger.info("[T4] Signals: %d", len(signals))
         _print_signal_summary(signals)
 
@@ -355,17 +391,22 @@ class TradingScheduler:
         logger.info("[T4] Done — %d signals, %d pushed", len(signals), len(to_push))
 
     # ------------------------------------------------------------------
-    # T5: Sync calendar
+    # T5: Sync reference data (calendar + CSI300 constituents)
     # ------------------------------------------------------------------
 
-    async def sync_calendar(self) -> None:
-        """Sync A-share trading calendar."""
-        logger.info("[T5] Syncing trading calendar...")
+    async def sync_reference_data(self) -> None:
+        """Sync trading calendar and CSI300 index constituents."""
+        logger.info("[T5] Syncing reference data...")
         try:
             count = self._c.stock_pool.sync_trading_calendar()
-            logger.info("[T5] %d new dates synced", count)
+            logger.info("[T5] Calendar: %d new dates synced", count)
         except Exception:  # noqa: BLE001
             logger.warning("[T5] Calendar sync failed", exc_info=True)
+        try:
+            count = self._c.stock_pool.sync_csi300_constituents()
+            logger.info("[T5] CSI300: %d constituents synced", count)
+        except Exception:  # noqa: BLE001
+            logger.warning("[T5] CSI300 sync failed", exc_info=True)
         logger.info("[T5] Done")
 
     # ------------------------------------------------------------------
@@ -380,7 +421,7 @@ class TradingScheduler:
           T1 global → T2 news → T4 signals
         """
         logger.info("=== run_once: executing all tasks ===")
-        await self.sync_calendar()
+        await self.sync_reference_data()
         await self.sync_domestic_market()
         await self.sync_global_market()
         await self.poll_news()

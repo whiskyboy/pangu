@@ -445,3 +445,61 @@ class TestFakeLLMJudgeEngine:
         assert len(signals) == 2
         assert signals[0].action == Action.BUY
         assert signals[1].action == Action.SELL
+
+
+# ---------------------------------------------------------------------------
+# build_evidence_pool
+# ---------------------------------------------------------------------------
+
+
+class TestBuildEvidencePool:
+    def test_basic_build(self):
+        from trading_agent.strategy.llm_engine import LLMClient
+
+        engine = LLMJudgeEngineImpl(LLMClient())
+        pool_df = pd.DataFrame({
+            "symbol": ["600519", "000858"],
+            "score": [0.9, 0.7],
+            "rank": [1, 2],
+        })
+        factor_matrix = pd.DataFrame(
+            {"rsi_14": [55.0, 60.0], "macd_hist": [0.1, -0.1]},
+            index=["600519", "000858"],
+        )
+        status_map = {
+            "600519": (SignalStatus.NEW_ENTRY, 0, None),
+            "000858": (SignalStatus.SUSTAINED, 2, 0.65),
+        }
+        tech_df = {
+            "600519": pd.DataFrame({"close": [1850.0]}),
+            "000858": pd.DataFrame({"close": [150.0]}),
+        }
+        name_map = {"600519": "贵州茅台", "000858": "五粮液"}
+        stock_news_map = {"600519": ([], []), "000858": ([], [])}
+
+        result = engine.build_evidence_pool(
+            ["600519", "000858"], pool_df, factor_matrix,
+            status_map, tech_df, name_map, stock_news_map,
+        )
+        assert len(result) == 2
+        assert result[0]["symbol"] == "600519"
+        assert result[0]["factor_score"] == pytest.approx(0.9)
+        assert result[0]["factor_rank"] == 1
+        assert result[0]["signal_status"] == "new_entry"
+        assert result[0]["price"] == pytest.approx(1850.0)
+        assert result[1]["prev_factor_score"] == pytest.approx(0.65)
+
+    def test_missing_symbol_gets_defaults(self):
+        from trading_agent.strategy.llm_engine import LLMClient
+
+        engine = LLMJudgeEngineImpl(LLMClient())
+        pool_df = pd.DataFrame(columns=["symbol", "score", "rank"])
+        factor_matrix = pd.DataFrame()
+        result = engine.build_evidence_pool(
+            ["999999"], pool_df, factor_matrix,
+            {}, {}, {}, {},
+        )
+        assert len(result) == 1
+        assert result[0]["factor_score"] == 0.5
+        assert result[0]["price"] == 0.0
+        assert result[0]["name"] == "999999"  # fallback to symbol

@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS factor_pool (
     rank        INTEGER,
     PRIMARY KEY (symbol, date)
 );
+
+CREATE TABLE IF NOT EXISTS index_constituents (
+    symbol        TEXT NOT NULL,
+    name          TEXT,
+    index_code    TEXT NOT NULL,     -- e.g. '000300' for CSI300
+    sector        TEXT,              -- 东财行业分类
+    updated_date  TEXT NOT NULL,     -- YYYY-MM-DD
+    PRIMARY KEY (symbol, index_code)
+);
 """
 
 
@@ -581,6 +590,62 @@ class Database:
                 self._conn,
                 params=(row[0],),
             )
+
+    def load_factor_pool_previous_day(self) -> pd.DataFrame:
+        """Load factor pool for the most recent date *before* today."""
+        today = _now().strftime("%Y-%m-%d")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(date) FROM factor_pool WHERE date < ?", (today,)
+            ).fetchone()
+            if row is None or row[0] is None:
+                return pd.DataFrame(columns=["symbol", "score", "rank"])
+            return pd.read_sql(
+                "SELECT symbol, score, rank FROM factor_pool WHERE date = ? ORDER BY rank",
+                self._conn,
+                params=(row[0],),
+            )
+
+    # ------------------------------------------------------------------
+    # Index constituents
+    # ------------------------------------------------------------------
+
+    def save_index_constituents(self, rows: list[dict]) -> int:
+        """INSERT OR REPLACE index constituents.
+
+        Each dict must have: symbol, name, index_code, updated_date.
+        Optional: sector.
+        """
+        if not rows:
+            return 0
+        tuples = [
+            (r["symbol"], r.get("name"), r["index_code"],
+             r.get("sector"), r["updated_date"])
+            for r in rows
+        ]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO index_constituents "
+                "(symbol, name, index_code, sector, updated_date) "
+                "VALUES (?, ?, ?, ?, ?)",
+                tuples,
+            )
+            self._conn.commit()
+        return len(tuples)
+
+    def load_index_constituents(self, index_code: str) -> list[dict]:
+        """Load constituents for a given index code."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT symbol, name, index_code, sector, updated_date "
+                "FROM index_constituents WHERE index_code = ? ORDER BY symbol",
+                (index_code,),
+            ).fetchall()
+        return [
+            {"symbol": r[0], "name": r[1], "index_code": r[2],
+             "sector": r[3], "updated_date": r[4]}
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------
     # Lifecycle

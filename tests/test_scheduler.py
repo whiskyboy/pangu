@@ -1,4 +1,4 @@
-"""Tests for TradingScheduler (M5.1)."""
+"""Tests for TradingScheduler (M5.2)."""
 
 from __future__ import annotations
 
@@ -50,7 +50,10 @@ def mock_components() -> Components:
     stock_pool = MagicMock()
     stock_pool.get_watchlist.return_value = ["600519"]
     stock_pool.get_active_pool.return_value = ["600519"]
+    stock_pool.get_factor_universe.return_value = ["600519"]
+    stock_pool.get_name_sector_maps.return_value = ({"600519": "贵州茅台"}, {"600519": "白酒"})
     stock_pool.sync_trading_calendar.return_value = 0
+    stock_pool.sync_csi300_constituents = MagicMock(return_value=0)
 
     tech_engine = MagicMock()
     tech_engine.compute.return_value = pd.DataFrame({
@@ -118,7 +121,7 @@ class TestJobRegistration:
             "t2_poll_news",
             "t3_sync_domestic_market",
             "t4_generate_signals",
-            "t5_sync_calendar",
+            "t5_sync_reference_data",
         }
         assert job_ids == expected
 
@@ -168,6 +171,11 @@ class TestT1:
         assert len(scheduler._c._macro_factors) > 0
 
     @pytest.mark.asyncio
+    async def test_saves_snapshot_to_db(self, scheduler: TradingScheduler) -> None:
+        await scheduler.sync_global_market()
+        scheduler._c.db.save_global_snapshots.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_handles_failure(self, scheduler: TradingScheduler) -> None:
         scheduler._c.market.get_global_snapshot.side_effect = RuntimeError("network")
         await scheduler.sync_global_market()
@@ -186,6 +194,12 @@ class TestT2:
         scheduler._c.news.get_latest_news.assert_called_once_with(limit=50)
 
     @pytest.mark.asyncio
+    async def test_cleans_old_news(self, scheduler: TradingScheduler) -> None:
+        scheduler._c.db.cleanup_old_news.return_value = 5
+        await scheduler.poll_news()
+        scheduler._c.db.cleanup_old_news.assert_called_once_with(30)
+
+    @pytest.mark.asyncio
     async def test_handles_failure(self, scheduler: TradingScheduler) -> None:
         scheduler._c.news.get_latest_news.side_effect = RuntimeError("fail")
         await scheduler.poll_news()  # should not raise
@@ -200,6 +214,7 @@ class TestT3:
     @pytest.mark.asyncio
     async def test_syncs_bars_and_fundamentals(self, scheduler: TradingScheduler) -> None:
         await scheduler.sync_domestic_market()
+        scheduler._c.stock_pool.get_factor_universe.assert_called_once()
         scheduler._c.market.get_daily_bars.assert_called()
         scheduler._c.fundamental.get_valuation.assert_called()
 
@@ -227,9 +242,13 @@ class TestT4:
             source="llm_judge", reason="test",
         )
         scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[sig])
+        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
+            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
+        )
 
         await scheduler.generate_signals()
 
+        scheduler._c.stock_pool.get_factor_universe.assert_called()
         scheduler._c.db.save_trade_signal.assert_called_once()
         scheduler._c.factor_strategy.generate_signals.assert_called_once()
 
@@ -239,6 +258,9 @@ class TestT4:
         scheduler._c._global_snapshot = pd.DataFrame({"name": ["test"]})
         scheduler._c._macro_factors = {"global_risk": 0.0}
         scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
+        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
+            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
+        )
 
         await scheduler.generate_signals()
 
@@ -249,27 +271,98 @@ class TestT4:
     async def test_fetches_fresh_global_when_empty(self, scheduler: TradingScheduler) -> None:
         scheduler._c._global_snapshot = pd.DataFrame()  # empty
         scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
+        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
+            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
+        )
 
         await scheduler.generate_signals()
 
         scheduler._c.market.get_global_snapshot.assert_called()
 
+    @pytest.mark.asyncio
+    async def test_signal_status_new_entry(self, scheduler: TradingScheduler) -> None:
+        """Stock in current pool but not in previous → NEW_ENTRY."""
+        from trading_agent.models import Action, SignalStatus, TradeSignal
+        from trading_agent.tz import now
+
+        sig = TradeSignal(
+            timestamp=now(), symbol="600519", name="贵州茅台",
+            action=Action.BUY, signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0, price=1850.0, confidence=0.8,
+            source="llm_judge", reason="test",
+        )
+        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[sig])
+        # Previous pool is empty → all current stocks are NEW_ENTRY
+        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
+            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
+        )
+        # Factor strategy returns 600519 in the pool
+        scheduler._c.factor_strategy.generate_signals.return_value = (
+            pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
+            [],
+        )
+
+        await scheduler.generate_signals()
+
+        saved_signal = scheduler._c.db.save_trade_signal.call_args[0][0]
+        assert saved_signal.signal_status == SignalStatus.NEW_ENTRY
+
+    @pytest.mark.asyncio
+    async def test_signal_status_sustained(self, scheduler: TradingScheduler) -> None:
+        """Stock in both current and previous pool → SUSTAINED."""
+        from trading_agent.models import Action, SignalStatus, TradeSignal
+        from trading_agent.tz import now
+
+        sig = TradeSignal(
+            timestamp=now(), symbol="600519", name="贵州茅台",
+            action=Action.HOLD, signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0, price=1850.0, confidence=0.7,
+            source="llm_judge", reason="test",
+        )
+        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[sig])
+        # Previous pool had 600519
+        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
+            return_value=pd.DataFrame({
+                "symbol": ["600519"], "score": [0.75], "rank": [1],
+            }),
+        )
+        scheduler._c.factor_strategy.generate_signals.return_value = (
+            pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
+            [],
+        )
+
+        await scheduler.generate_signals()
+
+        saved_signal = scheduler._c.db.save_trade_signal.call_args[0][0]
+        assert saved_signal.signal_status == SignalStatus.SUSTAINED
+        assert saved_signal.prev_factor_score == pytest.approx(0.75)
+
 
 # ---------------------------------------------------------------------------
-# T5: Sync calendar
+# T5: Sync reference data
 # ---------------------------------------------------------------------------
 
 
 class TestT5:
     @pytest.mark.asyncio
-    async def test_syncs_calendar(self, scheduler: TradingScheduler) -> None:
-        await scheduler.sync_calendar()
+    async def test_syncs_calendar_and_csi300(self, scheduler: TradingScheduler) -> None:
+        scheduler._c.stock_pool.sync_csi300_constituents = MagicMock(return_value=300)
+        await scheduler.sync_reference_data()
         scheduler._c.stock_pool.sync_trading_calendar.assert_called_once()
+        scheduler._c.stock_pool.sync_csi300_constituents.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handles_failure(self, scheduler: TradingScheduler) -> None:
+    async def test_handles_calendar_failure(self, scheduler: TradingScheduler) -> None:
         scheduler._c.stock_pool.sync_trading_calendar.side_effect = RuntimeError("fail")
-        await scheduler.sync_calendar()  # should not raise
+        scheduler._c.stock_pool.sync_csi300_constituents = MagicMock(return_value=300)
+        await scheduler.sync_reference_data()  # should not raise
+        # CSI300 sync should still be called
+        scheduler._c.stock_pool.sync_csi300_constituents.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handles_csi300_failure(self, scheduler: TradingScheduler) -> None:
+        scheduler._c.stock_pool.sync_csi300_constituents = MagicMock(side_effect=RuntimeError("fail"))
+        await scheduler.sync_reference_data()  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +374,9 @@ class TestRunOnce:
     @pytest.mark.asyncio
     async def test_runs_all_tasks(self, scheduler: TradingScheduler) -> None:
         scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
+        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
+            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
+        )
 
         await scheduler.run_once()
 
