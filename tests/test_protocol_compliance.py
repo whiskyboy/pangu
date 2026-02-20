@@ -27,7 +27,6 @@ from trading_agent.models import (
     TradeSignal,
 )
 from trading_agent.notification.feishu import NotificationProvider
-from trading_agent.strategy.anomaly_detector import AnomalyDetector
 from trading_agent.strategy.factor_strategy import Strategy
 from trading_agent.strategy.llm_engine import LLMJudgeEngine
 
@@ -37,21 +36,6 @@ from trading_agent.strategy.llm_engine import LLMJudgeEngine
 
 class _StubMarket:
     def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        return pd.DataFrame()
-
-    def get_realtime_quote(self, symbols: list[str]) -> pd.DataFrame:
-        return pd.DataFrame()
-
-    def get_stock_list(self) -> pd.DataFrame:
-        return pd.DataFrame()
-
-    def get_us_indices(self) -> pd.DataFrame:
-        return pd.DataFrame()
-
-    def get_hk_indices(self) -> pd.DataFrame:
-        return pd.DataFrame()
-
-    def get_commodity_futures(self) -> pd.DataFrame:
         return pd.DataFrame()
 
     def get_global_snapshot(self) -> pd.DataFrame:
@@ -73,9 +57,6 @@ class _StubNews:
     def get_stock_news(self, symbol: str, limit: int = 20) -> list[NewsItem]:
         return []
 
-    def get_global_news(self, limit: int = 30) -> list[NewsItem]:
-        return []
-
     def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
         return []
 
@@ -91,9 +72,6 @@ class _StubStockPool:
         pass
 
     def get_factor_selected(self) -> list[str]:
-        return []
-
-    def get_active_pool(self) -> list[str]:
         return []
 
 
@@ -141,15 +119,6 @@ class _StubLLMJudge:
         self, candidates: list, telegraph: list[NewsItem],
         global_market: pd.DataFrame,
         *, universe_size: int = 0,
-    ) -> list[TradeSignal]:
-        return []
-
-
-class _StubAnomaly:
-    def detect(
-        self,
-        a_share_quotes: pd.DataFrame,
-        global_quotes: pd.DataFrame | None = None,
     ) -> list[TradeSignal]:
         return []
 
@@ -316,11 +285,6 @@ class TestProtocolCompliance:
             LLMJudgeEngine, _StubLLMJudge, label="LLMJudgeEngine"
         )
 
-    def test_anomaly_detector(self) -> None:
-        _assert_signatures_match(
-            AnomalyDetector, _StubAnomaly, label="AnomalyDetector"
-        )
-
     def test_notification_provider(self) -> None:
         _assert_signatures_match(
             NotificationProvider, _StubNotifier, label="NotificationProvider"
@@ -333,11 +297,6 @@ class TestStubInvocation:
     def test_market_stubs_return(self) -> None:
         m = _StubMarket()
         assert isinstance(m.get_daily_bars("000001", "2025-01-01", "2025-06-01"), pd.DataFrame)
-        assert isinstance(m.get_realtime_quote(["000001"]), pd.DataFrame)
-        assert isinstance(m.get_stock_list(), pd.DataFrame)
-        assert isinstance(m.get_us_indices(), pd.DataFrame)
-        assert isinstance(m.get_hk_indices(), pd.DataFrame)
-        assert isinstance(m.get_commodity_futures(), pd.DataFrame)
         assert isinstance(m.get_global_snapshot(), pd.DataFrame)
 
     def test_fundamental_stubs_return(self) -> None:
@@ -349,7 +308,6 @@ class TestStubInvocation:
         n = _StubNews()
         assert isinstance(n.get_latest_news(), list)
         assert isinstance(n.get_stock_news("000001"), list)
-        assert isinstance(n.get_global_news(), list)
 
     def test_stock_pool_stubs_return(self) -> None:
         sp = _StubStockPool()
@@ -357,7 +315,6 @@ class TestStubInvocation:
         sp.add_to_watchlist("000001")
         sp.remove_from_watchlist("000001")
         assert isinstance(sp.get_factor_selected(), list)
-        assert isinstance(sp.get_active_pool(), list)
 
     def test_factor_engine_stubs_return(self) -> None:
         fe = _StubFactorEngine()
@@ -374,10 +331,6 @@ class TestStubInvocation:
         e = _StubLLMJudge()
         result = asyncio.run(e.judge_pool([], [], pd.DataFrame()))
         assert isinstance(result, list)
-
-    def test_anomaly_stubs_return(self) -> None:
-        a = _StubAnomaly()
-        assert isinstance(a.detect(pd.DataFrame()), list)
 
     def test_notifier_stubs_return(self) -> None:
         n = _StubNotifier()

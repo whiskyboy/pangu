@@ -19,8 +19,8 @@ def _no_sleep():
 
 
 from trading_agent.models import Action, NewsCategory, NewsItem, Region, SignalStatus
+from tests.fakes import FakeLLMJudgeEngine
 from trading_agent.strategy.llm_engine import (
-    FakeLLMJudgeEngine,
     LLMClient,
     LLMJudgeEngineImpl,
     _KNOWN_FACTORS,

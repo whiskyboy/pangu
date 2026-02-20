@@ -559,28 +559,6 @@ class Database:
             self._conn.commit()
         return len(rows)
 
-    def load_global_snapshots(
-        self,
-        source: str | None = None,
-        start: str | None = None,
-        end: str | None = None,
-    ) -> pd.DataFrame:
-        """Load global snapshots, optionally filtered by source and date range."""
-        query = "SELECT * FROM global_snapshots WHERE 1=1"
-        params: list[str] = []
-        if source is not None:
-            query += " AND source = ?"
-            params.append(source)
-        if start is not None:
-            query += " AND date >= ?"
-            params.append(start)
-        if end is not None:
-            query += " AND date <= ?"
-            params.append(end)
-        query += " ORDER BY date, symbol"
-        with self._lock:
-            return pd.read_sql(query, self._conn, params=params)
-
     def load_latest_global_snapshots(self) -> pd.DataFrame:
         """Load the most recent snapshot for each symbol."""
         with self._lock:

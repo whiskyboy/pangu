@@ -34,107 +34,9 @@ class NewsDataProvider(Protocol):
         """Return news related to a specific stock."""
         ...
 
-    def get_global_news(self, limit: int = 30) -> list[NewsItem]:
-        """Return international financial news."""
-        ...
-
     def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
         """Return recent announcements for a specific stock (巨潮)."""
         ...
-
-
-# ---------------------------------------------------------------------------
-# Fake implementation for testing / development
-# ---------------------------------------------------------------------------
-
-_NOW = datetime(2026, 2, 16, 10, 0, 0)
-
-
-class FakeNewsDataProvider:
-    """Deterministic fake news for testing."""
-
-    def get_latest_news(self, limit: int = 50) -> list[NewsItem]:
-        items = [
-            NewsItem(
-                timestamp=_NOW - timedelta(minutes=10),
-                title="央行宣布降准50基点",
-                content="中国人民银行决定下调金融机构存款准备金率0.5个百分点。",
-                source="财联社",
-                region=Region.DOMESTIC,
-                symbols=[],
-            ),
-            NewsItem(
-                timestamp=_NOW - timedelta(minutes=30),
-                title="贵州茅台发布业绩预增公告",
-                content="贵州茅台预计2025年净利润同比增长15%-20%。",
-                source="东方财富",
-                region=Region.DOMESTIC,
-                symbols=["600519"],
-            ),
-            NewsItem(
-                timestamp=_NOW - timedelta(hours=1),
-                title="新能源汽车销量创新高",
-                content="2025年新能源汽车销量突破1000万辆。",
-                source="财联社",
-                region=Region.DOMESTIC,
-                symbols=["300750"],
-            ),
-            NewsItem(
-                timestamp=_NOW - timedelta(hours=2),
-                title="银行板块集体上涨",
-                content="多家银行股涨停，市场情绪回暖。",
-                source="东方财富",
-                region=Region.DOMESTIC,
-                symbols=["000001", "601318"],
-            ),
-        ]
-        return items[:limit]
-
-    def get_stock_news(self, symbol: str, limit: int = 20) -> list[NewsItem]:
-        all_news = self.get_latest_news(limit=50)
-        return [n for n in all_news if symbol in n.symbols][:limit]
-
-    def get_global_news(self, limit: int = 30) -> list[NewsItem]:
-        items = [
-            NewsItem(
-                timestamp=_NOW - timedelta(minutes=15),
-                title="Fed holds rates steady amid inflation concerns",
-                content="The Federal Reserve kept interest rates unchanged at 5.25%-5.50%.",
-                source="Reuters",
-                region=Region.GLOBAL,
-                symbols=[],
-            ),
-            NewsItem(
-                timestamp=_NOW - timedelta(hours=1),
-                title="Gold prices surge to record high",
-                content="Spot gold hit $2,350/oz driven by safe-haven demand.",
-                source="Bloomberg",
-                region=Region.GLOBAL,
-                symbols=[],
-            ),
-            NewsItem(
-                timestamp=_NOW - timedelta(hours=3),
-                title="Oil prices rise on OPEC+ production cuts",
-                content="Brent crude climbed to $78/barrel after OPEC+ confirmed supply reductions.",
-                source="Reuters",
-                region=Region.GLOBAL,
-                symbols=[],
-            ),
-        ]
-        return items[:limit]
-
-    def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
-        return [
-            NewsItem(
-                timestamp=_NOW - timedelta(hours=1),
-                title=f"{symbol} 关于2025年度业绩预增的公告",
-                content="http://www.cninfo.com.cn/example",
-                source="巨潮",
-                region=Region.DOMESTIC,
-                symbols=[symbol],
-                category=NewsCategory.ANNOUNCEMENT,
-            ),
-        ][:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -148,15 +50,11 @@ class AkShareNewsDataProvider:
     """Real news data backed by AkShare + optional SQLite persistence.
 
     All CLS telegraph news are fetched via a single
-    ``ak.stock_info_global_cls(symbol="全部")`` call.  No region
-    classification is performed — both ``get_latest_news`` and
-    ``get_global_news`` return the same unfiltered feed.  Region
-    classification will be revisited after migration to Tushare Pro.
+    ``ak.stock_info_global_cls(symbol="全部")`` call.
 
     API mapping:
     - get_latest_news  → CLS telegraph (all items)
     - get_stock_news   → ak.stock_news_em(symbol=...)
-    - get_global_news  → CLS telegraph (same as get_latest_news)
 
     Parameters
     ----------
@@ -282,11 +180,6 @@ class AkShareNewsDataProvider:
         if self._storage is not None and items:
             self._storage.save_news_items(items)
         return items
-
-    def get_global_news(self, limit: int = 30) -> list[NewsItem]:
-        """Fetch financial news via CLS telegraph (same feed as get_latest_news)."""
-        all_items = self._fetch_telegraph()
-        return all_items[:limit]
 
     def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
         """Fetch announcements for *symbol* from 巨潮 (cninfo).

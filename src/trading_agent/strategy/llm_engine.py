@@ -528,12 +528,6 @@ class LLMJudgeEngineImpl:
         )
 
 
-
-# ---------------------------------------------------------------------------
-# Fake implementation for testing / development
-# ---------------------------------------------------------------------------
-
-
 class FakeLLMJudgeEngine:
     """Deterministic judge based on factor_score. For testing only.
 

@@ -128,10 +128,10 @@ class TestJobRegistration:
     @pytest.mark.asyncio
     async def test_start_and_shutdown(self, scheduler: TradingScheduler) -> None:
         scheduler.start()
-        assert scheduler.running is True
+        assert scheduler._scheduler.running is True
         scheduler.shutdown()
         await asyncio.sleep(0.1)
-        assert scheduler.running is False
+        assert scheduler._scheduler.running is False
 
 
 # ---------------------------------------------------------------------------

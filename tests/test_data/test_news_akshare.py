@@ -173,54 +173,6 @@ class TestGetStockNews:
 
 
 # ---------------------------------------------------------------------------
-# get_global_news
-# ---------------------------------------------------------------------------
-
-
-class TestGetGlobalNews:
-    @patch("akshare.stock_info_global_cls")
-    def test_returns_same_feed_as_latest(self, mock_cls: MagicMock) -> None:
-        mock_cls.return_value = _fake_telegraph_df(6)
-        provider = AkShareNewsDataProvider(request_interval=0)
-        items = provider.get_global_news(limit=30)
-
-        # Same unfiltered feed as get_latest_news
-        assert len(items) == 6
-        assert items[0].title == "央行宣布降准50基点"
-        mock_cls.assert_called_once_with(symbol="全部")
-
-    @patch("akshare.stock_info_global_cls")
-    def test_limit_caps_results(self, mock_cls: MagicMock) -> None:
-        mock_cls.return_value = _fake_telegraph_df(6)
-        provider = AkShareNewsDataProvider(request_interval=0)
-        items = provider.get_global_news(limit=2)
-        assert len(items) == 2
-
-    @patch("akshare.stock_info_global_cls")
-    def test_empty_returns_empty_list(self, mock_cls: MagicMock) -> None:
-        mock_cls.return_value = pd.DataFrame()
-        provider = AkShareNewsDataProvider(request_interval=0)
-        assert provider.get_global_news() == []
-
-    @patch("akshare.stock_info_global_cls")
-    def test_exception_returns_empty_list(self, mock_cls: MagicMock) -> None:
-        mock_cls.side_effect = ConnectionError("down")
-        provider = AkShareNewsDataProvider(request_interval=0)
-        from trading_agent.data.market import CircuitBreaker
-        provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
-        assert provider.get_global_news() == []
-
-    @patch("akshare.stock_info_global_cls")
-    def test_persists_all_to_storage(self, mock_cls: MagicMock, db: Database) -> None:
-        mock_cls.return_value = _fake_telegraph_df(6)
-        provider = AkShareNewsDataProvider(storage=db, request_interval=0)
-        provider.get_global_news(limit=30)
-
-        stored = db.load_recent_news(hours=24)
-        assert len(stored) == 6
-
-
-# ---------------------------------------------------------------------------
 # Dedup across calls
 # ---------------------------------------------------------------------------
 

@@ -36,46 +36,6 @@ class StockPool(Protocol):
         """Return symbols selected by factor screening."""
         ...
 
-    def get_active_pool(self) -> list[str]:
-        """Return merged active pool (deduplicated and filtered)."""
-        ...
-
-
-# ---------------------------------------------------------------------------
-# Fake implementation for testing / development
-# ---------------------------------------------------------------------------
-
-
-class FakeStockPool:
-    """Loads watchlist from YAML; factor pool is an empty stub."""
-
-    def __init__(self, watchlist_path: str | Path = "config/watchlist.yaml") -> None:
-        self._path = Path(watchlist_path)
-        self._symbols: list[str] = []
-        if self._path.exists():
-            data = yaml.safe_load(self._path.read_text())
-            watchlist = (data or {}).get("watchlist") or []
-            self._symbols = [
-                item["symbol"] for item in watchlist if "symbol" in item
-            ]
-
-    def get_watchlist(self) -> list[str]:
-        return list(self._symbols)
-
-    def add_to_watchlist(self, symbol: str) -> None:
-        if symbol not in self._symbols:
-            self._symbols.append(symbol)
-
-    def remove_from_watchlist(self, symbol: str) -> None:
-        if symbol in self._symbols:
-            self._symbols.remove(symbol)
-
-    def get_factor_selected(self) -> list[str]:
-        return []
-
-    def get_active_pool(self) -> list[str]:
-        return list(self._symbols)
-
 
 # ---------------------------------------------------------------------------
 # Real implementation — YAML-backed with data initialization
@@ -287,19 +247,6 @@ class StockPoolManager:
         except Exception:  # noqa: BLE001
             return []
 
-    def get_active_pool(self) -> list[str]:
-        """Merge watchlist + factor pools, deduplicated and filtered."""
-        seen: set[str] = set()
-        merged: list[str] = []
-        for sym in (
-            self.get_watchlist()
-            + self.get_factor_selected()
-        ):
-            if sym not in seen:
-                seen.add(sym)
-                merged.append(sym)
-        return self._filter_stocks(merged)
-
     # -- Stock filtering --
 
     def _filter_stocks(self, symbols: list[str]) -> list[str]:
@@ -442,15 +389,10 @@ class StockPoolManager:
         logger.info("sync_csi300: %d constituents saved", count)
         return count
 
-    def get_csi300_stocks(self) -> list[str]:
+    def _get_csi300_stocks(self) -> list[str]:
         """Return CSI300 constituent symbols from DB."""
         rows = self._storage.load_index_constituents("000300")
         return [r["symbol"] for r in rows]
-
-    def get_sector_map(self) -> dict[str, str]:
-        """Return symbol → sector mapping from DB index_constituents."""
-        rows = self._storage.load_index_constituents("000300")
-        return {r["symbol"]: r["sector"] or "" for r in rows}
 
     def get_name_sector_maps(self) -> tuple[dict[str, str], dict[str, str]]:
         """Return unified (name_map, sector_map) from DB + watchlist YAML.
@@ -482,7 +424,7 @@ class StockPoolManager:
         """Return watchlist + CSI300 (deduplicated) for factor computation."""
         seen: set[str] = set()
         result: list[str] = []
-        for sym in self.get_watchlist() + self.get_csi300_stocks():
+        for sym in self.get_watchlist() + self._get_csi300_stocks():
             if sym not in seen:
                 seen.add(sym)
                 result.append(sym)

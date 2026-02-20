@@ -327,25 +327,3 @@ class TestPairing:
             notifier._handle_message(_make_event("ou_safe"))
         # open_id should still be set even if callback fails
         assert notifier.open_id == "ou_safe"
-
-    def test_ws_not_running_initially(self) -> None:
-        notifier = FeishuNotifier(app_id="test", app_secret="test")
-        assert notifier.ws_running is False
-
-    def test_start_ws_client_spawns_thread(self) -> None:
-        notifier = FeishuNotifier(app_id="test", app_secret="test")
-        with patch("lark_oapi.ws.Client") as mock_ws_cls:
-            mock_ws_instance = MagicMock()
-            # Make start() block briefly then return
-            mock_ws_instance.start.return_value = None
-            mock_ws_cls.return_value = mock_ws_instance
-
-            notifier.start_ws_client()
-
-            # Thread was started
-            assert notifier._ws_thread is not None
-            assert notifier._ws_thread.daemon is True
-            notifier._ws_thread.join(timeout=2)
-
-            mock_ws_cls.assert_called_once()
-            mock_ws_instance.start.assert_called_once()

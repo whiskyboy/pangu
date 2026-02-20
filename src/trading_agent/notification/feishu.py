@@ -247,39 +247,6 @@ class FeishuNotifier:
         except Exception:
             logger.exception("Pairing reply exception")
 
-    def start_ws_client(self) -> None:
-        """Start the WebSocket long connection in a background daemon thread.
-
-        The WS client listens for ``im.message.receive_v1`` events.
-        When a user sends any DM to the bot, ``_handle_message`` is called.
-        This method is non-blocking — it starts a daemon thread and returns immediately.
-        """
-        handler = (
-            lark.EventDispatcherHandler.builder("", "")
-            .register_p2_im_message_receive_v1(self._handle_message)
-            .build()
-        )
-
-        ws_client = lark.ws.Client(
-            app_id=self._app_id,
-            app_secret=self._app_secret,
-            event_handler=handler,
-            log_level=lark.LogLevel.WARNING,
-        )
-
-        self._ws_thread = threading.Thread(
-            target=ws_client.start,
-            name="feishu-ws",
-            daemon=True,
-        )
-        self._ws_thread.start()
-        logger.info("Feishu WS client started (daemon thread)")
-
-    @property
-    def ws_running(self) -> bool:
-        """Whether the WS background thread is alive."""
-        return self._ws_thread is not None and self._ws_thread.is_alive()
-
     # -----------------------------------------------------------------
     # Push signal via OpenAPI
     # -----------------------------------------------------------------

@@ -207,26 +207,6 @@ class TestRemoveFromWatchlist:
 
 
 # ---------------------------------------------------------------------------
-# get_active_pool
-# ---------------------------------------------------------------------------
-
-
-class TestGetActivePool:
-    @patch("akshare.stock_individual_info_em")
-    def test_merges_and_deduplicates(self, mock_info: MagicMock, tmp_yaml: Path, db: Database) -> None:
-        mock_info.return_value = _info_df("紫金矿业", "20100426")
-        m, n, f = _mock_providers()
-        pool = StockPoolManager(tmp_yaml, db, m, n, f)
-
-        assert pool.get_active_pool() == ["601899", "600967"]
-
-    def test_factor_and_event_empty(self, tmp_yaml: Path, db: Database) -> None:
-        m, n, f = _mock_providers()
-        pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        assert pool.get_factor_selected() == []
-
-
-# ---------------------------------------------------------------------------
 # YAML round-trip
 # ---------------------------------------------------------------------------
 
@@ -459,18 +439,8 @@ class TestCSI300:
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        stocks = pool.get_csi300_stocks()
+        stocks = pool._get_csi300_stocks()
         assert set(stocks) == {"600519", "000858"}
-
-    def test_get_sector_map(self, tmp_yaml: Path, db: Database) -> None:
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
-        ])
-        m, n, f = _mock_providers()
-        pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        sm = pool.get_sector_map()
-        assert sm == {"600519": "白酒"}
 
     def test_get_factor_universe(self, tmp_yaml: Path, db: Database) -> None:
         """Factor universe = watchlist + CSI300, deduplicated."""

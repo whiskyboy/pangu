@@ -82,10 +82,6 @@ class TradingScheduler:
         self._scheduler.shutdown(wait=False)
         logger.info("TradingScheduler shut down")
 
-    @property
-    def running(self) -> bool:
-        return self._scheduler.running
-
     # ------------------------------------------------------------------
     # Job registration
     # ------------------------------------------------------------------

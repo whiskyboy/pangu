@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from trading_agent.data.fundamental import FakeFundamentalDataProvider
-from trading_agent.data.market import FakeMarketDataProvider
-from trading_agent.data.news import FakeNewsDataProvider
-from trading_agent.data.stock_pool import FakeStockPool
+from tests.fakes import (
+    FakeFundamentalDataProvider,
+    FakeMarketDataProvider,
+    FakeNewsDataProvider,
+    FakeStockPool,
+)
 
 
 @pytest.fixture

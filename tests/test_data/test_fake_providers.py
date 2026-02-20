@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from trading_agent.data.fundamental import FakeFundamentalDataProvider
-from trading_agent.data.market import FakeMarketDataProvider
-from trading_agent.data.news import FakeNewsDataProvider
-from trading_agent.data.stock_pool import FakeStockPool
+from tests.fakes import (
+    FakeFundamentalDataProvider,
+    FakeMarketDataProvider,
+    FakeNewsDataProvider,
+    FakeStockPool,
+)
 from trading_agent.models import NewsItem, Region
 
 # ---------------------------------------------------------------------------
@@ -41,33 +43,6 @@ class TestFakeMarketDataProvider:
         df = fake_market.get_daily_bars("600519", "2025-01-01", "2025-03-01")
         for col in ("open", "high", "low", "close"):
             assert (df[col] > 0).all(), f"{col} has non-positive values"
-
-    def test_realtime_quote_columns(self, fake_market: FakeMarketDataProvider) -> None:
-        df = fake_market.get_realtime_quote(["600519", "000858"])
-        expected = {"symbol", "name", "price", "change_pct", "volume", "amount", "volume_ratio"}
-        assert expected == set(df.columns)
-        assert len(df) == 2
-
-    def test_stock_list_columns(self, fake_market: FakeMarketDataProvider) -> None:
-        df = fake_market.get_stock_list()
-        expected = {"symbol", "name", "industry", "listing_date"}
-        assert expected == set(df.columns)
-        assert len(df) == 5
-
-    def test_us_indices(self, fake_market: FakeMarketDataProvider) -> None:
-        df = fake_market.get_us_indices()
-        assert len(df) == 3
-        assert "SPX" in df["symbol"].values
-
-    def test_hk_indices(self, fake_market: FakeMarketDataProvider) -> None:
-        df = fake_market.get_hk_indices()
-        assert len(df) == 1
-        assert "HSI" in df["symbol"].values
-
-    def test_commodity_futures(self, fake_market: FakeMarketDataProvider) -> None:
-        df = fake_market.get_commodity_futures()
-        assert len(df) == 5
-        assert {"symbol", "name", "close", "change_pct"}.issubset(set(df.columns))
 
     def test_global_snapshot_aggregates(self, fake_market: FakeMarketDataProvider) -> None:
         df = fake_market.get_global_snapshot()
@@ -134,15 +109,6 @@ class TestFakeNewsDataProvider:
         items = fake_news.get_stock_news("999999")
         assert items == []
 
-    def test_global_news(self, fake_news: FakeNewsDataProvider) -> None:
-        items = fake_news.get_global_news()
-        assert len(items) == 3
-        assert all(n.region == Region.GLOBAL for n in items)
-
-    def test_global_news_limit(self, fake_news: FakeNewsDataProvider) -> None:
-        items = fake_news.get_global_news(limit=1)
-        assert len(items) == 1
-
     def test_news_items_have_required_fields(self, fake_news: FakeNewsDataProvider) -> None:
         for item in fake_news.get_latest_news():
             assert item.timestamp is not None
@@ -180,9 +146,6 @@ class TestFakeStockPool:
 
     def test_factor_selected_empty(self, fake_stock_pool: FakeStockPool) -> None:
         assert fake_stock_pool.get_factor_selected() == []
-
-    def test_active_pool_equals_watchlist(self, fake_stock_pool: FakeStockPool) -> None:
-        assert fake_stock_pool.get_active_pool() == fake_stock_pool.get_watchlist()
 
     def test_watchlist_returns_copy(self, fake_stock_pool: FakeStockPool) -> None:
         wl1 = fake_stock_pool.get_watchlist()

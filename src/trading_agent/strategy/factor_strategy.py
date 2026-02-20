@@ -1,4 +1,4 @@
-"""Strategy Protocol + MultiFactorStrategy + FakeFactorStrategy — PRD §4.3.1 / §6."""
+"""Strategy Protocol + MultiFactorStrategy — PRD §4.3.1 / §6."""
 
 from __future__ import annotations
 

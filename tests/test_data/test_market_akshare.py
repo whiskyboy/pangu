@@ -203,123 +203,6 @@ class TestGetDailyBars:
 
 
 # ---------------------------------------------------------------------------
-# AkShareMarketDataProvider — get_realtime_quote
-# ---------------------------------------------------------------------------
-
-
-def _fake_bid_ask_df(symbol: str = "600519") -> pd.DataFrame:
-    """Simulate ak.stock_bid_ask_em() return for a single stock."""
-    prices = {"600519": 1800.0, "000858": 150.0}
-    p = prices.get(symbol, 100.0)
-    return pd.DataFrame({
-        "item": ["最新", "涨幅", "总手", "金额", "最高", "最低", "今开", "量比",
-                 "buy_1", "buy_1_vol", "sell_1", "sell_1_vol"],
-        "value": [p, 1.5, 5_000_000, p * 5_000_000, p * 1.01, p * 0.99,
-                  p * 1.005, 1.2, p - 0.1, 100, p + 0.1, 200],
-    })
-
-
-class TestGetRealtimeQuote:
-    @patch("akshare.stock_bid_ask_em")
-    def test_single_symbol(self, mock_bid: MagicMock) -> None:
-        mock_bid.return_value = _fake_bid_ask_df("600519")
-        provider = AkShareMarketDataProvider(request_interval=0)
-
-        df = provider.get_realtime_quote(["600519"])
-        assert len(df) == 1
-        assert df.iloc[0]["symbol"] == "600519"
-        assert df.iloc[0]["price"] == pytest.approx(1800.0)
-        assert "change_pct" in df.columns
-        assert "volume" in df.columns
-
-    @patch("akshare.stock_bid_ask_em")
-    def test_multiple_symbols(self, mock_bid: MagicMock) -> None:
-        mock_bid.side_effect = [_fake_bid_ask_df("600519"), _fake_bid_ask_df("000858")]
-        provider = AkShareMarketDataProvider(request_interval=0)
-
-        df = provider.get_realtime_quote(["600519", "000858"])
-        assert len(df) == 2
-        assert df.iloc[1]["price"] == pytest.approx(150.0)
-
-    @patch("akshare.stock_bid_ask_em")
-    def test_empty_bid_ask_returns_symbol_only(self, mock_bid: MagicMock) -> None:
-        mock_bid.return_value = pd.DataFrame()
-        provider = AkShareMarketDataProvider(request_interval=0)
-        df = provider.get_realtime_quote(["600519"])
-        assert len(df) == 1
-        assert df.iloc[0]["symbol"] == "600519"
-
-
-# ---------------------------------------------------------------------------
-# AkShareMarketDataProvider — get_stock_list
-# ---------------------------------------------------------------------------
-
-
-def _fake_sh_df() -> pd.DataFrame:
-    return pd.DataFrame({"证券代码": ["600519"], "证券简称": ["贵州茅台"],
-                         "证券全称": [""], "公司简称": [""], "公司全称": [""], "上市日期": [""]})
-
-
-def _fake_sz_df() -> pd.DataFrame:
-    return pd.DataFrame({"板块": ["主板"], "A股代码": ["000858"], "A股简称": ["五粮液"],
-                         "A股上市日期": [""], "A股总股本": [""], "A股流通股本": [""], "所属行业": [""]})
-
-
-def _fake_bj_df() -> pd.DataFrame:
-    return pd.DataFrame({"证券代码": ["836149"], "证券简称": ["旭杰科技"],
-                         "总股本": [""], "流通股本": [""], "上市日期": [""],
-                         "所属行业": [""], "地区": [""], "报告日期": [""]})
-
-
-class TestGetStockList:
-    @patch("akshare.stock_info_bj_name_code")
-    @patch("akshare.stock_info_sz_name_code")
-    @patch("akshare.stock_info_sh_name_code")
-    def test_returns_all_exchanges(
-        self, mock_sh: MagicMock, mock_sz: MagicMock, mock_bj: MagicMock,
-    ) -> None:
-        # SH is called twice (主板A股 + 科创板)
-        mock_sh.side_effect = [_fake_sh_df(), _fake_sh_df()]
-        mock_sz.return_value = _fake_sz_df()
-        mock_bj.return_value = _fake_bj_df()
-        provider = AkShareMarketDataProvider(request_interval=0)
-
-        df = provider.get_stock_list()
-        assert set(df.columns) == {"symbol", "name"}
-        assert len(df) == 4  # 1 SH main + 1 SH STAR + 1 SZ + 1 BJ
-
-    @patch("akshare.stock_info_bj_name_code")
-    @patch("akshare.stock_info_sz_name_code")
-    @patch("akshare.stock_info_sh_name_code")
-    def test_partial_failure_still_returns(
-        self, mock_sh: MagicMock, mock_sz: MagicMock, mock_bj: MagicMock,
-    ) -> None:
-        """If BJ API fails, SH+SZ stocks are still returned."""
-        mock_sh.side_effect = [_fake_sh_df(), _fake_sh_df()]
-        mock_sz.return_value = _fake_sz_df()
-        mock_bj.side_effect = ConnectionError("timeout")
-        provider = AkShareMarketDataProvider(request_interval=0)
-
-        df = provider.get_stock_list()
-        assert len(df) == 3  # SH main + SH STAR + SZ
-
-    @patch("akshare.stock_info_bj_name_code")
-    @patch("akshare.stock_info_sz_name_code")
-    @patch("akshare.stock_info_sh_name_code")
-    def test_all_fail_returns_empty(
-        self, mock_sh: MagicMock, mock_sz: MagicMock, mock_bj: MagicMock,
-    ) -> None:
-        mock_sh.side_effect = ConnectionError("fail")
-        mock_sz.side_effect = ConnectionError("fail")
-        mock_bj.side_effect = ConnectionError("fail")
-        provider = AkShareMarketDataProvider(request_interval=0)
-
-        df = provider.get_stock_list()
-        assert df.empty
-        assert set(df.columns) == {"symbol", "name"}
-
-
-# ---------------------------------------------------------------------------
 # International market data — M2.3
 # ---------------------------------------------------------------------------
 
@@ -378,7 +261,7 @@ class TestGetUSIndices:
         mock_api.return_value = _fake_us_index_df()
         provider = AkShareMarketDataProvider(request_interval=0)
 
-        df = provider.get_us_indices()
+        df = provider._get_us_indices()
         assert len(df) == 3
         assert set(df["symbol"]) == {"SPX", "DJI", "IXIC"}
         assert "change_pct" in df.columns
@@ -391,9 +274,9 @@ class TestGetUSIndices:
         mock_api.return_value = _fake_us_index_df()
         provider = AkShareMarketDataProvider(storage=db, request_interval=0)
 
-        df = provider.get_us_indices()
+        df = provider._get_us_indices()
         assert len(df) == 3
-        stored = db.load_global_snapshots(source="us_index")
+        stored = db.load_latest_global_snapshots()
         assert len(stored) == 3
 
     @patch("akshare.index_us_stock_sina")
@@ -406,7 +289,7 @@ class TestGetUSIndices:
         ]
         provider = AkShareMarketDataProvider(request_interval=0)
 
-        df = provider.get_us_indices()
+        df = provider._get_us_indices()
         assert len(df) == 2  # 2 succeeded, 1 failed
 
 
@@ -416,7 +299,7 @@ class TestGetHKIndices:
         mock_api.return_value = _fake_hk_index_df()
         provider = AkShareMarketDataProvider(request_interval=0)
 
-        df = provider.get_hk_indices()
+        df = provider._get_hk_indices()
         assert len(df) == 2
         assert set(df["symbol"]) == {"HSI", "HSTECH"}
         assert df.iloc[0]["source"] == "hk_index"
@@ -427,8 +310,8 @@ class TestGetHKIndices:
         mock_api.return_value = _fake_hk_index_df()
         provider = AkShareMarketDataProvider(storage=db, request_interval=0)
 
-        provider.get_hk_indices()
-        stored = db.load_global_snapshots(source="hk_index")
+        provider._get_hk_indices()
+        stored = db.load_latest_global_snapshots()
         assert len(stored) == 2
 
     @patch("akshare.stock_hk_index_spot_sina")
@@ -436,7 +319,7 @@ class TestGetHKIndices:
         mock_api.side_effect = ConnectionError("timeout")
         provider = AkShareMarketDataProvider(request_interval=0)
 
-        df = provider.get_hk_indices()
+        df = provider._get_hk_indices()
         assert df.empty
 
 
@@ -446,7 +329,7 @@ class TestGetCommodityFutures:
         mock_api.return_value = _fake_commodity_df()
         provider = AkShareMarketDataProvider(request_interval=0)
 
-        df = provider.get_commodity_futures()
+        df = provider._get_commodity_futures()
         assert len(df) == 5
         assert set(df["symbol"]) == {"GC", "SI", "CL", "HG", "FEF"}
         assert df.iloc[0]["source"] == "commodity"
@@ -457,8 +340,8 @@ class TestGetCommodityFutures:
         mock_api.return_value = _fake_commodity_df()
         provider = AkShareMarketDataProvider(storage=db, request_interval=0)
 
-        provider.get_commodity_futures()
-        stored = db.load_global_snapshots(source="commodity")
+        provider._get_commodity_futures()
+        stored = db.load_latest_global_snapshots()
         assert len(stored) == 5
 
     @patch("akshare.futures_foreign_commodity_realtime")
@@ -466,7 +349,7 @@ class TestGetCommodityFutures:
         mock_api.side_effect = ConnectionError("fail")
         provider = AkShareMarketDataProvider(request_interval=0)
 
-        df = provider.get_commodity_futures()
+        df = provider._get_commodity_futures()
         assert df.empty
 
 
@@ -661,58 +544,6 @@ class TestBaoStockDailyBars:
         with pytest.raises(RuntimeError, match="query_history_k_data_plus failed"):
             provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
         provider.close()
-
-
-class TestBaoStockStockList:
-    @patch("baostock.login")
-    @patch("baostock.query_all_stock")
-    def test_fetches_a_shares(self, mock_all: MagicMock, mock_login: MagicMock) -> None:
-        mock_login.return_value = MagicMock(error_code="0")
-        fields = ["code", "tradeStatus", "code_name"]
-        rows = [
-            ["sh.600519", "1", "贵州茅台"],
-            ["sz.000001", "1", "平安银行"],
-            ["sz.300750", "1", "宁德时代"],
-            ["sh.688699", "1", "明微电子"],
-            ["sh.000001", "1", "上证指数"],  # index — should be filtered out
-            ["sz.200002", "1", "万科B"],     # B-share — should be filtered out
-            ["sz.000002", "0", "万科A"],     # suspended — should be filtered out
-        ]
-        mock_all.return_value = _fake_bs_result(fields, rows)
-
-        provider = BaoStockMarketDataProvider()
-        df = provider.get_stock_list()
-
-        assert len(df) == 4
-        assert set(df["symbol"]) == {"600519", "000001", "300750", "688699"}
-        provider.close()
-
-
-class TestBaoStockNotImplemented:
-    def test_realtime_quote(self) -> None:
-        provider = BaoStockMarketDataProvider.__new__(BaoStockMarketDataProvider)
-        with pytest.raises(NotImplementedError):
-            provider.get_realtime_quote(["600519"])
-
-    def test_us_indices(self) -> None:
-        provider = BaoStockMarketDataProvider.__new__(BaoStockMarketDataProvider)
-        with pytest.raises(NotImplementedError):
-            provider.get_us_indices()
-
-    def test_hk_indices(self) -> None:
-        provider = BaoStockMarketDataProvider.__new__(BaoStockMarketDataProvider)
-        with pytest.raises(NotImplementedError):
-            provider.get_hk_indices()
-
-    def test_commodity_futures(self) -> None:
-        provider = BaoStockMarketDataProvider.__new__(BaoStockMarketDataProvider)
-        with pytest.raises(NotImplementedError):
-            provider.get_commodity_futures()
-
-    def test_global_snapshot(self) -> None:
-        provider = BaoStockMarketDataProvider.__new__(BaoStockMarketDataProvider)
-        with pytest.raises(NotImplementedError):
-            provider.get_global_snapshot()
 
 
 class TestBaoStockSession:
