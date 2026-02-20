@@ -12,7 +12,6 @@ import logging
 import math
 import threading
 from collections.abc import Callable
-from typing import Protocol
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
@@ -22,17 +21,10 @@ from lark_oapi.api.im.v1 import (
 )
 
 from trading_agent.models import Action, SignalStatus, TradeSignal
+from trading_agent.notification import NotificationProvider  # noqa: F401 — backward compat
 from trading_agent.strategy.prompts import FACTOR_LABELS
 
 logger = logging.getLogger(__name__)
-
-
-class NotificationProvider(Protocol):
-    """Interface for sending trade signal notifications."""
-
-    async def send(self, signal: TradeSignal) -> bool:
-        """Send a trade signal notification. Return True on success."""
-        ...
 
 
 # ---------------------------------------------------------------------------

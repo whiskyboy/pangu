@@ -190,7 +190,7 @@ class TestLLMJudgeEngineImpl:
     async def test_judge_stock_factor_fallback_on_internal_error(self, engine):
         """Factor fallback triggers when build_stock_prompt or _parse_signal fails."""
         # patching at llm_engine module level
-        with patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+        with patch("trading_agent.strategy.llm_judge.build_stock_prompt",
                           side_effect=TypeError("unexpected error")):
             signal = await engine.judge_stock(
                 symbol="601899", name="紫金矿业",
@@ -206,8 +206,8 @@ class TestLLMJudgeEngineImpl:
 
     @pytest.mark.asyncio
     async def test_judge_stock_factor_fallback_sell(self, engine):
-        # patching at llm_engine module level
-        with patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+        # patching at llm_judge module level
+        with patch("trading_agent.strategy.llm_judge.build_stock_prompt",
                           side_effect=TypeError("unexpected error")):
             signal = await engine.judge_stock(
                 symbol="000001", name="平安银行",
@@ -221,8 +221,8 @@ class TestLLMJudgeEngineImpl:
 
     @pytest.mark.asyncio
     async def test_judge_stock_factor_fallback_hold(self, engine):
-        # patching at llm_engine module level
-        with patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+        # patching at llm_judge module level
+        with patch("trading_agent.strategy.llm_judge.build_stock_prompt",
                           side_effect=TypeError("unexpected error")):
             signal = await engine.judge_stock(
                 symbol="000001", name="平安银行",
@@ -254,7 +254,7 @@ class TestLLMJudgeEngineImpl:
         with (
             patch("litellm.acompletion", new_callable=AsyncMock,
                   return_value=_make_completion(content)),
-            patch("trading_agent.strategy.llm_engine.build_stock_prompt",
+            patch("trading_agent.strategy.llm_judge.build_stock_prompt",
                   side_effect=capture_build),
         ):
             await engine.judge_stock(

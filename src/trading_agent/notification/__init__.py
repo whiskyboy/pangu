@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Protocol
 
 from trading_agent.models import TradeSignal
-from trading_agent.notification.feishu import NotificationProvider
 
 logger = logging.getLogger(__name__)
+
+
+class NotificationProvider(Protocol):
+    """Interface for sending trade signal notifications."""
+
+    async def send(self, signal: TradeSignal) -> bool:
+        """Send a trade signal notification. Return True on success."""
+        ...
 
 
 class NotificationManager:
