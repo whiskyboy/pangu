@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from trading_agent.models import Action, NewsItem, SignalStatus, TradeSignal
-from trading_agent.strategy.llm_engine import LLMClient, _KNOWN_FACTORS
+from trading_agent.strategy.llm_engine import LLMClient
 from trading_agent.strategy.prompts import (
     TRADING_JUDGE_SYSTEM_PROMPT,
     build_stock_prompt,
@@ -17,6 +17,12 @@ from trading_agent.strategy.prompts import (
 from trading_agent.tz import now as _now
 
 logger = logging.getLogger(__name__)
+
+# Factor keys that should appear in prompts (whitelist).
+_KNOWN_FACTORS: frozenset[str] = frozenset({
+    "rsi_14", "macd_hist", "bias_20", "obv", "atr_14",
+    "volume_ratio", "pe_ttm", "pb", "roe_ttm", "macro_adj",
+})
 
 
 class LLMJudgeEngineImpl:

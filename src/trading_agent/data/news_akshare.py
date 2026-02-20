@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from trading_agent.data.news import _now
+from trading_agent.tz import now as _now
 from trading_agent.models import NewsCategory, NewsItem, Region
 from trading_agent.utils import CircuitBreaker, ThrottleMixin, retry_call
 

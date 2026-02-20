@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from trading_agent.data.stock_pool import StockPoolManager
+from trading_agent.data.stock_pool_yaml import StockPoolManager
 from trading_agent.data.storage import Database
 
 # ---------------------------------------------------------------------------
@@ -347,7 +347,7 @@ class TestFilterStocks:
         mock_info.side_effect = ConnectionError("network error")
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        with patch("trading_agent.data.market.CircuitBreaker", return_value=MagicMock(allow_request=MagicMock(return_value=True), record_success=MagicMock(), record_failure=MagicMock())):
+        with patch("trading_agent.utils.CircuitBreaker", return_value=MagicMock(allow_request=MagicMock(return_value=True), record_success=MagicMock(), record_failure=MagicMock())):
             result = pool._filter_stocks(["601899"])
         assert result == ["601899"]
 

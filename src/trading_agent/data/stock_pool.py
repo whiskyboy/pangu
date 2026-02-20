@@ -23,8 +23,3 @@ class StockPool(Protocol):
     def get_factor_selected(self) -> list[str]:
         """Return symbols selected by factor screening."""
         ...
-
-
-# Backward-compatible re-export
-from trading_agent.data.stock_pool_yaml import StockPoolManager  # noqa: E402, F401
-

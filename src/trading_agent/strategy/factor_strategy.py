@@ -27,15 +27,3 @@ class Strategy(Protocol):
             (factor_pool DataFrame, list of TradeSignal)
         """
         ...
-
-
-# Backward-compatible re-exports
-from trading_agent.strategy.multi_factor import (  # noqa: E402, F401
-    MultiFactorStrategy,
-    _DEFAULT_WEIGHTS,
-    _minmax_normalize,
-    _weighted_score,
-    _zscore_normalize,
-)
-
-

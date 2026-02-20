@@ -17,8 +17,3 @@ class FundamentalDataProvider(Protocol):
     def get_financial_indicator(self, symbol: str) -> pd.DataFrame:
         """Return financial indicators: ROE, revenue growth, net profit growth."""
         ...
-
-
-# Backward-compatible re-export
-from trading_agent.data.fundamental_akshare import AkShareFundamentalProvider  # noqa: E402, F401
-

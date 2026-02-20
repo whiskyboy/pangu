@@ -7,13 +7,9 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.data.market import (
-    AkShareMarketDataProvider,
-    BaoStockMarketDataProvider,
-    CircuitBreaker,
-    _retry_call,
-    _to_bs_code,
-)
+from trading_agent.data.market_akshare import AkShareMarketDataProvider
+from trading_agent.data.market_baostock import BaoStockMarketDataProvider, _to_bs_code
+from trading_agent.utils import CircuitBreaker, retry_call as _retry_call
 from trading_agent.data.storage import Database
 
 # ---------------------------------------------------------------------------

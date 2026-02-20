@@ -229,14 +229,6 @@ class LLMClient:
 # LLMJudgeEngine — per-stock comprehensive judge (方案C)
 # ---------------------------------------------------------------------------
 
-# Factor keys that should appear in prompts (whitelist).
-# Anything outside this set (e.g. amount, adj_factor, ma5) is filtered out.
-_KNOWN_FACTORS: frozenset[str] = frozenset({
-    "rsi_14", "macd_hist", "bias_20", "obv", "atr_14",
-    "volume_ratio", "pe_ttm", "pb", "roe_ttm", "macro_adj",
-})
-
-
 class LLMJudgeEngine(Protocol):
     """Interface for per-stock LLM comprehensive judge."""
 
@@ -269,8 +261,4 @@ class LLMJudgeEngine(Protocol):
     ) -> list[TradeSignal]:
         """Judge a pool of candidates and return signals."""
         ...
-
-
-# Backward-compatible re-export
-from trading_agent.strategy.llm_judge import LLMJudgeEngineImpl  # noqa: E402, F811, F401
 

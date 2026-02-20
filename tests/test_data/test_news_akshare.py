@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.data.news import AkShareNewsDataProvider
+from trading_agent.data.news_akshare import AkShareNewsDataProvider
 from trading_agent.data.storage import Database
 from trading_agent.models import Region
 
@@ -98,7 +98,7 @@ class TestGetLatestNews:
     def test_exception_returns_empty_list(self, mock_cls: MagicMock) -> None:
         mock_cls.side_effect = ConnectionError("network error")
         provider = AkShareNewsDataProvider(request_interval=0)
-        from trading_agent.data.market import CircuitBreaker
+        from trading_agent.utils import CircuitBreaker
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         assert provider.get_latest_news() == []
 
@@ -150,7 +150,7 @@ class TestGetStockNews:
     def test_exception_returns_empty_list(self, mock_news: MagicMock) -> None:
         mock_news.side_effect = ConnectionError("down")
         provider = AkShareNewsDataProvider(request_interval=0)
-        from trading_agent.data.market import CircuitBreaker
+        from trading_agent.utils import CircuitBreaker
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         assert provider.get_stock_news("600519") == []
 
@@ -272,7 +272,7 @@ class TestGetAnnouncements:
     def test_exception_returns_empty_list(self, mock_api: MagicMock) -> None:
         mock_api.side_effect = ConnectionError("network error")
         provider = AkShareNewsDataProvider(request_interval=0)
-        from trading_agent.data.market import CircuitBreaker
+        from trading_agent.utils import CircuitBreaker
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         assert provider.get_announcements("601899") == []
 

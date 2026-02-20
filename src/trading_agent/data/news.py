@@ -2,20 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Protocol
 
 from trading_agent.models import NewsItem
-
-
-# ---------------------------------------------------------------------------
-# Timezone helper
-# ---------------------------------------------------------------------------
-
-def _now() -> datetime:
-    """Return current time in the configured system timezone."""
-    from trading_agent.tz import now
-    return now()
 
 
 class NewsDataProvider(Protocol):
@@ -32,7 +21,3 @@ class NewsDataProvider(Protocol):
     def get_announcements(self, symbol: str, limit: int = 20) -> list[NewsItem]:
         """Return recent announcements for a specific stock (巨潮)."""
         ...
-
-
-# Backward-compatible re-export
-from trading_agent.data.news_akshare import AkShareNewsDataProvider  # noqa: E402, F401
