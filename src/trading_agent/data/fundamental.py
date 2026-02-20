@@ -144,7 +144,17 @@ class AkShareFundamentalProvider:
     # -- Protocol methods --
 
     def get_valuation(self, symbol: str) -> dict[str, Any]:
-        """Return PE_TTM, PB, PS, market_cap for a single stock."""
+        """Return PE_TTM, PB, PS, market_cap for a single stock.
+
+        Checks DB cache first — if today's data exists, returns it without
+        calling AkShare API.
+        """
+        # DB cache check
+        if self._storage is not None:
+            cached = self._load_cached_valuation(symbol)
+            if cached is not None:
+                return cached
+
         result: dict[str, Any] = {
             "pe_ttm": None, "pb": None, "ps": None, "market_cap": None,
         }
@@ -232,6 +242,25 @@ class AkShareFundamentalProvider:
             return pd.DataFrame()
 
     # -- persistence helpers --
+
+    def _load_cached_valuation(self, symbol: str) -> dict[str, Any] | None:
+        """Return today's cached valuation from DB, or None if not found."""
+        import datetime
+
+        today = datetime.date.today().isoformat()
+        try:
+            df = self._storage.load_fundamentals(symbol, today, today)
+            if df.empty:
+                return None
+            row = df.iloc[-1]
+            return {
+                "pe_ttm": row.get("pe_ttm"),
+                "pb": row.get("pb"),
+                "ps": None,
+                "market_cap": row.get("market_cap"),
+            }
+        except Exception:  # noqa: BLE001
+            return None
 
     def _persist_valuation(self, symbol: str, val: dict[str, Any]) -> None:
         """Save latest valuation snapshot to SQLite fundamentals table."""
