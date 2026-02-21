@@ -1,6 +1,6 @@
 # 飞书 Bot 配置指南
 
-本文档介绍如何创建飞书自建应用机器人，并配置 TradingAgent 系统通过该机器人**私聊推送**交易信号给你。
+本文档介绍如何创建飞书自建应用机器人，并配置 PanGu 系统通过该机器人**私聊推送**交易信号给你。
 
 系统采用**自动配对**机制：你只需在飞书中给 Bot 发一条消息，即完成绑定，无需手动查询或配置 `open_id`。
 
@@ -13,7 +13,7 @@
 1. 打开 [飞书开放平台](https://open.feishu.cn/app)，用你的飞书账号登录
 2. 点击 **「创建企业自建应用」**
 3. 填写应用信息：
-   - **应用名称**：`TradingAgent`（或任意名称）
+   - **应用名称**：`PanGu`（或任意名称）
    - **应用描述**：`A 股量化交易信号推送`
    - **应用图标**：上传一个图标（必填）
 4. 点击 **「创建」**
@@ -86,7 +86,7 @@
 
 > 应用发布后才能在飞书客户端中使用。
 
-### 第 7 步：配置 TradingAgent
+### 第 7 步：配置 PanGu
 
 将获取到的信息填入 `.env` 文件：
 
@@ -98,8 +98,8 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ### 第 8 步：绑定推送（自动配对）
 
-1. 启动 TradingAgent 系统：`docker compose up`
-2. 在飞书客户端中搜索你的 Bot 应用名（如 `TradingAgent`）
+1. 启动 PanGu 系统：`docker compose up`
+2. 在飞书客户端中搜索你的 Bot 应用名（如 `PanGu`）
 3. 给 Bot 发送任意消息（如发送 `绑定`）
 4. Bot 自动回复：**✅ 绑定成功，后续交易信号将私聊推送给你**
 5. 完成！后续所有交易信号将自动私聊推送给你
@@ -111,7 +111,7 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 通过 CLI 手动触发一次扫描来验证：
 
 ```bash
-trading-agent run scan
+pangu run scan
 ```
 
 如果配置正确，你会在飞书中收到 Bot 的私聊信号推送消息。

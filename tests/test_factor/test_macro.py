@@ -7,7 +7,7 @@ import math
 import pandas as pd
 import pytest
 
-from trading_agent.factor.macro import MacroFactorEngine
+from pangu.factor.macro import MacroFactorEngine
 
 
 # ---------------------------------------------------------------------------

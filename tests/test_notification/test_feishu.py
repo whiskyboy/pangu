@@ -7,8 +7,8 @@ import json
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from trading_agent.models import Action, SignalStatus, TradeSignal
-from trading_agent.notification.feishu import FeishuNotifier, format_signal_card
+from pangu.models import Action, SignalStatus, TradeSignal
+from pangu.notification.feishu import FeishuNotifier, format_signal_card
 
 
 def _buy_signal() -> TradeSignal:

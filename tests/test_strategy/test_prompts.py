@@ -7,8 +7,8 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
-from trading_agent.models import NewsCategory, NewsItem, Region
-from trading_agent.strategy.llm.prompts import (
+from pangu.models import NewsCategory, NewsItem, Region
+from pangu.strategy.llm.prompts import (
     LLM_OUTPUT_SCHEMA,
     TRADING_JUDGE_SYSTEM_PROMPT,
     _MAX_ANNOUNCEMENTS,

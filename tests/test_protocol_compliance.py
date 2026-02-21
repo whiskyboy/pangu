@@ -13,12 +13,12 @@ from datetime import datetime
 
 import pandas as pd
 
-from trading_agent.data.fundamental.protocol import FundamentalDataProvider
-from trading_agent.data.market.protocol import MarketDataProvider
-from trading_agent.data.news.protocol import NewsDataProvider
-from trading_agent.data.stock_pool.protocol import StockPool
-from trading_agent.factor.technical import FactorEngine
-from trading_agent.models import (
+from pangu.data.fundamental.protocol import FundamentalDataProvider
+from pangu.data.market.protocol import MarketDataProvider
+from pangu.data.news.protocol import NewsDataProvider
+from pangu.data.stock_pool.protocol import StockPool
+from pangu.factor.technical import FactorEngine
+from pangu.models import (
     Action,
     BacktestConfig,
     NewsItem,
@@ -26,9 +26,9 @@ from trading_agent.models import (
     SignalStatus,
     TradeSignal,
 )
-from trading_agent.notification.feishu import NotificationProvider
-from trading_agent.strategy.factor.protocol import Strategy
-from trading_agent.strategy.llm.client import LLMJudgeEngine
+from pangu.notification.feishu import NotificationProvider
+from pangu.strategy.factor.protocol import Strategy
+from pangu.strategy.llm.client import LLMJudgeEngine
 
 # ---------------------------------------------------------------------------
 # Minimal stub implementations

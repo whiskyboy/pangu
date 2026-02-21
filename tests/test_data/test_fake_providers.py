@@ -12,7 +12,7 @@ from tests.fakes import (
     FakeNewsDataProvider,
     FakeStockPool,
 )
-from trading_agent.models import NewsItem, Region
+from pangu.models import NewsItem, Region
 
 # ---------------------------------------------------------------------------
 # FakeMarketDataProvider

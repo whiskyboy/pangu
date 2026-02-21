@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from trading_agent.factor.fundamental import FundamentalFactorEngine
+from pangu.factor.fundamental import FundamentalFactorEngine
 
 # ---------------------------------------------------------------------------
 # Helpers

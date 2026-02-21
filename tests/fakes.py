@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from trading_agent.models import (
+from pangu.models import (
     Action,
     NewsCategory,
     NewsItem,
@@ -18,11 +18,11 @@ from trading_agent.models import (
     SignalStatus,
     TradeSignal,
 )
-from trading_agent.tz import now as _tz_now
+from pangu.tz import now as _tz_now
 
 
 # ---------------------------------------------------------------------------
-# FakeMarketDataProvider  (was in trading_agent.data.market)
+# FakeMarketDataProvider  (was in pangu.data.market)
 # ---------------------------------------------------------------------------
 
 _STOCKS = {
@@ -117,7 +117,7 @@ class FakeMarketDataProvider:
 
 
 # ---------------------------------------------------------------------------
-# FakeFundamentalDataProvider  (was in trading_agent.data.fundamental)
+# FakeFundamentalDataProvider  (was in pangu.data.fundamental)
 # ---------------------------------------------------------------------------
 
 _VALUATIONS: dict[str, dict[str, Any]] = {
@@ -150,7 +150,7 @@ class FakeFundamentalDataProvider:
 
 
 # ---------------------------------------------------------------------------
-# FakeNewsDataProvider  (was in trading_agent.data.news)
+# FakeNewsDataProvider  (was in pangu.data.news)
 # ---------------------------------------------------------------------------
 
 _NOW = datetime(2026, 2, 16, 10, 0, 0)
@@ -215,7 +215,7 @@ class FakeNewsDataProvider:
 
 
 # ---------------------------------------------------------------------------
-# FakeStockPool  (was in trading_agent.data.stock_pool)
+# FakeStockPool  (was in pangu.data.stock_pool)
 # ---------------------------------------------------------------------------
 
 
@@ -248,7 +248,7 @@ class FakeStockPool:
 
 
 # ---------------------------------------------------------------------------
-# FakeLLMJudgeEngine  (was in trading_agent.strategy.llm_engine)
+# FakeLLMJudgeEngine  (was in pangu.strategy.llm_engine)
 # ---------------------------------------------------------------------------
 
 

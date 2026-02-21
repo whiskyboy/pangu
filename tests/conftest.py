@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for TradingAgent tests."""
+"""Shared pytest fixtures for PanGu tests."""
 
 from __future__ import annotations
 

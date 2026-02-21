@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.data.fundamental.akshare import AkShareFundamentalProvider
-from trading_agent.data.storage import Database
+from pangu.data.fundamental.akshare import AkShareFundamentalProvider
+from pangu.data.storage import Database
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -139,7 +139,7 @@ class TestGetValuation:
     ) -> None:
         mock_info.side_effect = ConnectionError("down")
         provider = AkShareFundamentalProvider(request_interval=0)
-        from trading_agent.utils import CircuitBreaker
+        from pangu.utils import CircuitBreaker
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         val = provider.get_valuation("601899")
 
@@ -202,7 +202,7 @@ class TestGetFinancialIndicator:
     def test_exception_returns_empty_df(self, mock_fin: MagicMock) -> None:
         mock_fin.side_effect = ConnectionError("down")
         provider = AkShareFundamentalProvider(request_interval=0)
-        from trading_agent.utils import CircuitBreaker
+        from pangu.utils import CircuitBreaker
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         df = provider.get_financial_indicator("601899")
         assert df.empty

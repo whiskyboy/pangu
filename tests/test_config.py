@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from trading_agent.config import get_settings, load_settings, reset_settings
+from pangu.config import get_settings, load_settings, reset_settings
 
 
 @pytest.fixture(autouse=True)

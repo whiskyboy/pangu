@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.scheduler import Components, TradingScheduler
+from pangu.scheduler import Components, TradingScheduler
 
 
 # ---------------------------------------------------------------------------
@@ -232,8 +232,8 @@ class TestT3:
 class TestT4:
     @pytest.mark.asyncio
     async def test_full_pipeline(self, scheduler: TradingScheduler) -> None:
-        from trading_agent.models import Action, SignalStatus, TradeSignal
-        from trading_agent.tz import now
+        from pangu.models import Action, SignalStatus, TradeSignal
+        from pangu.tz import now
 
         sig = TradeSignal(
             timestamp=now(), symbol="600519", name="贵州茅台",
@@ -269,8 +269,8 @@ class TestT4:
     @pytest.mark.asyncio
     async def test_uses_factor_signals_for_candidates(self, scheduler: TradingScheduler) -> None:
         """LLM candidates = factor_signals symbols + watchlist, not full pool."""
-        from trading_agent.models import Action, SignalStatus, TradeSignal
-        from trading_agent.tz import now
+        from pangu.models import Action, SignalStatus, TradeSignal
+        from pangu.tz import now
 
         # Factor strategy returns pool of 3 stocks but only 1 signal
         buy_sig = TradeSignal(
@@ -306,8 +306,8 @@ class TestT4:
     @pytest.mark.asyncio
     async def test_signal_status_new_entry(self, scheduler: TradingScheduler) -> None:
         """Stock in current pool but not in previous → NEW_ENTRY."""
-        from trading_agent.models import Action, SignalStatus, TradeSignal
-        from trading_agent.tz import now
+        from pangu.models import Action, SignalStatus, TradeSignal
+        from pangu.tz import now
 
         sig = TradeSignal(
             timestamp=now(), symbol="600519", name="贵州茅台",
@@ -335,8 +335,8 @@ class TestT4:
     @pytest.mark.asyncio
     async def test_signal_status_sustained(self, scheduler: TradingScheduler) -> None:
         """Stock in both current and previous pool → SUSTAINED."""
-        from trading_agent.models import Action, SignalStatus, TradeSignal
-        from trading_agent.tz import now
+        from pangu.models import Action, SignalStatus, TradeSignal
+        from pangu.tz import now
 
         sig = TradeSignal(
             timestamp=now(), symbol="600519", name="贵州茅台",

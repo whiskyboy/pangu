@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from trading_agent.data.storage import Database
-from trading_agent.tasks.verify_signals import verify_signals
+from pangu.data.storage import Database
+from pangu.tasks.verify_signals import verify_signals
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -138,7 +138,7 @@ class TestVerifySignalsTask:
     """Test the T6 verify_signals task."""
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_buy_positive_return_is_correct(self, _mock, components, db):
         _insert_signal(db, "600001", "BUY", 10.0, "2026-02-19")
         _insert_bars(db, "600001", "2026-02-20", 11.0)
@@ -154,7 +154,7 @@ class TestVerifySignalsTask:
         assert "✅" in content
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_buy_negative_return_is_incorrect(self, _mock, components, db):
         _insert_signal(db, "600001", "BUY", 10.0, "2026-02-19")
         _insert_bars(db, "600001", "2026-02-20", 9.0)
@@ -169,7 +169,7 @@ class TestVerifySignalsTask:
         assert "❌" in content
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_sell_negative_return_is_correct(self, _mock, components, db):
         _insert_signal(db, "600001", "SELL", 10.0, "2026-02-19")
         _insert_bars(db, "600001", "2026-02-20", 8.0)
@@ -184,7 +184,7 @@ class TestVerifySignalsTask:
         assert "✅" in content
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_multiple_lookbacks(self, _mock, components, db):
         _insert_signal(db, "600001", "BUY", 10.0, "2026-02-19")  # 1d ago
         _insert_signal(db, "600002", "BUY", 20.0, "2026-02-17")  # 3d ago
@@ -204,13 +204,13 @@ class TestVerifySignalsTask:
         assert r3[0] == pytest.approx(10.0, abs=0.01)
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_no_signals_no_push(self, _mock, components, db):
         await verify_signals(components)
         components.notif_manager.notify_markdown.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_no_notifier_no_error(self, _mock, components, db):
         components.notif_manager = None
         _insert_signal(db, "600001", "BUY", 10.0, "2026-02-19")
@@ -224,7 +224,7 @@ class TestVerifySignalsTask:
         assert row[0] == pytest.approx(10.0, abs=0.01)
 
     @pytest.mark.asyncio
-    @patch("trading_agent.tasks.verify_signals.today_str", return_value="2026-02-20")
+    @patch("pangu.tasks.verify_signals.today_str", return_value="2026-02-20")
     async def test_missing_price_data_skipped(self, _mock, components, db):
         _insert_signal(db, "600001", "BUY", 10.0, "2026-02-19")
 

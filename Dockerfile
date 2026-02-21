@@ -12,4 +12,4 @@ COPY scripts/ scripts/
 
 RUN uv pip install --system .
 
-CMD ["python", "-m", "trading_agent.main"]
+CMD ["python", "-m", "pangu.main"]

@@ -1,4 +1,4 @@
-# TradingAgent
+# PanGu
 
 个人 A 股量化交易信号系统 — 基于多因子策略 + LLM 综合决策，自动推送买卖信号到飞书。
 
@@ -60,7 +60,7 @@
 ```bash
 # 克隆项目
 git clone <repo-url>
-cd trading-agent
+cd pangu
 
 # 安装依赖
 uv sync
@@ -73,10 +73,10 @@ cp .env.example .env
 # 编辑 config/watchlist.yaml
 
 # 单次运行（首次推荐，顺序执行全部 5 个任务）
-uv run python -m trading_agent.main --once
+uv run python -m pangu.main --once
 
 # 调度模式（按交易日历自动运行）
-uv run python -m trading_agent.main
+uv run python -m pangu.main
 ```
 
 ### Docker 部署
@@ -95,12 +95,12 @@ docker compose logs -f worker
 ## 项目结构
 
 ```
-trading-agent/
+pangu/
 ├── config/
 │   ├── settings.toml              # 主配置文件
 │   ├── watchlist.yaml             # 自选股列表
 │   └── global_market_mapping.yaml # 国际行情→A股板块映射
-├── src/trading_agent/
+├── src/pangu/
 │   ├── main.py                    # 入口 (--once / scheduler 模式)
 │   ├── config.py                  # 配置加载
 │   ├── models.py                  # 数据模型 (TradeSignal, NewsItem 等)

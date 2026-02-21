@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from trading_agent.models import Action, SignalStatus, TradeSignal
-from trading_agent.notification import NotificationManager
+from pangu.models import Action, SignalStatus, TradeSignal
+from pangu.notification import NotificationManager
 
 
 def _signal() -> TradeSignal:

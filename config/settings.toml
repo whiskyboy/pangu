@@ -1,7 +1,7 @@
 [system]
 timezone = "Asia/Shanghai"
 log_level = "INFO"
-db_path = "data/trading_agent.db"
+db_path = "data/pangu.db"
 watchlist_path = "config/watchlist.yaml"
 global_market_mapping_path = "config/global_market_mapping.yaml"
 

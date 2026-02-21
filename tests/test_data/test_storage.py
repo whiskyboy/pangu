@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from trading_agent.data.storage import Database
-from trading_agent.models import Action, NewsItem, Region, SignalStatus, TradeSignal
+from pangu.data.storage import Database
+from pangu.models import Action, NewsItem, Region, SignalStatus, TradeSignal
 
 
 @pytest.fixture()
@@ -160,7 +160,7 @@ class TestSyncLog:
 
 
 def _make_news(title: str = "Test News", source: str = "cls") -> NewsItem:
-    from trading_agent.tz import now as _now
+    from pangu.tz import now as _now
     return NewsItem(
         timestamp=_now(),
         title=title,
@@ -490,7 +490,7 @@ class TestIndexConstituents:
 
 class TestFactorPoolPreviousDay:
     def test_returns_previous_day_pool(self, db: Database) -> None:
-        from trading_agent.tz import today_str
+        from pangu.tz import today_str
         today = today_str()
 
         db.save_factor_pool("2026-02-18", pd.DataFrame({

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trading_agent.factor.technical import (
+from pangu.factor.technical import (
     PandasTAFactorEngine,
     _compute_bias,
     _compute_ma_alignment_score,

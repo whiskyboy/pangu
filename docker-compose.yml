@@ -1,8 +1,8 @@
 services:
   worker:
     build: .
-    container_name: trading-agent-worker
-    command: python -m trading_agent.main
+    container_name: pangu-worker
+    command: python -m pangu.main
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -11,8 +11,8 @@ services:
 
   dashboard:
     build: .
-    container_name: trading-agent-dashboard
-    command: streamlit run src/trading_agent/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    container_name: pangu-dashboard
+    command: streamlit run src/pangu/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8501:8501"
     volumes:
