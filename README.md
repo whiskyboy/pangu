@@ -1,34 +1,33 @@
 # TradingAgent
 
-个人 A 股量化交易信号系统 — 基于多因子策略 + LLM 事件驱动，实时推送买卖信号到飞书和邮件。
+个人 A 股量化交易信号系统 — 基于多因子策略 + LLM 综合决策，自动推送买卖信号到飞书。
 
 > ⚠️ 本系统仅生成交易**信号建议**，不对接券商、不执行自动交易。投资决策请自行判断。
 
 ## 功能概览
 
-- 📊 **因子量化策略**：~20 个技术因子 + 5 个基本面因子 + 6 个宏观因子，多因子打分排名
-- 🤖 **LLM 事件驱动**：新闻/公告经 LLM 牛熊辩论分析，生成事件驱动信号
-- 🌍 **全球市场联动**：美股、港股、大宗商品行情纳入因子体系，国际新闻分析对 A 股传导影响
-- 🔔 **信号推送**：飞书 Bot + 邮件双通道，格式化信号卡片（含价格、止损止盈、置信度）
-- 📈 **实时看板**：Streamlit Web Dashboard，行情监控 + 新闻流 + 信号历史
-- ⏰ **自动调度**：盘前国际扫描 → 盘中实时轮询 → 盘后全面分析，交易日历自动控制
+- 📊 **CSI300 跨截面因子排名**：技术因子 + 基本面因子 + 宏观因子，全 A 股 300 池多因子打分排名
+- 🤖 **LLM 综合决策引擎**：逐股构建证据包（因子 + 新闻 + 宏观），牛方/熊方/裁判三轮辩论，输出 BUY/HOLD/SELL 信号
+- 🌍 **全球市场联动**：美股三大指数、港股恒生、大宗商品实时行情纳入宏观因子，国际新闻分析对 A 股传导影响
+- 🔔 **飞书信号推送**：飞书 Bot 私聊推送，格式化信号卡片（含价格、止损止盈、置信度、因子摘要、新闻事件）
+- ⏰ **自动调度**：APScheduler 按交易日历调度 5 大任务，支持 `--once` 单次执行模式
 
 ## 系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Layer 4: 用户交互                                           │
-│  Streamlit Dashboard │ 飞书 Bot 推送 │ 邮件 │ CLI            │
+│  Layer 4: 推送与调度                                         │
+│  飞书 Bot 推送 │ APScheduler 调度器 │ Tasks                  │
 ├─────────────────────────────────────────────────────────────┤
 │  Layer 3: 策略与决策                                         │
-│  因子策略引擎 │ LLM 综合决策引擎 (逐股牛/熊/裁判)             │
+│  多因子排名策略 │ LLM 综合决策引擎 (牛方/熊方/裁判)            │
 ├─────────────────────────────────────────────────────────────┤
 │  Layer 2: 因子工程                                           │
 │  技术因子 (pandas-ta) │ 基本面因子 │ 宏观因子 (国际行情)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Layer 1: 数据基建                                           │
 │  行情 Provider (AkShare/BaoStock) │ 新闻 Provider │ 股票池   │
-│  SQLite 存储 │ 交易日历                                      │
+│  SQLite 存储 │ 交易日历 │ 增量同步 + 缓存                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -36,14 +35,13 @@
 
 | 类别 | 技术 |
 |------|------|
-| 语言 | Python 3.11+ |
+| 语言 | Python 3.12+ |
 | 包管理 | uv |
 | 数据源 | AkShare (主) / BaoStock (回退) |
 | 因子计算 | pandas-ta + pandas + numpy |
 | LLM 接口 | LiteLLM (Azure OpenAI / DeepSeek / Gemini) |
-| 数据库 | SQLite |
-| Web UI | Streamlit |
-| 推送 | lark-oapi (飞书 Bot SDK) + smtplib |
+| 数据库 | SQLite (本地持久化 + 增量缓存) |
+| 推送 | lark-oapi (飞书 Bot SDK) |
 | 调度 | APScheduler |
 | 日志 | loguru |
 | 容器化 | Docker + Docker Compose |
@@ -52,13 +50,12 @@
 
 ### 前置条件
 
-- Python 3.11+
+- Python 3.12+
 - [uv](https://docs.astral.sh/uv/) 包管理器
-- Docker + Docker Compose（生产部署）
 - 飞书开放平台自建应用（获取 App ID / App Secret，详见 [飞书 Bot 配置指南](docs/feishu-bot-setup.md)）
 - Azure OpenAI 或其他 LLM API Key（配置指南见 [LLM Provider 配置指南](docs/litellm-setup.md)）
 
-### 本地开发
+### 本地运行
 
 ```bash
 # 克隆项目
@@ -75,7 +72,10 @@ cp .env.example .env
 # 配置自选股
 # 编辑 config/watchlist.yaml
 
-# 运行
+# 单次运行（首次推荐，顺序执行全部 5 个任务）
+uv run python -m trading_agent.main --once
+
+# 调度模式（按交易日历自动运行）
 uv run python -m trading_agent.main
 ```
 
@@ -90,9 +90,6 @@ docker compose up -d
 
 # 查看日志
 docker compose logs -f worker
-
-# 访问看板
-# http://<your-server-ip>:8501
 ```
 
 ## 项目结构
@@ -104,34 +101,57 @@ trading-agent/
 │   ├── watchlist.yaml             # 自选股列表
 │   └── global_market_mapping.yaml # 国际行情→A股板块映射
 ├── src/trading_agent/
-│   ├── models.py                  # 数据模型 (TradeSignal, NewsItem)
+│   ├── main.py                    # 入口 (--once / scheduler 模式)
 │   ├── config.py                  # 配置加载
+│   ├── models.py                  # 数据模型 (TradeSignal, NewsItem 等)
+│   ├── scheduler.py               # APScheduler 调度器
+│   ├── tz.py                      # 交易日历 & 时区工具
+│   ├── utils.py                   # 公共工具 (CircuitBreaker, retry, throttle)
 │   ├── data/                      # Layer 1: 数据基建
-│   │   ├── market.py              #   行情 Provider (A股+国际)
-│   │   ├── fundamental.py         #   基本面 Provider
-│   │   ├── news.py                #   新闻 Provider (国内+国际)
-│   │   ├── stock_pool.py          #   股票池管理
-│   │   └── storage.py             #   SQLite 存储
+│   │   ├── storage.py             #   SQLite 存储层
+│   │   ├── market/                #   行情数据
+│   │   │   ├── protocol.py        #     MarketDataProvider 协议
+│   │   │   ├── akshare.py         #     AkShare 实现 (A股+国际)
+│   │   │   └── baostock.py        #     BaoStock 回退实现
+│   │   ├── fundamental/           #   基本面数据
+│   │   │   ├── protocol.py        #     FundamentalDataProvider 协议
+│   │   │   └── akshare.py         #     AkShare 实现
+│   │   ├── news/                  #   新闻数据
+│   │   │   ├── protocol.py        #     NewsDataProvider 协议
+│   │   │   └── akshare.py         #     AkShare 实现 (财联社+东财+国际)
+│   │   └── stock_pool/            #   股票池
+│   │       ├── protocol.py        #     StockPool 协议
+│   │       └── yaml_pool.py       #     YAML 配置实现
 │   ├── factor/                    # Layer 2: 因子工程
-│   │   ├── technical.py           #   技术因子 (~20个)
-│   │   ├── fundamental.py         #   基本面因子
+│   │   ├── technical.py           #   技术因子 (RSI, MACD, BBANDS 等)
+│   │   ├── fundamental.py         #   基本面因子 (PE, PB, ROE)
 │   │   └── macro.py               #   宏观因子 (国际行情衍生)
-│   ├── strategy/                  # Layer 3: 策略
-│   │   ├── factor_strategy.py     #   多因子打分策略
-│   │   ├── llm_engine.py          #   LLM 事件驱动 (牛/熊/裁判)
-│   │   ├── anomaly_detector.py    #   异动检测器
-│   │   └── signal_merger.py       #   信号融合器
-│   ├── notification/              # Layer 5: 推送
+│   ├── strategy/                  # Layer 3: 策略与决策
+│   │   ├── factor/                #   因子策略
+│   │   │   ├── protocol.py        #     FactorStrategy 协议
+│   │   │   └── multi_factor.py    #     多因子打分排名策略
+│   │   └── llm/                   #   LLM 决策引擎
+│   │       ├── client.py          #     LiteLLM 客户端 (重试+回退)
+│   │       ├── judge.py           #     综合决策引擎 (牛/熊/裁判)
+│   │       └── prompts.py         #     Prompt 模板
+│   ├── notification/              # Layer 4: 推送
+│   │   ├── protocol.py            #   NotificationProvider 协议
+│   │   ├── manager.py             #   NotificationManager (多通道分发)
 │   │   ├── feishu.py              #   飞书 Bot 推送
 │   │   └── email.py               #   邮件推送
-│   ├── dashboard/                 # Layer 5: Web UI
-│   │   └── app.py                 #   Streamlit 看板
-│   ├── scheduler.py               # 任务调度
-│   ├── cli.py                     # CLI 管理工具
-│   └── main.py                    # 入口
-├── tests/                         # 测试 (pytest)
+│   └── tasks/                     # 调度任务 (独立 async 函数)
+│       ├── sync_global_market.py  #   T1: 全球市场同步
+│       ├── poll_news.py           #   T2: 快讯采集
+│       ├── sync_domestic_market.py#   T3: 国内行情同步
+│       ├── generate_signals.py    #   T4: 信号生成
+│       └── sync_reference_data.py #   T5: 交易日历同步
+├── tests/                         # 407 测试 (pytest)
 ├── data/                          # 运行时数据 (gitignored)
-├── docker-compose.yml             # worker + dashboard 双服务
+├── docs/                          # 文档
+│   ├── PRD.md                     #   产品需求文档
+│   ├── feishu-bot-setup.md        #   飞书 Bot 配置指南
+│   └── litellm-setup.md           #   LLM Provider 配置指南
+├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
 └── .env.example                   # 环境变量模板
@@ -143,18 +163,21 @@ trading-agent/
 
 ```bash
 # LLM（详见 docs/litellm-setup.md）
-AZURE_API_KEY=your-key
 AZURE_API_BASE=https://your-resource.openai.azure.com/
+AZURE_API_KEY=your-key
+AZURE_API_VERSION=2024-08-01-preview
+AZURE_DEPLOYMENT=your-deployment-name
 DEEPSEEK_API_KEY=your-deepseek-key       # fallback
 GEMINI_API_KEY=your-gemini-key           # fallback
 
-# 飞书 Bot (私聊推送，配置指南见 docs/feishu-bot-setup.md)
+# 飞书 Bot（配置指南见 docs/feishu-bot-setup.md）
 # 用户私聊 Bot 即自动完成绑定，无需配置 open_id
 FEISHU_APP_ID=cli_xxxx
 FEISHU_APP_SECRET=your-secret
 
-# 邮件
+# 邮件（可选）
 SMTP_HOST=smtp.example.com
+SMTP_PORT=465
 SMTP_USER=your@email.com
 SMTP_PASSWORD=your-password
 NOTIFY_EMAIL=target@email.com
@@ -177,10 +200,12 @@ watchlist:
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `strategy.buy_threshold` | 0.7 | 因子降级时: 评分 > 此值发买入信号 |
-| `strategy.sell_threshold` | 0.3 | 因子降级时: 评分 < 此值发卖出信号 |
-| `strategy.top_n` | 3 | CSI300 因子排名取 Top-N |
-| `llm.provider` | `azure/gpt-4o-mini` | LLM 后端 (综合决策引擎) |
+| `strategy.top_n` | 10 | CSI300 因子排名取 Top-N 进入 LLM 决策 |
+| `strategy.buy_threshold` | 0.7 | 因子评分 > 此值发买入信号 |
+| `strategy.sell_threshold` | 0.3 | 因子评分 < 此值发卖出信号 |
+| `llm.provider` | `azure/$AZURE_DEPLOYMENT` | LLM 后端 (综合决策引擎) |
+| `llm.fallback_providers` | `deepseek, gemini` | LLM 回退链 |
+| `stock_pool.factor_pool_universe` | `csi300` | 因子选股池 (CSI300 成分股) |
 
 ## 定时任务
 
@@ -189,32 +214,12 @@ watchlist:
 | 任务 | 时段 | 频率 | 说明 |
 |------|------|------|------|
 | T1 全球市场同步 | 08:00 | 每交易日 1 次 | 美股/港股/商品隔夜快照 → 宏观因子计算 |
-| T2 快讯采集 | 07:00–20:00 | 每小时 | 财联社快讯 → 去重入库 + 过期清理 (不做 LLM) |
-| T3 国内行情同步 | 15:30 | 每交易日 1 次 | 自选股+CSI300 日 K 线 + 全量基本面 |
-| T4 信号生成 | 08:15 (T1 后) | 每交易日 1 次 | 因子选股 → 构建证据包 → 逐股 LLM 综合判断 → 推送 |
-| T5 交易日历同步 | 每月初 | 每月 1 次 | 同步 A 股交易日历 |
+| T2 快讯采集 | 07:00–20:00 | 每小时 | 财联社快讯 → 去重入库 + 过期清理 |
+| T3 国内行情同步 | 15:30 | 每交易日 1 次 | CSI300 + 自选股日 K 线 + 基本面数据（增量缓存） |
+| T4 信号生成 | 08:15 | 每交易日 1 次 | 因子排名 → Top-N → 证据包 → LLM 综合判断 → 飞书推送 |
+| T5 交易日历同步 | 每月初 | 每月 1 次 | 同步 A 股交易日历 (7 天缓存) |
 
-## CLI 工具
-
-```bash
-# 股票池管理
-trading-agent pool list
-trading-agent pool add 600519        # 添加自选股 (自动拉取历史数据初始化)
-trading-agent pool remove 600519
-
-# 手动触发 (对应定时任务)
-trading-agent run market --global    # T1: 全球市场同步
-trading-agent run news               # T2: 快讯采集
-trading-agent run market --domestic  # T3: 国内行情同步
-trading-agent run signals            # T4: 信号生成
-
-# 个股诊断 (只读查询，不触发任务)
-trading-agent inspect 600519     # 查看单只股票策略详情 (因子/事件/信号)
-
-# 系统管理
-trading-agent status             # 运行状态
-trading-agent db stats           # 数据库统计
-```
+使用 `--once` 模式可按 T5→T1→T2→T3→T4 顺序单次执行全部任务。
 
 ## 信号推送示例
 
@@ -240,7 +245,7 @@ trading-agent db stats           # 数据库统计
 # 安装开发依赖
 uv sync --extra dev
 
-# 运行测试
+# 运行测试 (407 tests)
 uv run pytest
 
 # 代码检查
@@ -254,16 +259,16 @@ uv run ruff format src/ tests/
 
 | 项目 | 月成本 |
 |------|--------|
-| LLM (Azure gpt-4o-mini, ~170 次/日) | ~$0.7 |
+| LLM (Azure gpt-4o-mini, ~10 次/日) | ~$0.05 |
 | VPS (2C4G) | ~¥50-100 |
 | 数据源 (AkShare/BaoStock) | 免费 |
-| **合计** | **< ¥120/月** |
+| **合计** | **< ¥100/月** |
 
 ## 路线图
 
-- [ ] **Phase 1 (MVP)**：因子策略 + LLM 事件驱动 + 信号推送 + 实时看板
-- [ ] **Phase 2**：回测引擎 (backtesting.py) + QLib Alpha158 因子移植 + Brave Search
-- [ ] **Phase 3**：RD-Agent 自动因子发现 + 券商接口对接
+- [x] **Phase 1 (MVP)**：因子策略 + LLM 综合决策 + 飞书推送 + 自动调度
+- [ ] **Phase 2**：信号后验证 + CLI 管理工具 + Streamlit 看板 + 错误告警
+- [ ] **Phase 3**：回测引擎 + QLib Alpha158 因子移植 + Brave Search
 
 ## License
 
