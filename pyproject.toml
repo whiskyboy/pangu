@@ -14,8 +14,7 @@ dependencies = [
     "numpy>=1.24",
     # Layer 3: Strategy
     "litellm>=1.0",
-    # Layer 5: Presentation & Infrastructure
-    "streamlit>=1.30",
+    # Layer 4: Infrastructure
     "apscheduler>=3.10",
     "loguru>=0.7",
     "aiohttp>=3.9",

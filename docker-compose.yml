@@ -2,23 +2,18 @@ services:
   worker:
     build: .
     container_name: pangu-worker
-    command: python -m pangu.main
     volumes:
       - ./data:/app/data
       - ./config:/app/config
     env_file: .env
     restart: unless-stopped
-
-  dashboard:
-    build: .
-    container_name: pangu-dashboard
-    command: streamlit run src/pangu/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-    env_file: .env
-    restart: unless-stopped
-    depends_on:
-      - worker
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "pangu"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
