@@ -19,9 +19,11 @@ async def sync_reference_data(c: Components) -> None:
         logger.info("[T5] Calendar: %d new dates synced", count)
     except Exception:  # noqa: BLE001
         logger.warning("[T5] Calendar sync failed", exc_info=True)
+        await c.alert("[T5] 交易日历同步失败")
     try:
         count = c.stock_pool.sync_csi300_constituents()
         logger.info("[T5] CSI300: %d constituents synced", count)
     except Exception:  # noqa: BLE001
         logger.warning("[T5] CSI300 sync failed", exc_info=True)
+        await c.alert("[T5] CSI300成分股同步失败")
     logger.info("[T5] Done")

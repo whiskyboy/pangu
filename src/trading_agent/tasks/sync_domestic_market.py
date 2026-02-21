@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _BARS_LOOKBACK_DAYS = 200
+_BARS_FAIL_THRESHOLD = 0.5
 
 
 async def sync_domestic_market(c: Components) -> None:
@@ -40,6 +41,8 @@ async def sync_domestic_market(c: Components) -> None:
         if i % 50 == 0:
             logger.info("[T3] Daily bars: %d/%d processed", i, total)
     logger.info("[T3] Daily bars: %d ok, %d failed", ok, fail)
+    if total > 0 and fail > total * _BARS_FAIL_THRESHOLD:
+        await c.alert(f"[T3] 行情同步大面积失败: {fail}/{total} 股票获取失败")
 
     # Fundamentals
     ok, fail = 0, 0

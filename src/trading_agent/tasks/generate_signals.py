@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _ACTION_EMOJI = {Action.BUY: "🟢", Action.SELL: "🔴", Action.HOLD: "⚪"}
 _ACTION_ORDER = {Action.BUY: 0, Action.HOLD: 1, Action.SELL: 2}
 _BARS_LOOKBACK_DAYS = 200
+_LLM_FAIL_THRESHOLD = 0.5
 
 
 async def generate_signals(c: Components) -> None:
@@ -160,6 +161,14 @@ async def generate_signals(c: Components) -> None:
         universe_size=len(pool_df),
     )
 
+    if not signals and evidence_pool:
+        await c.alert(f"[T4] LLM 判断全部失败，{len(evidence_pool)} 只候选股无信号生成")
+    elif evidence_pool and len(signals) < len(evidence_pool) * (1 - _LLM_FAIL_THRESHOLD):
+        failed = len(evidence_pool) - len(signals)
+        await c.alert(
+            f"[T4] LLM 判断部分失败: {failed}/{len(evidence_pool)} 只股票失败"
+        )
+
     # Inject signal status into TradeSignal objects
     for signal in signals:
         st_info = status_map.get(signal.symbol)
@@ -174,6 +183,10 @@ async def generate_signals(c: Components) -> None:
     # 11. Save signals + push
     for signal in signals:
         c.db.save_trade_signal(signal)
+
+    actionable = [s for s in signals if s.action != Action.HOLD]
+    if not actionable and signals:
+        await c.alert("[T4] 今日无买卖信号，所有股票建议持有观望")
 
     watchlist_set = set(watchlist)
     to_push = [s for s in signals if s.action != Action.HOLD or s.symbol in watchlist_set]

@@ -22,6 +22,7 @@ async def sync_global_market(c: Components) -> None:
     except Exception:  # noqa: BLE001
         logger.warning("[T1] Global snapshot failed", exc_info=True)
         snapshot = pd.DataFrame()
+        await c.alert("[T1] 全球行情获取失败，宏观因子将使用默认值")
 
     macro_factors = c.macro_engine.compute(snapshot)
     logger.info("[T1] Macro factors: %s",

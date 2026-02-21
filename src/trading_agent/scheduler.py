@@ -65,6 +65,14 @@ class Components:
     notif_manager: NotificationManager
     watchlist_path: str = "config/watchlist.yaml"
 
+    async def alert(self, msg: str) -> None:
+        """Send a plain-text alert via notification channels."""
+        try:
+            await self.notif_manager.notify_text(f"⚠️ {msg}")
+        except Exception:  # noqa: BLE001
+            _logger = logging.getLogger(__name__)
+            _logger.warning("Failed to send alert: %s", msg, exc_info=True)
+
 
 class TradingScheduler:
     """APScheduler-based orchestrator for the 5 trading tasks."""
