@@ -1,11 +1,11 @@
 """TradingAgent scheduler — APScheduler-based task orchestration.
 
-Registers 5 cron tasks:
-  T1 sync_global_market   — 08:00 trading days
-  T2 poll_news             — 07:00-20:00 hourly
-  T3 sync_domestic_market  — 15:30 trading days
-  T4 generate_signals      — 08:15 trading days
-  T5 sync_reference_data   — 1st of each month
+Registers 5 cron tasks (times configurable via [scheduler] in settings.toml):
+  T1 sync_global_market   — trading days (default 08:00)
+  T2 poll_news             — hourly (default 07:00-20:00)
+  T3 sync_domestic_market  — trading days (default 15:30)
+  T4 generate_signals      — trading days (default 08:15)
+  T5 sync_reference_data   — monthly (default 1st at 06:00)
 """
 
 from __future__ import annotations
@@ -40,6 +40,12 @@ from trading_agent.tz import today_str
 logger = logging.getLogger(__name__)
 
 
+def _parse_time(s: str) -> tuple[int, int]:
+    """Parse 'HH:MM' → (hour, minute)."""
+    parts = s.split(":")
+    return int(parts[0]), int(parts[1])
+
+
 @dataclass
 class Components:
     """All injected components for task execution."""
@@ -61,10 +67,16 @@ class Components:
 class TradingScheduler:
     """APScheduler-based orchestrator for the 5 trading tasks."""
 
-    def __init__(self, components: Components, timezone: str = "Asia/Shanghai") -> None:
+    def __init__(
+        self,
+        components: Components,
+        timezone: str = "Asia/Shanghai",
+        scheduler_cfg: dict[str, Any] | None = None,
+    ) -> None:
         self._c = components
         self._tz = timezone
         self._scheduler = AsyncIOScheduler(timezone=timezone)
+        self._sched_cfg = scheduler_cfg or {}
         self._register_jobs()
 
     # ------------------------------------------------------------------
@@ -86,38 +98,50 @@ class TradingScheduler:
     # ------------------------------------------------------------------
 
     def _register_jobs(self) -> None:
-        """Register the 5 cron tasks."""
-        # T1: sync global market — 08:00 on trading days
+        """Register the 5 cron tasks from config (with sensible defaults)."""
+        cfg = self._sched_cfg
+
+        # T1: sync global market
+        t1_h, t1_m = _parse_time(cfg.get("global_market_sync_time", "08:00"))
         self._scheduler.add_job(
             self._run_if_trading_day, "cron",
             args=[self.sync_global_market],
-            hour=8, minute=0, id="t1_sync_global_market",
+            hour=t1_h, minute=t1_m, id="t1_sync_global_market",
             name="T1 全球市场同步",
         )
-        # T2: poll news — every hour 07:00–20:00
+
+        # T2: poll news
+        t2_start, _ = _parse_time(cfg.get("news_poll_start_time", "07:00"))
+        t2_end, _ = _parse_time(cfg.get("news_poll_end_time", "20:00"))
         self._scheduler.add_job(
             self.poll_news, "cron",
-            hour="7-20", minute=0, id="t2_poll_news",
+            hour=f"{t2_start}-{t2_end}", minute=0, id="t2_poll_news",
             name="T2 快讯采集",
         )
-        # T3: sync domestic market — 15:30 on trading days
+
+        # T3: sync domestic market
+        t3_h, t3_m = _parse_time(cfg.get("domestic_market_sync_time", "15:30"))
         self._scheduler.add_job(
             self._run_if_trading_day, "cron",
             args=[self.sync_domestic_market],
-            hour=15, minute=30, id="t3_sync_domestic_market",
+            hour=t3_h, minute=t3_m, id="t3_sync_domestic_market",
             name="T3 国内行情同步",
         )
-        # T4: generate signals — 08:15 on trading days
+
+        # T4: generate signals
+        t4_h, t4_m = _parse_time(cfg.get("signal_generate_time", "08:15"))
         self._scheduler.add_job(
             self._run_if_trading_day, "cron",
             args=[self.generate_signals],
-            hour=8, minute=15, id="t4_generate_signals",
+            hour=t4_h, minute=t4_m, id="t4_generate_signals",
             name="T4 信号生成",
         )
+
         # T5: sync reference data — 1st of each month at 06:00
+        cal_day = cfg.get("calendar_sync_day", 1)
         self._scheduler.add_job(
             self.sync_reference_data, "cron",
-            day=1, hour=6, minute=0, id="t5_sync_reference_data",
+            day=cal_day, hour=6, minute=0, id="t5_sync_reference_data",
             name="T5 基础数据同步",
         )
 

@@ -1,6 +1,6 @@
-"""LLM engines — PRD §4.3.2 / §6.
+"""LLM client — LiteLLM wrapper with retry and rule-based degradation.
 
-LLMClient: LiteLLM wrapper with retry + fallback + rule degradation.
+LLMClient: LiteLLM wrapper with retry + rule degradation.
 LLMJudgeEngine: per-stock comprehensive judge (evidence package → BUY/SELL/HOLD).
 """
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# LLM Client — LiteLLM wrapper with retry + fallback + rule degradation
+# LLM Client — LiteLLM wrapper with retry + rule degradation
 # ---------------------------------------------------------------------------
 
 # Default structured output schema expected from LLM (judge mode)
@@ -53,32 +53,25 @@ _BEARISH_KEYWORDS: list[str] = [
 
 
 class LLMClient:
-    """LiteLLM wrapper with retry, fallback chain, and rule-based degradation.
+    """LiteLLM wrapper with retry and rule-based degradation.
 
     Fallback order:
     1. Primary model (retry with exponential backoff)
-    2. Each fallback model (sequential, retry with backoff each)
-    3. Rule-based keyword scoring (no API call)
+    2. Rule-based keyword scoring (no API call)
     """
 
-    # Retry backoff settings
     _RETRY_BASE_DELAY = 1.0   # seconds
-    _RETRY_ATTEMPTS = 2       # per model
-    _FALLBACK_DELAY = 0.5     # seconds between models
+    _RETRY_ATTEMPTS = 2
 
     def __init__(
         self,
         *,
         model: str = "azure/gpt-4o-mini",
-        fallback_models: list[str] | None = None,
         temperature: float = 0.1,
-        max_tokens: int = 800,
         timeout: float = 30.0,
     ) -> None:
         self._model = model
-        self._fallback_models = fallback_models or []
         self._temperature = temperature
-        self._max_tokens = max_tokens
         self._timeout = timeout
         self._call_count = 0
 
@@ -89,19 +82,13 @@ class LLMClient:
     async def call(self, system_prompt: str, user_prompt: str) -> dict:
         """Call LLM and return parsed JSON dict.
 
-        Tries primary → fallbacks (with delay) → rule-based degradation.
+        Tries primary model with retry → rule-based degradation.
         """
-        models = [self._model, *self._fallback_models]
+        result = await self._try_model(self._model, system_prompt, user_prompt)
+        if result is not None:
+            return result
 
-        for i, model in enumerate(models):
-            if i > 0:
-                await asyncio.sleep(self._FALLBACK_DELAY)
-            result = await self._try_model(model, system_prompt, user_prompt)
-            if result is not None:
-                return result
-
-        # All providers failed — rule-based fallback
-        logger.warning("All LLM providers failed, using rule-based fallback")
+        logger.warning("LLM provider failed, using rule-based fallback")
         return self._rule_based_fallback(user_prompt)
 
     async def _try_model(
@@ -119,7 +106,6 @@ class LLMClient:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=self._temperature,
-                    max_tokens=self._max_tokens,
                     timeout=self._timeout,
                     response_format={"type": "json_object"},
                 )

@@ -28,7 +28,7 @@ if _env_path.exists():
             if key:
                 os.environ.setdefault(key, val.strip())
 
-from trading_agent.config import load_settings
+from trading_agent.config import Settings, load_settings
 from trading_agent.data.fundamental import AkShareFundamentalProvider
 from trading_agent.data.market import AkShareMarketDataProvider
 from trading_agent.data.news import AkShareNewsDataProvider
@@ -51,11 +51,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _build_components() -> tuple[Components, str]:
-    """Initialize all real components from config. Returns (components, timezone)."""
+def _build_components() -> tuple[Components, str, Settings]:
+    """Initialize all real components from config. Returns (components, timezone, settings)."""
     settings = load_settings()
     tz = settings.system.get("timezone", "Asia/Shanghai")
-    logger.info("Config loaded: timezone=%s", tz)
+
+    # Log level
+    log_level = settings.system.get("log_level", "INFO")
+    logging.getLogger().setLevel(getattr(logging, log_level, logging.INFO))
+    logger.info("Config loaded: timezone=%s, log_level=%s", tz, log_level)
 
     # SQLite
     db_path = settings.system.get("db_path", "data/trading_agent.db")
@@ -71,16 +75,19 @@ def _build_components() -> tuple[Components, str]:
     news = AkShareNewsDataProvider(storage=db)
     fundamental = AkShareFundamentalProvider(storage=db)
 
+    sys_cfg = settings.system
+    pool_cfg = settings.stock_pool
     stock_pool = StockPoolManager(
-        watchlist_path="config/watchlist.yaml",
+        watchlist_path=sys_cfg.get("watchlist_path", "config/watchlist.yaml"),
         storage=db,
         market_provider=market,
         news_provider=news,
         fundamental_provider=fundamental,
+        min_listing_days=pool_cfg.get("min_listing_days", 60),
     )
 
     # Sector mapping
-    mapping_path = Path("config/global_market_mapping.yaml")
+    mapping_path = Path(sys_cfg.get("global_market_mapping_path", "config/global_market_mapping.yaml"))
     sector_mapping: list[dict] = []
     if mapping_path.exists():
         with open(mapping_path) as f:
@@ -95,7 +102,9 @@ def _build_components() -> tuple[Components, str]:
     # Strategy + LLM
     strategy_cfg = settings.strategy
     factor_strategy = MultiFactorStrategy(
-        top_n=strategy_cfg.get("top_n", 3),
+        top_n=strategy_cfg.get("top_n", 10),
+        buy_threshold=strategy_cfg.get("buy_threshold", 0.7),
+        sell_threshold=strategy_cfg.get("sell_threshold", 0.3),
         risk_dampen_threshold=strategy_cfg.get("risk_dampen_threshold", -1.0),
         sector_mapping=sector_mapping,
     )
@@ -103,31 +112,32 @@ def _build_components() -> tuple[Components, str]:
     llm_cfg = settings.llm
     llm_client = LLMClient(
         model=llm_cfg.get("provider", "azure/gpt-4o-mini"),
-        fallback_models=llm_cfg.get("fallback_providers", []),
         temperature=llm_cfg.get("temperature", 0.1),
-        max_tokens=llm_cfg.get("max_tokens", 800),
     )
     judge_engine = LLMJudgeEngineImpl(llm_client)
 
     # Notification
     notif_manager = NotificationManager()
     notif_cfg = settings.notification
-    feishu_cfg = notif_cfg.get("feishu", {})
-    app_id = feishu_cfg.get("app_id", "")
-    app_secret = feishu_cfg.get("app_secret", "")
+    if notif_cfg.get("enabled", True):
+        feishu_cfg = notif_cfg.get("feishu", {})
+        app_id = feishu_cfg.get("app_id", "")
+        app_secret = feishu_cfg.get("app_secret", "")
 
-    if app_id and app_secret:
-        open_id = os.environ.get("FEISHU_OPEN_ID", "")
-        feishu_notifier = FeishuNotifier(
-            app_id=app_id,
-            app_secret=app_secret,
-            open_id=open_id or None,
-        )
-        notif_manager.add_channel(feishu_notifier)
-        logger.info("Feishu notifier initialized (open_id=%s)",
-                    "set" if open_id else "not set")
+        if app_id and app_secret:
+            open_id = os.environ.get("FEISHU_OPEN_ID", "")
+            feishu_notifier = FeishuNotifier(
+                app_id=app_id,
+                app_secret=app_secret,
+                open_id=open_id or None,
+            )
+            notif_manager.add_channel(feishu_notifier)
+            logger.info("Feishu notifier initialized (open_id=%s)",
+                        "set" if open_id else "not set")
+        else:
+            logger.warning("Feishu not configured, skipping")
     else:
-        logger.warning("Feishu not configured, skipping")
+        logger.info("Notification disabled by config")
 
     components = Components(
         db=db,
@@ -142,13 +152,13 @@ def _build_components() -> tuple[Components, str]:
         judge_engine=judge_engine,
         notif_manager=notif_manager,
     )
-    return components, tz
+    return components, tz, settings
 
 
 async def _run_scheduler() -> None:
     """Start scheduler and block until SIGINT/SIGTERM."""
-    components, tz = _build_components()
-    scheduler = TradingScheduler(components, timezone=tz)
+    components, tz, settings = _build_components()
+    scheduler = TradingScheduler(components, timezone=tz, scheduler_cfg=settings.scheduler)
 
     # First run: sync calendar to ensure trading day checks work
     await scheduler.sync_reference_data()
@@ -175,8 +185,8 @@ async def _run_scheduler() -> None:
 
 async def _run_once() -> None:
     """Run all tasks once and exit."""
-    components, _tz = _build_components()
-    scheduler = TradingScheduler(components, timezone=_tz)
+    components, _tz, settings = _build_components()
+    scheduler = TradingScheduler(components, timezone=_tz, scheduler_cfg=settings.scheduler)
     await scheduler.run_once()
 
 

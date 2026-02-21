@@ -2,64 +2,40 @@
 timezone = "Asia/Shanghai"
 log_level = "INFO"
 db_path = "data/trading_agent.db"
+watchlist_path = "config/watchlist.yaml"
+global_market_mapping_path = "config/global_market_mapping.yaml"
 
 [stock_pool]
-auto_filter_st = true
-auto_filter_suspended = true
+# 过滤上市不满 N 天的新股 (避免数据不足导致因子计算异常)
 min_listing_days = 60
-factor_pool_universe = "csi300"
-
-[data_source]
-market_provider = "akshare"
-fundamental_provider = "akshare"
-news_provider = "akshare_cls"
-news_providers_extra = ["akshare_eastmoney", "akshare_notice"]
-global_news_provider = "akshare_global"
-
-[factor]
-technical_factors = ["RSI_14", "MACD", "BBANDS", "OBV", "ATR_14", "BIAS_20"]
-fundamental_factors = ["PE_TTM", "PB", "ROE_TTM"]
-factor_weights = { RSI_14 = 0.15, MACD = 0.20, BBANDS = 0.10, OBV = 0.10, ATR_14 = 0.10, BIAS_20 = 0.10, PE_TTM = 0.10, PB = 0.05, ROE_TTM = 0.10 }
 
 [strategy]
+# CSI300 因子排名取 Top-N 进入 LLM 综合决策
+top_n = 10
 buy_threshold = 0.7
 sell_threshold = 0.3
-top_n = 10
+# 全球风险指数低于此值时，提高 buy_threshold 0.1 (设 -999 可禁用)
 risk_dampen_threshold = -1.0
-max_signals_per_day_per_stock_per_direction = 1
 
 [llm]
+# LiteLLM 模型标识符 (支持 $ENV_VAR 替换)
 provider = "azure/$AZURE_DEPLOYMENT"
-fallback_providers = ["deepseek/deepseek-chat", "gemini/gemini-2.5-flash"]
 temperature = 0.1
-max_tokens = 800
-news_impact_threshold = 7
-max_api_calls_per_hour = 60
 
 [notification]
 enabled = true
-channels = ["feishu", "email"]
 
 [notification.feishu]
 app_id = "$FEISHU_APP_ID"
 app_secret = "$FEISHU_APP_SECRET"
 
-[notification.email]
-smtp_host = "$SMTP_HOST"
-smtp_port = 465
-smtp_user = "$SMTP_USER"
-smtp_password = "$SMTP_PASSWORD"
-to_addresses = ["$NOTIFY_EMAIL"]
-
 [scheduler]
-news_poll_interval_minutes = 60
-news_poll_start_time = "07:00"
-news_poll_end_time = "20:00"
-domestic_market_sync_time = "15:30"
+# 时间格式: "HH:MM"
 global_market_sync_time = "08:00"
 signal_generate_time = "08:15"
-calendar_sync_day = 1  # day of month
-
-[global_market]
-enabled = true
-mapping_file = "config/global_market_mapping.yaml"
+domestic_market_sync_time = "15:30"
+news_poll_start_time = "07:00"
+news_poll_end_time = "20:00"
+news_poll_interval_minutes = 60
+# 每月几号同步交易日历和 CSI300 成分股
+calendar_sync_day = 1

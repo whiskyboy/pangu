@@ -45,12 +45,15 @@ class StockPoolManager:
         market_provider: MarketDataProvider,
         news_provider: NewsDataProvider,
         fundamental_provider: FundamentalDataProvider,
+        *,
+        min_listing_days: int = 60,
     ) -> None:
         self._path = Path(watchlist_path)
         self._storage = storage
         self._market = market_provider
         self._news = news_provider
         self._fundamental = fundamental_provider
+        self._min_listing_days = min_listing_days
         self._entries: list[dict[str, str]] = []
         self._load_yaml()
         self._backfill_missing_data()
@@ -264,8 +267,8 @@ class StockPoolManager:
                         ipo_date = datetime.strptime(ipo_date_str, "%Y%m%d").replace(
                             tzinfo=_get_tz()
                         )
-                        if (_tz_now() - ipo_date).days < 60:
-                            logger.info("filtered %s: IPO < 60 days", symbol)
+                        if (_tz_now() - ipo_date).days < self._min_listing_days:
+                            logger.info("filtered %s: IPO < %d days", symbol, self._min_listing_days)
                             continue
                     except ValueError:
                         pass

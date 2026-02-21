@@ -161,35 +161,8 @@ class TestLLMCall:
         assert client.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_primary_fails_fallback_succeeds(self) -> None:
-        client = LLMClient(
-            model="test/primary",
-            fallback_models=["test/fallback1"],
-        )
-        mock_resp = _make_completion(json.dumps(_VALID_RESPONSE))
-
-        call_count = 0
-
-        async def side_effect(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            if kwargs.get("model") == "test/primary":
-                raise ConnectionError("primary down")
-            return mock_resp
-
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=side_effect):
-            result = await client.call("system", "user prompt")
-
-        assert result["action"] == "BUY"
-        # Primary tried 2 times (initial + retry), then fallback 1 time
-        assert client.call_count == 1  # only successful calls counted
-
-    @pytest.mark.asyncio
-    async def test_all_providers_fail_rule_fallback(self) -> None:
-        client = LLMClient(
-            model="test/primary",
-            fallback_models=["test/fallback1"],
-        )
+    async def test_primary_fails_rule_fallback(self) -> None:
+        client = LLMClient(model="test/primary")
 
         with patch(
             "litellm.acompletion",
@@ -203,28 +176,15 @@ class TestLLMCall:
         assert client.call_count == 0  # no successful LLM calls
 
     @pytest.mark.asyncio
-    async def test_unparseable_response_retries(self) -> None:
-        """If LLM returns non-JSON, retry then try fallback."""
-        client = LLMClient(
-            model="test/primary",
-            fallback_models=["test/fallback1"],
-        )
+    async def test_unparseable_response_retries_then_degrades(self) -> None:
+        """If LLM returns non-JSON, retry then degrade to rules."""
+        client = LLMClient(model="test/primary")
         bad_resp = _make_completion("I cannot provide JSON")
-        good_resp = _make_completion(json.dumps(_VALID_RESPONSE))
 
-        call_count = 0
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=bad_resp):
+            result = await client.call("system", "利空消息，减持风险")
 
-        async def side_effect(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            if kwargs.get("model") == "test/primary":
-                return bad_resp
-            return good_resp
-
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=side_effect):
-            result = await client.call("system", "user prompt")
-
-        assert result["action"] == "BUY"
+        assert "规则降级" in result["judge_conclusion"]
 
     @pytest.mark.asyncio
     async def test_empty_response_content(self) -> None:

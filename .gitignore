@@ -36,3 +36,5 @@ htmlcov/
 
 # uv
 uv.lock
+*.db-shm
+*.db-wal
