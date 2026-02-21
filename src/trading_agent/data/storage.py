@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS trade_signals (
     pushed           INTEGER DEFAULT 0,
     metadata         TEXT,
     signal_date      TEXT,
+    return_1d        REAL,
+    return_3d        REAL,
+    return_5d        REAL,
     UNIQUE (symbol, action, signal_date)
 );
 
@@ -227,6 +230,17 @@ class Database:
                 DROP TABLE trade_signals;
                 ALTER TABLE trade_signals_new RENAME TO trade_signals;
             """)
+            # Re-read columns after migration
+            sig_cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(trade_signals)").fetchall()
+            }
+
+        # Migrate trade_signals: add return_1d/3d/5d columns
+        for col in ("return_1d", "return_3d", "return_5d"):
+            if col not in sig_cols:
+                self._conn.execute(f"ALTER TABLE trade_signals ADD COLUMN {col} REAL")
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # daily_bars
@@ -459,6 +473,64 @@ class Database:
             )
         return result
 
+    def load_unverified_signals(self, signal_date: str, lookback: int) -> list[dict]:
+        """Load signals from *signal_date* where return_{lookback}d is NULL.
+
+        Returns list of dicts with keys: id, symbol, name, action, price.
+        Only BUY/SELL signals are returned (HOLD is not verifiable).
+        """
+        col = f"return_{lookback}d"
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT id, symbol, name, action, price FROM trade_signals "
+                f"WHERE signal_date = ? AND {col} IS NULL "
+                f"AND action IN ('BUY', 'SELL')",
+                (signal_date,),
+            ).fetchall()
+        return [
+            {"id": r[0], "symbol": r[1], "name": r[2] or r[1], "action": r[3], "price": r[4]}
+            for r in rows
+        ]
+
+    def update_signal_return(self, signal_id: int, lookback: int, return_pct: float) -> None:
+        """Update return_{lookback}d for a signal."""
+        col = f"return_{lookback}d"
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE trade_signals SET {col} = ? WHERE id = ?",
+                (return_pct, signal_id),
+            )
+            self._conn.commit()
+
+    def get_signal_returns(self, days: int = 30) -> dict[str, dict]:
+        """Compute strategy return stats over the last *days* days.
+
+        Returns ``{lookback: {"count": N, "avg_return": pct}}``.
+        Strategy return = return_pct for BUY, -return_pct for SELL.
+        """
+        results: dict[str, dict] = {}
+        for lb in (1, 3, 5):
+            col = f"return_{lb}d"
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT action, {col} FROM trade_signals "
+                    f"WHERE {col} IS NOT NULL "
+                    f"AND signal_date >= date('now', ?)",
+                    (f"-{days} days",),
+                ).fetchall()
+            if not rows:
+                results[f"{lb}d"] = {"count": 0, "avg_return": 0.0}
+                continue
+            total_return = sum(
+                ret if action == "BUY" else -ret
+                for action, ret in rows
+            )
+            results[f"{lb}d"] = {
+                "count": len(rows),
+                "avg_return": round(total_return / len(rows), 2),
+            }
+        return results
+
     # ------------------------------------------------------------------
     # trading_calendar
     # ------------------------------------------------------------------
@@ -480,6 +552,21 @@ class Database:
                 "SELECT 1 FROM trading_calendar WHERE date = ?", (date,)
             ).fetchone()
         return row is not None
+
+    def get_trading_day_offset(self, date: str, offset: int) -> str | None:
+        """Return the trading day *offset* days before *date* (offset > 0 means past).
+
+        E.g. ``get_trading_day_offset("2026-02-21", 3)`` returns the 3rd trading
+        day before 2026-02-21.  Returns None if not enough calendar data.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT date FROM trading_calendar WHERE date < ? ORDER BY date DESC LIMIT ?",
+                (date, offset),
+            ).fetchall()
+        if len(rows) < offset:
+            return None
+        return rows[-1][0]
 
     # ------------------------------------------------------------------
     # fundamentals

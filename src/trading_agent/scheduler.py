@@ -1,11 +1,12 @@
 """TradingAgent scheduler — APScheduler-based task orchestration.
 
-Registers 5 cron tasks (times configurable via [scheduler] in settings.toml):
+Registers 6 cron tasks (times configurable via [scheduler] in settings.toml):
   T1 sync_global_market   — trading days (default 08:00)
   T2 poll_news             — hourly (default 07:00-20:00)
   T3 sync_domestic_market  — trading days (default 15:30)
   T4 generate_signals      — trading days (default 08:15)
   T5 sync_reference_data   — monthly (default 1st at 06:00)
+  T6 verify_signals        — trading days (default 16:00)
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from trading_agent.tasks import (
     sync_domestic_market,
     generate_signals,
     sync_reference_data,
+    verify_signals,
 )
 from trading_agent.tz import now as _now
 from trading_agent.tz import today_str
@@ -145,6 +147,15 @@ class TradingScheduler:
             name="T5 基础数据同步",
         )
 
+        # T6: verify signals — after T3 (default 16:00)
+        t6_h, t6_m = _parse_time(cfg.get("signal_verify_time", "16:00"))
+        self._scheduler.add_job(
+            self._run_if_trading_day, "cron",
+            args=[self.verify_signals],
+            hour=t6_h, minute=t6_m, id="t6_verify_signals",
+            name="T6 信号验证",
+        )
+
     # ------------------------------------------------------------------
     # Trading day gate
     # ------------------------------------------------------------------
@@ -176,6 +187,9 @@ class TradingScheduler:
 
     async def sync_reference_data(self) -> None:
         await sync_reference_data(self._c)
+
+    async def verify_signals(self) -> None:
+        await verify_signals(self._c)
 
     # ------------------------------------------------------------------
     # Manual trigger (for CLI / first-run)
@@ -213,5 +227,6 @@ class TradingScheduler:
         await self.sync_global_market()
         await self.poll_news()
         await self.generate_signals()
+        await self.verify_signals()
         logger.info("=== run_once complete ===")
 

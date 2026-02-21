@@ -112,7 +112,7 @@ def scheduler(mock_components: Components) -> TradingScheduler:
 class TestJobRegistration:
     def test_five_jobs_registered(self, scheduler: TradingScheduler) -> None:
         jobs = scheduler._scheduler.get_jobs()
-        assert len(jobs) == 5
+        assert len(jobs) == 6
 
     def test_job_ids(self, scheduler: TradingScheduler) -> None:
         job_ids = {j.id for j in scheduler._scheduler.get_jobs()}
@@ -122,6 +122,7 @@ class TestJobRegistration:
             "t3_sync_domestic_market",
             "t4_generate_signals",
             "t5_sync_reference_data",
+            "t6_verify_signals",
         }
         assert job_ids == expected
 

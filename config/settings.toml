@@ -34,6 +34,7 @@ app_secret = "$FEISHU_APP_SECRET"
 global_market_sync_time = "08:00"
 signal_generate_time = "08:15"
 domestic_market_sync_time = "15:30"
+signal_verify_time = "16:00"
 news_poll_start_time = "07:00"
 news_poll_end_time = "20:00"
 news_poll_interval_minutes = 60

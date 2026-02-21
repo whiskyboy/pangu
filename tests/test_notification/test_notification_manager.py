@@ -25,55 +25,55 @@ def _signal() -> TradeSignal:
 
 
 class _SuccessChannel:
-    async def send(self, signal: TradeSignal) -> bool:
+    async def send_signal(self, signal: TradeSignal) -> bool:
         return True
 
 
 class _FailChannel:
-    async def send(self, signal: TradeSignal) -> bool:
+    async def send_signal(self, signal: TradeSignal) -> bool:
         return False
 
 
 class _ErrorChannel:
-    async def send(self, signal: TradeSignal) -> bool:
+    async def send_signal(self, signal: TradeSignal) -> bool:
         raise RuntimeError("boom")
 
 
 class TestNotificationManager:
     def test_no_channels(self) -> None:
         mgr = NotificationManager()
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result == {}
 
     def test_single_success_channel(self) -> None:
         mgr = NotificationManager([_SuccessChannel()])
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result == {"_SuccessChannel": True}
 
     def test_single_fail_channel(self) -> None:
         mgr = NotificationManager([_FailChannel()])
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result == {"_FailChannel": False}
 
     def test_multiple_channels(self) -> None:
         mgr = NotificationManager([_SuccessChannel(), _FailChannel()])
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result["_SuccessChannel"] is True
         assert result["_FailChannel"] is False
 
     def test_exception_channel_returns_false(self) -> None:
         mgr = NotificationManager([_ErrorChannel()])
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result["_ErrorChannel"] is False
 
     def test_add_channel(self) -> None:
         mgr = NotificationManager()
         mgr.add_channel(_SuccessChannel())
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result == {"_SuccessChannel": True}
 
     def test_mixed_success_and_error(self) -> None:
         mgr = NotificationManager([_SuccessChannel(), _ErrorChannel()])
-        result = asyncio.run(mgr.notify(_signal()))
+        result = asyncio.run(mgr.notify_signal(_signal()))
         assert result["_SuccessChannel"] is True
         assert result["_ErrorChannel"] is False

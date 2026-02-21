@@ -181,7 +181,7 @@ async def generate_signals(c: Components) -> None:
 
     for signal in to_push:
         try:
-            result = await c.notif_manager.notify(signal)
+            result = await c.notif_manager.notify_signal(signal)
             if result:
                 logger.info("[T4] Push %s: %s", signal.symbol, result)
         except Exception:  # noqa: BLE001

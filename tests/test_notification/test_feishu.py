@@ -216,7 +216,7 @@ class TestFormatSignalCard:
 class TestFeishuNotifier:
     def test_send_without_open_id_returns_false(self) -> None:
         notifier = FeishuNotifier(app_id="test", app_secret="test")
-        result = asyncio.run(notifier.send(_buy_signal()))
+        result = asyncio.run(notifier.send_signal(_buy_signal()))
         assert result is False
 
     def test_open_id_property(self) -> None:
@@ -230,7 +230,7 @@ class TestFeishuNotifier:
         mock_resp = MagicMock()
         mock_resp.success.return_value = True
         with patch.object(notifier._client.im.v1.message, "create", return_value=mock_resp):
-            result = asyncio.run(notifier.send(_buy_signal()))
+            result = asyncio.run(notifier.send_signal(_buy_signal()))
         assert result is True
 
     def test_send_api_failure(self) -> None:
@@ -240,7 +240,7 @@ class TestFeishuNotifier:
         mock_resp.code = 99999
         mock_resp.msg = "test error"
         with patch.object(notifier._client.im.v1.message, "create", return_value=mock_resp):
-            result = asyncio.run(notifier.send(_buy_signal()))
+            result = asyncio.run(notifier.send_signal(_buy_signal()))
         assert result is False
 
     def test_send_exception(self) -> None:
@@ -248,7 +248,7 @@ class TestFeishuNotifier:
         with patch.object(
             notifier._client.im.v1.message, "create", side_effect=RuntimeError("network")
         ):
-            result = asyncio.run(notifier.send(_buy_signal()))
+            result = asyncio.run(notifier.send_signal(_buy_signal()))
         assert result is False
 
 

@@ -240,36 +240,61 @@ class FeishuNotifier:
             logger.exception("Pairing reply exception")
 
     # -----------------------------------------------------------------
-    # Push signal via OpenAPI
+    # Push via OpenAPI
     # -----------------------------------------------------------------
 
-    async def send(self, signal: TradeSignal) -> bool:
-        if not self._open_id:
-            logger.warning("FeishuNotifier: no open_id bound, skipping push")
-            return False
-
-        card = format_signal_card(signal)
+    def _send_message(self, msg_type: str, content: str) -> bool:
+        """Send a message to the bound user. Returns True on success."""
         request = (
             CreateMessageRequest.builder()
             .receive_id_type("open_id")
             .request_body(
                 CreateMessageRequestBody.builder()
                 .receive_id(self._open_id)
-                .msg_type("interactive")
-                .content(json.dumps(card))
+                .msg_type(msg_type)
+                .content(content)
                 .build()
             )
             .build()
         )
-
         try:
             with self._send_lock:
                 resp = self._client.im.v1.message.create(request)
             if resp.success():
-                logger.info("Feishu message sent to %s", self._open_id)
+                logger.info("Feishu %s sent to %s", msg_type, self._open_id)
                 return True
             logger.error("Feishu send failed: code=%s msg=%s", resp.code, resp.msg)
             return False
         except Exception:
             logger.exception("Feishu send exception")
             return False
+
+    async def send_signal(self, signal: TradeSignal) -> bool:
+        """Send a trade signal as an interactive card."""
+        if not self._open_id:
+            logger.warning("FeishuNotifier: no open_id bound, skipping push")
+            return False
+        card = format_signal_card(signal)
+        return self._send_message("interactive", json.dumps(card))
+
+    async def send_text(self, text: str) -> bool:
+        """Send a plain-text message."""
+        if not self._open_id:
+            logger.warning("FeishuNotifier: no open_id bound, skipping push")
+            return False
+        return self._send_message("text", json.dumps({"text": text}))
+
+    async def send_markdown(self, title: str, content: str) -> bool:
+        """Send a markdown card."""
+        if not self._open_id:
+            logger.warning("FeishuNotifier: no open_id bound, skipping push")
+            return False
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": "blue",
+            },
+            "elements": [{"tag": "markdown", "content": content}],
+        }
+        return self._send_message("interactive", json.dumps(card))

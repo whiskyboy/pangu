@@ -124,7 +124,13 @@ class _StubLLMJudge:
 
 
 class _StubNotifier:
-    async def send(self, signal: TradeSignal) -> bool:
+    async def send_signal(self, signal: TradeSignal) -> bool:
+        return True
+
+    async def send_text(self, text: str) -> bool:
+        return True
+
+    async def send_markdown(self, title: str, content: str) -> bool:
         return True
 
 
@@ -346,5 +352,5 @@ class TestStubInvocation:
             source="factor",
             reason="test",
         )
-        result = asyncio.run(n.send(sig))
+        result = asyncio.run(n.send_signal(sig))
         assert result is True
