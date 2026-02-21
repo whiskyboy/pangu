@@ -600,26 +600,19 @@ class TestAkShareFallback:
     @patch("akshare.stock_zh_a_hist")
     @patch("baostock.login")
     @patch("baostock.query_history_k_data_plus")
-    def test_fallback_on_empty_response(
+    def test_no_fallback_on_empty_response(
         self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
         mock_ak_hist: MagicMock,
     ) -> None:
-        """When AkShare returns empty, BaoStock fallback should be used."""
+        """When AkShare returns empty, BaoStock fallback should NOT be used."""
         mock_ak_hist.return_value = pd.DataFrame()
-        mock_bs_login.return_value = MagicMock(error_code="0")
-        fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "pctChg"]
-        rows = [
-            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "8.00"],
-        ]
-        mock_bs_query.return_value = _fake_bs_result(fields, rows)
 
         fallback = BaoStockMarketDataProvider()
         provider = AkShareMarketDataProvider(request_interval=0, fallback=fallback)
 
         df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-02")
-        assert len(df) == 1
+        assert len(df) == 0
+        mock_bs_query.assert_not_called()
         fallback.close()
 
     @patch("akshare.stock_zh_a_hist")

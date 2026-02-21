@@ -110,36 +110,35 @@ class AkShareMarketDataProvider(ThrottleMixin):
             )
             df = None
 
-        # Fallback to BaoStock if AkShare failed or returned empty
-        if (df is None or df.empty) and self._fallback is not None:
+        # Fallback to BaoStock only on AkShare failure (not empty results)
+        if df is None and self._fallback is not None:
             logger.info("Falling back to BaoStock for %s daily bars", symbol)
             try:
                 fallback_df = self._fallback.get_daily_bars(symbol, fetch_start, end)
                 if fallback_df is not None and not fallback_df.empty:
-                    return fallback_df
+                    df = fallback_df
             except Exception:  # noqa: BLE001
                 logger.warning("BaoStock fallback also failed for %s", symbol, exc_info=True)
 
-        if df is None or df.empty:
-            if self._storage is not None:
-                return self._storage.load_daily_bars(symbol, start, end)
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-            )
+        # No storage — return whatever we got
+        if self._storage is None:
+            if df is None or df.empty:
+                return pd.DataFrame(
+                    columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
+                )
+            df = self._clean_hist(df)
+            return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
 
-        df = self._clean_hist(df)
-
-        # Persist to SQLite
-        if self._storage is not None:
+        # Persist new data if any
+        if df is not None and not df.empty:
+            df = self._clean_hist(df)
             self._storage.save_daily_bars(symbol, df)
-            max_date = df["date"].max()
-            self._storage.update_sync_log(
-                symbol, "daily_bars", "ok", "akshare", last_date=max_date,
-            )
-            return self._storage.load_daily_bars(symbol, start, end)
 
-        # Filter to requested range if no storage
-        return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
+        sync_date = df["date"].max() if (df is not None and not df.empty) else end
+        self._storage.update_sync_log(
+            symbol, "daily_bars", "ok", "akshare", last_date=sync_date,
+        )
+        return self._storage.load_daily_bars(symbol, start, end)
 
     # -- international market data — PRD §4.1.1 --
 
