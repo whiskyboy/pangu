@@ -568,6 +568,49 @@ class Database:
             return None
         return rows[-1][0]
 
+    def has_trading_day_between(self, after: str, up_to: str) -> bool | None:
+        """Return True if a trading day exists in (after, up_to].
+
+        Returns None when the calendar table is empty (caller should fallback).
+        """
+        with self._lock:
+            has_cal = self._conn.execute("SELECT 1 FROM trading_calendar LIMIT 1").fetchone()
+            if has_cal is None:
+                return None
+            row = self._conn.execute(
+                "SELECT 1 FROM trading_calendar WHERE date > ? AND date <= ? LIMIT 1",
+                (after, up_to),
+            ).fetchone()
+        return row is not None
+
+    # ------------------------------------------------------------------
+    # db stats
+    # ------------------------------------------------------------------
+
+    def get_db_stats(self) -> dict:
+        """Return summary counts for the status CLI command."""
+        with self._lock:
+            bars_count = self._conn.execute("SELECT COUNT(*) FROM daily_bars").fetchone()[0]
+            bars_symbols = self._conn.execute("SELECT COUNT(DISTINCT symbol) FROM daily_bars").fetchone()[0]
+            signals_count = self._conn.execute("SELECT COUNT(*) FROM trade_signals").fetchone()[0]
+            calendar_count = self._conn.execute("SELECT COUNT(*) FROM trading_calendar").fetchone()[0]
+            news_count = self._conn.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
+            latest_signal = self._conn.execute(
+                "SELECT signal_date FROM trade_signals ORDER BY signal_date DESC LIMIT 1"
+            ).fetchone()
+            latest_bar = self._conn.execute(
+                "SELECT MAX(date) FROM daily_bars"
+            ).fetchone()
+        return {
+            "bars_count": bars_count,
+            "bars_symbols": bars_symbols,
+            "signals_count": signals_count,
+            "calendar_count": calendar_count,
+            "news_count": news_count,
+            "latest_signal": latest_signal[0] if latest_signal else "N/A",
+            "latest_bar": latest_bar[0] if latest_bar else "N/A",
+        }
+
     # ------------------------------------------------------------------
     # fundamentals
     # ------------------------------------------------------------------

@@ -18,15 +18,20 @@ from pathlib import Path
 import yaml
 
 # Load .env if present (before config reads $ENV_VAR placeholders)
-_env_path = Path(".env")
-if _env_path.exists():
-    for line in _env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, val = line.partition("=")
-            key = key.strip()
-            if key:
-                os.environ.setdefault(key, val.strip())
+def load_env() -> None:
+    """Load .env file into environment variables."""
+    env_path = Path(".env")
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key:
+                    os.environ.setdefault(key, val.strip())
+
+
+load_env()
 
 from pangu.config import Settings, load_settings
 from pangu.data.fundamental import AkShareFundamentalProvider
@@ -51,7 +56,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _build_components() -> tuple[Components, str, Settings]:
+def build_components() -> tuple[Components, str, Settings]:
     """Initialize all real components from config. Returns (components, timezone, settings)."""
     settings = load_settings()
     tz = settings.system.get("timezone", "Asia/Shanghai")
@@ -157,7 +162,7 @@ def _build_components() -> tuple[Components, str, Settings]:
 
 async def _run_scheduler() -> None:
     """Start scheduler and block until SIGINT/SIGTERM."""
-    components, tz, settings = _build_components()
+    components, tz, settings = build_components()
     scheduler = TradingScheduler(components, timezone=tz, scheduler_cfg=settings.scheduler)
 
     # First run: sync calendar to ensure trading day checks work
@@ -185,17 +190,18 @@ async def _run_scheduler() -> None:
 
 async def _run_once() -> None:
     """Run all tasks once and exit."""
-    components, _tz, settings = _build_components()
+    components, _tz, settings = build_components()
     scheduler = TradingScheduler(components, timezone=_tz, scheduler_cfg=settings.scheduler)
     await scheduler.run_once()
 
 
 async def _run_init() -> None:
     """First-time initialization: sync reference data + domestic market only."""
-    components, _tz = _build_components()
-    scheduler = TradingScheduler(components, timezone=_tz)
+    components, _tz, settings = build_components()
+    scheduler = TradingScheduler(components, timezone=_tz, scheduler_cfg=settings.scheduler)
     logger.info("=== init: syncing reference data + domestic market ===")
     await scheduler.sync_reference_data()
+    components.stock_pool.backfill_missing_data()
     await scheduler.sync_domestic_market()
     logger.info("=== init complete ===")
 

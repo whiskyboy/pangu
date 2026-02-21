@@ -238,8 +238,9 @@ class TestBackfillMissingData:
     def test_backfills_when_no_bars(self, tmp_yaml: Path, db: Database) -> None:
         """Stocks in YAML with no DB data should trigger _init_stock_data."""
         m, n, f = _mock_providers()
-        # Constructor triggers backfill — both stocks have no bars in DB
-        _pool = StockPoolManager(tmp_yaml, db, m, n, f)
+        pool = StockPoolManager(tmp_yaml, db, m, n, f)
+        # Constructor no longer triggers backfill — call explicitly
+        pool.backfill_missing_data()
 
         # get_daily_bars called once per stock without data
         assert m.get_daily_bars.call_count == 2
@@ -257,7 +258,8 @@ class TestBackfillMissingData:
             "date": [recent], "open": [10], "high": [11],
             "low": [9], "close": [10.5], "volume": [1000],
         }))
-        _pool = StockPoolManager(tmp_yaml, db, m, n, f)
+        pool = StockPoolManager(tmp_yaml, db, m, n, f)
+        pool.backfill_missing_data()
 
         # No backfill calls since both stocks have data
         m.get_daily_bars.assert_not_called()
@@ -271,13 +273,14 @@ class TestBackfillMissingData:
             "date": [recent], "open": [10], "high": [11],
             "low": [9], "close": [10.5], "volume": [1000],
         }))
-        _pool = StockPoolManager(tmp_yaml, db, m, n, f)
+        pool = StockPoolManager(tmp_yaml, db, m, n, f)
+        pool.backfill_missing_data()
 
         # Only 600967 should be backfilled
         assert m.get_daily_bars.call_count == 1
 
     def test_backfills_stale_data(self, tmp_path: Path, db: Database) -> None:
-        """Stocks with data older than 7 days should trigger backfill."""
+        """Stocks with data older than 3 days (fallback) should trigger backfill."""
         p = tmp_path / "watchlist.yaml"
         p.write_text(yaml.dump({"watchlist": [
             {"symbol": "601899", "name": "紫金矿业"},
@@ -288,7 +291,8 @@ class TestBackfillMissingData:
             "date": ["2025-12-01"], "open": [10], "high": [11],
             "low": [9], "close": [10.5], "volume": [1000],
         }))
-        _pool = StockPoolManager(p, db, m, n, f)
+        pool = StockPoolManager(p, db, m, n, f)
+        pool.backfill_missing_data()
 
         # Should trigger backfill due to stale data
         assert m.get_daily_bars.call_count == 1

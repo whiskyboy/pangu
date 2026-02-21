@@ -56,7 +56,6 @@ class StockPoolManager:
         self._min_listing_days = min_listing_days
         self._entries: list[dict[str, str]] = []
         self._load_yaml()
-        self._backfill_missing_data()
 
     # -- YAML I/O --
 
@@ -83,13 +82,11 @@ class StockPoolManager:
 
     # -- Data backfill --
 
-    def _backfill_missing_data(self) -> None:
+    def backfill_missing_data(self) -> None:
         """Check watchlist stocks for missing or stale data and pull if needed."""
-        from pangu.utils import date_str
         from pangu.tz import today_str
 
         today = today_str()
-        cutoff = date_str(days_ago=7)
 
         for symbol in self.get_watchlist():
             bars = self._storage.load_daily_bars(symbol, "2000-01-01", today)
@@ -98,12 +95,26 @@ class StockPoolManager:
                 self._init_stock_data(symbol)
             else:
                 last_date = str(bars["date"].iloc[-1])
-                if last_date < cutoff:
+                if self._is_data_stale(last_date, today):
                     logger.info(
                         "Stale data for %s (last: %s), backfilling…",
                         symbol, last_date,
                     )
                     self._init_stock_data(symbol)
+
+    def _is_data_stale(self, last_date: str, today: str) -> bool:
+        """Return True if there are missed trading days since *last_date*.
+
+        Uses the trading calendar when available; falls back to a 3-day
+        natural-day gap when the calendar is empty.
+        """
+        from pangu.utils import date_str
+
+        result = self._storage.has_trading_day_between(last_date, today)
+        if result is not None:
+            return result
+        # Calendar empty — fallback to 3 natural days
+        return last_date < date_str(days_ago=3)
 
     # -- Data initialization --
 
@@ -173,16 +184,85 @@ class StockPoolManager:
         """Return symbols from watchlist.yaml."""
         return [e["symbol"] for e in self._entries if "symbol" in e]
 
+    def resolve_stock(self, input_str: str) -> list[dict[str, str]]:
+        """Resolve a symbol or name to stock info.
+
+        Returns list of ``{"symbol": ..., "name": ..., "sector": ...}`` candidates.
+        Looks up from DB index_constituents first, then watchlist YAML.
+        """
+        input_str = input_str.strip()
+        results: list[dict[str, str]] = []
+
+        # Try DB index_constituents
+        try:
+            rows = self._storage.load_index_constituents("000300")
+        except Exception:  # noqa: BLE001
+            rows = []
+
+        for r in rows:
+            sym = r.get("symbol", "")
+            name = r.get("name", "")
+            sector = r.get("sector", "")
+            if sym == input_str or name == input_str:
+                results.append({"symbol": sym, "name": name, "sector": sector})
+
+        # Also check watchlist YAML entries
+        for e in self._entries:
+            sym = e.get("symbol", "")
+            name = e.get("name", "")
+            sector = e.get("sector", "")
+            if sym == input_str or name == input_str:
+                if not any(r["symbol"] == sym for r in results):
+                    results.append({"symbol": sym, "name": name, "sector": sector})
+
+        # Fuzzy match by name if exact match found nothing
+        if not results:
+            for r in rows:
+                if input_str in r.get("name", ""):
+                    results.append({
+                        "symbol": r.get("symbol", ""),
+                        "name": r.get("name", ""),
+                        "sector": r.get("sector", ""),
+                    })
+        return results
+
     def add_to_watchlist(
         self,
-        symbol: str,
+        input_str: str,
         *,
         name: str = "",
         sector: str = "",
-    ) -> None:
-        """Add *symbol* to watchlist, persist to YAML, and pull initial data."""
+    ) -> str | None:
+        """Add a stock to watchlist by symbol or name. Returns added symbol, or None.
+
+        If *name*/*sector* are not provided, attempts to auto-resolve from DB.
+        """
+        input_str = input_str.strip()
+
+        # If input looks like a symbol (6 digits), use it directly
+        if input_str.isdigit() and len(input_str) == 6:
+            symbol = input_str
+            # Try to auto-fill name/sector from DB
+            if not name or not sector:
+                candidates = self.resolve_stock(symbol)
+                if candidates:
+                    name = name or candidates[0].get("name", "")
+                    sector = sector or candidates[0].get("sector", "")
+        else:
+            # Input is a name, resolve to symbol
+            candidates = self.resolve_stock(input_str)
+            if not candidates:
+                logger.warning("Could not resolve '%s' to a symbol", input_str)
+                return None
+            if len(candidates) > 1:
+                logger.info("Multiple matches for '%s': %s", input_str, candidates)
+            symbol = candidates[0]["symbol"]
+            name = name or candidates[0].get("name", "")
+            sector = sector or candidates[0].get("sector", "")
+
         if symbol in self.get_watchlist():
-            return
+            logger.info("%s already in watchlist", symbol)
+            return symbol
 
         entry: dict[str, str] = {"symbol": symbol}
         if name:
@@ -192,13 +272,25 @@ class StockPoolManager:
         self._entries.append(entry)
         self._save_yaml()
 
-        logger.info("Added %s to watchlist, starting data init…", symbol)
+        logger.info("Added %s (%s) to watchlist, starting data init…", symbol, name)
         self._init_stock_data(symbol)
+        return symbol
 
-    def remove_from_watchlist(self, symbol: str) -> None:
-        """Remove *symbol* from watchlist YAML (historical data is kept)."""
-        self._entries = [e for e in self._entries if e.get("symbol") != symbol]
+    def remove_from_watchlist(self, input_str: str) -> str | None:
+        """Remove a stock from watchlist by symbol or name. Returns removed symbol, or None."""
+        input_str = input_str.strip()
+        target = None
+        for e in self._entries:
+            if e.get("symbol") == input_str or e.get("name") == input_str:
+                target = e.get("symbol")
+                break
+        if target is None:
+            logger.warning("'%s' not found in watchlist", input_str)
+            return None
+        self._entries = [e for e in self._entries if e.get("symbol") != target]
         self._save_yaml()
+        logger.info("Removed %s from watchlist", target)
+        return target
 
     def get_factor_selected(self) -> list[str]:
         """Return factor-screened symbols from SQLite factor_pool (top-N)."""

@@ -20,6 +20,7 @@ dependencies = [
     "loguru>=0.7",
     "aiohttp>=3.9",
     "lark-oapi>=1.4",
+    "click>=8.0",
 ]
 
 [project.optional-dependencies]

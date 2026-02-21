@@ -129,14 +129,18 @@ class AkShareMarketDataProvider(ThrottleMixin):
             df = self._clean_hist(df)
             return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
 
-        # Persist new data if any
-        if df is not None and not df.empty:
+        # df is None means API call failed — don't touch sync_log
+        if df is None:
+            return self._storage.load_daily_bars(symbol, start, end)
+
+        # API succeeded (may be empty on non-trading days)
+        if not df.empty:
             df = self._clean_hist(df)
             self._storage.save_daily_bars(symbol, df)
 
-        sync_date = df["date"].max() if (df is not None and not df.empty) else end
         self._storage.update_sync_log(
-            symbol, "daily_bars", "ok", "akshare", last_date=sync_date,
+            symbol, "daily_bars", "ok", "akshare",
+            last_date=df["date"].max() if not df.empty else end,
         )
         return self._storage.load_daily_bars(symbol, start, end)
 
