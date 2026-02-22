@@ -18,6 +18,15 @@ _ACTION_LABEL = {"BUY": "买入", "SELL": "卖出"}
 
 async def verify_signals(c: Components) -> None:
     """Verify 1/3/5 trading-day old signals against actual closing prices."""
+    try:
+        await _verify_signals_impl(c)
+    except Exception:  # noqa: BLE001
+        logger.error("[T6] Signal verification failed", exc_info=True)
+        await c.alert("[T6] 信号验证任务异常，请检查日志")
+
+
+async def _verify_signals_impl(c: Components) -> None:
+    """Inner implementation of signal verification."""
     today = today_str()
     total_verified = 0
     # {lookback: [{"name", "symbol", "action", "return_pct", "correct", "signal_date"}, ...]}

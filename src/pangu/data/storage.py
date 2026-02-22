@@ -611,6 +611,20 @@ class Database:
             "latest_bar": latest_bar[0] if latest_bar else "N/A",
         }
 
+    def get_latest_bar_date(self) -> str | None:
+        """Return the most recent date in daily_bars, or None."""
+        with self._lock:
+            row = self._conn.execute("SELECT MAX(date) FROM daily_bars").fetchone()
+        return row[0] if row and row[0] else None
+
+    def get_latest_news_timestamp(self) -> str | None:
+        """Return the most recent news_items timestamp, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(timestamp) FROM news_items"
+            ).fetchone()
+        return row[0] if row and row[0] else None
+
     # ------------------------------------------------------------------
     # fundamentals
     # ------------------------------------------------------------------

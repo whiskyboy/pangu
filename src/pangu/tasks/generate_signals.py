@@ -24,9 +24,21 @@ _LLM_FAIL_THRESHOLD = 0.5
 
 async def generate_signals(c: Components) -> None:
     """Full signal pipeline: factors → evidence → LLM judge → push."""
+    try:
+        await _generate_signals_impl(c)
+    except Exception:  # noqa: BLE001
+        logger.error("[T4] Signal generation failed", exc_info=True)
+        await c.alert("[T4] 信号生成任务异常，请检查日志")
+
+
+async def _generate_signals_impl(c: Components) -> None:
+    """Inner implementation of signal generation pipeline."""
     logger.info("[T4] Generating signals...")
     today = today_str()
     start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
+
+    # 0. Data freshness checks
+    await _check_data_freshness(c, today)
 
     # 1. Get stock pools
     watchlist = c.stock_pool.get_watchlist()
@@ -201,6 +213,34 @@ async def generate_signals(c: Components) -> None:
             logger.warning("[T4] Push failed for %s", signal.symbol, exc_info=True)
 
     logger.info("[T4] Done — %d signals, %d pushed", len(signals), len(to_push))
+
+
+async def _check_data_freshness(c: Components, today: str) -> None:
+    """Alert if key data sources are stale."""
+    from datetime import timedelta
+
+    from pangu.tz import now as tz_now
+
+    # K-line freshness: warn if latest bar is >1 trading day behind
+    latest_bar = c.db.get_latest_bar_date()
+    if latest_bar is not None:
+        missed = c.db.has_trading_day_between(latest_bar, today)
+        if missed is True:
+            await c.alert(f"[T4] K线数据可能过期: 最新日期 {latest_bar}，请检查 T3 是否正常")
+
+    # News freshness: warn if no news in 24 hours
+    latest_news = c.db.get_latest_news_timestamp()
+    if latest_news is None:
+        await c.alert("[T4] 数据库中无新闻数据，请检查 T2 是否正常")
+    else:
+        try:
+            from datetime import datetime
+
+            news_dt = datetime.fromisoformat(latest_news)
+            if tz_now() - news_dt > timedelta(hours=24):
+                await c.alert("[T4] 24小时内无新闻更新，请检查 T2 是否正常")
+        except (ValueError, TypeError):
+            pass
 
 
 def _print_signal_summary(signals: list[TradeSignal]) -> None:

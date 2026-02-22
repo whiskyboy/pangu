@@ -19,6 +19,15 @@ _BARS_FAIL_THRESHOLD = 0.5
 
 async def sync_domestic_market(c: Components) -> None:
     """Sync daily K-lines + fundamentals for watchlist + CSI300."""
+    try:
+        await _sync_domestic_market_impl(c)
+    except Exception:  # noqa: BLE001
+        logger.error("[T3] Domestic market sync failed", exc_info=True)
+        await c.alert("[T3] 国内行情同步任务异常，请检查日志")
+
+
+async def _sync_domestic_market_impl(c: Components) -> None:
+    """Inner implementation of domestic market sync."""
     logger.info("[T3] Syncing domestic market...")
     pool = c.stock_pool.get_factor_universe()
     today = today_str()
