@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from pangu.data.market.protocol import MarketDataProvider
     from pangu.data.news.protocol import NewsDataProvider
     from pangu.data.storage import Database
+    from pangu.models import StockMeta
 
 logger = logging.getLogger(__name__)
 
@@ -292,27 +293,6 @@ class StockPoolManager:
         logger.info("Removed %s from watchlist", target)
         return target
 
-    def get_factor_selected(self) -> list[str]:
-        """Return factor-screened symbols from SQLite factor_pool (top-N)."""
-        try:
-            from pangu.tz import today_str
-            pool = self._storage.load_factor_pool(today_str())
-            if pool.empty:
-                pool = self._storage.load_factor_pool_latest()
-            if pool.empty:
-                return []
-            # Read top_n from config or default to 3
-            top_n = 3
-            try:
-                from pangu.config import get_config
-                cfg = get_config()
-                top_n = cfg.get("strategy", {}).get("top_n", 3)
-            except Exception:  # noqa: BLE001
-                pass
-            return pool[pool["rank"] <= top_n]["symbol"].tolist()
-        except Exception:  # noqa: BLE001
-            return []
-
     # -- Stock filtering --
 
     def _filter_stocks(self, symbols: list[str]) -> list[str]:
@@ -460,34 +440,42 @@ class StockPoolManager:
         rows = self._storage.load_index_constituents("000300")
         return [r["symbol"] for r in rows]
 
-    def get_name_sector_maps(self) -> tuple[dict[str, str], dict[str, str]]:
-        """Return unified (name_map, sector_map) from DB + watchlist YAML.
+    def get_stock_metadata(self) -> dict[str, StockMeta]:
+        """Return symbol → StockMeta from DB + watchlist YAML.
 
         Priority: DB (index_constituents) first, then watchlist YAML fills
         any gaps for stocks not in DB (e.g. watchlist stocks outside CSI300).
         """
-        name_map: dict[str, str] = {}
-        sector_map: dict[str, str] = {}
+        from pangu.models import StockMeta
+
+        meta: dict[str, StockMeta] = {}
         # 1. DB constituents (CSI300 etc.)
         for row in self._storage.load_index_constituents("000300"):
             sym = row["symbol"]
-            if row.get("name"):
-                name_map[sym] = row["name"]
-            if row.get("sector"):
-                sector_map[sym] = row["sector"]
+            meta[sym] = StockMeta(
+                name=row.get("name") or "",
+                sector=row.get("sector") or "",
+            )
         # 2. Watchlist YAML fills gaps
         for entry in self._entries:
             sym = entry.get("symbol", "")
             if not sym:
                 continue
-            if sym not in name_map and entry.get("name"):
-                name_map[sym] = entry["name"]
-            if sym not in sector_map and entry.get("sector"):
-                sector_map[sym] = entry["sector"]
-        return name_map, sector_map
+            if sym not in meta:
+                meta[sym] = StockMeta(
+                    name=entry.get("name") or "",
+                    sector=entry.get("sector") or "",
+                )
+            else:
+                m = meta[sym]
+                if not m.name and entry.get("name"):
+                    m.name = entry["name"]
+                if not m.sector and entry.get("sector"):
+                    m.sector = entry["sector"]
+        return meta
 
-    def get_factor_universe(self) -> list[str]:
-        """Return watchlist + CSI300 (deduplicated) for factor computation."""
+    def get_all_symbols(self) -> list[str]:
+        """Return all tracked symbols (watchlist + CSI300, deduplicated)."""
         seen: set[str] = set()
         result: list[str] = []
         for sym in self.get_watchlist() + self._get_csi300_stocks():

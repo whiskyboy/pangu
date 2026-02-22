@@ -42,7 +42,7 @@ async def _generate_signals_impl(c: Components) -> None:
 
     # 1. Get stock pools
     watchlist = c.stock_pool.get_watchlist()
-    factor_universe = c.stock_pool.get_factor_universe()
+    factor_universe = c.stock_pool.get_all_symbols()
     logger.info("[T4] Factor universe: %d stocks, watchlist: %d",
                 len(factor_universe), len(watchlist))
 
@@ -98,13 +98,13 @@ async def _generate_signals_impl(c: Components) -> None:
         prev_score = float(prev_row["score"].iloc[0]) if not prev_row.empty else None
         status_map[sym] = (SignalStatus.EXIT, 0, prev_score)
 
-    # 7. Load name + sector map (unified from DB + watchlist YAML)
-    name_map, sector_map = c.stock_pool.get_name_sector_maps()
+    # 7. Load stock metadata (unified from DB + watchlist YAML)
+    stock_meta = c.stock_pool.get_stock_metadata()
 
     # 8. Build factor matrix
     factor_matrix = c.factor_strategy._build_factor_matrix(
         factor_universe, tech_df, fund_df, macro_factors,
-        {s: sector_map.get(s, "") for s in factor_universe},
+        {s: stock_meta[s].sector if s in stock_meta else "" for s in factor_universe},
     )
 
     # 9. Build LLM candidates (factor-selected signals + watchlist + EXIT)
@@ -150,7 +150,7 @@ async def _generate_signals_impl(c: Components) -> None:
 
     evidence_pool = c.judge_engine.build_evidence_pool(
         candidate_symbols, pool_df, factor_matrix,
-        status_map, tech_df, name_map, stock_news_map,
+        status_map, tech_df, stock_meta, stock_news_map,
         factor_signal_map=factor_signal_map,
     )
     logger.info("[T4] Evidence pool: %d stocks", len(evidence_pool))

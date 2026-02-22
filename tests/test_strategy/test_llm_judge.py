@@ -492,12 +492,13 @@ class TestBuildEvidencePool:
             "600519": pd.DataFrame({"close": [1850.0]}),
             "000858": pd.DataFrame({"close": [150.0]}),
         }
-        name_map = {"600519": "贵州茅台", "000858": "五粮液"}
+        from pangu.models import StockMeta
+        stock_meta = {"600519": StockMeta(name="贵州茅台"), "000858": StockMeta(name="五粮液")}
         stock_news_map = {"600519": ([], []), "000858": ([], [])}
 
         result = engine.build_evidence_pool(
             ["600519", "000858"], pool_df, factor_matrix,
-            status_map, tech_df, name_map, stock_news_map,
+            status_map, tech_df, stock_meta, stock_news_map,
         )
         assert len(result) == 2
         assert result[0]["symbol"] == "600519"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from pangu.models import StockMeta
+
 
 class StockPool(Protocol):
     """Interface for stock pool management (watchlist + dynamic pools)."""
@@ -20,6 +22,10 @@ class StockPool(Protocol):
         """Remove a symbol (historical data is kept)."""
         ...
 
-    def get_factor_selected(self) -> list[str]:
-        """Return symbols selected by factor screening."""
+    def get_all_symbols(self) -> list[str]:
+        """Return all tracked symbols (watchlist + CSI300, deduplicated)."""
+        ...
+
+    def get_stock_metadata(self) -> dict[str, StockMeta]:
+        """Return symbol → StockMeta mapping from DB + watchlist."""
         ...

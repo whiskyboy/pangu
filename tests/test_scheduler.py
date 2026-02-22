@@ -50,8 +50,9 @@ def mock_components() -> Components:
     stock_pool = MagicMock()
     stock_pool.get_watchlist.return_value = ["600519"]
     stock_pool.get_active_pool.return_value = ["600519"]
-    stock_pool.get_factor_universe.return_value = ["600519"]
-    stock_pool.get_name_sector_maps.return_value = ({"600519": "贵州茅台"}, {"600519": "白酒"})
+    stock_pool.get_all_symbols.return_value = ["600519"]
+    from pangu.models import StockMeta
+    stock_pool.get_stock_metadata.return_value = {"600519": StockMeta(name="贵州茅台", sector="白酒")}
     stock_pool.sync_trading_calendar.return_value = 0
     stock_pool.sync_csi300_constituents = MagicMock(return_value=0)
 
@@ -214,7 +215,7 @@ class TestT3:
     @pytest.mark.asyncio
     async def test_syncs_bars_and_fundamentals(self, scheduler: TradingScheduler) -> None:
         await scheduler.sync_domestic_market()
-        scheduler._c.stock_pool.get_factor_universe.assert_called_once()
+        scheduler._c.stock_pool.get_all_symbols.assert_called_once()
         scheduler._c.market.get_daily_bars.assert_called()
         scheduler._c.fundamental.get_valuation.assert_called()
 
@@ -249,7 +250,7 @@ class TestT4:
 
         await scheduler.generate_signals()
 
-        scheduler._c.stock_pool.get_factor_universe.assert_called()
+        scheduler._c.stock_pool.get_all_symbols.assert_called()
         scheduler._c.db.save_trade_signal.assert_called_once()
         scheduler._c.factor_strategy.generate_signals.assert_called_once()
 

@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from pangu.models import Action, NewsItem, SignalStatus, TradeSignal
+from pangu.models import Action, NewsItem, SignalStatus, StockMeta, TradeSignal
 from pangu.strategy.llm.client import LLMClient
 from pangu.strategy.llm.prompts import (
     TRADING_JUDGE_SYSTEM_PROMPT,
@@ -143,7 +143,7 @@ class LLMJudgeEngineImpl:
         factor_matrix: pd.DataFrame,
         status_map: dict[str, tuple[SignalStatus, int, float | None]],
         tech_df: dict[str, pd.DataFrame],
-        name_map: dict[str, str],
+        stock_meta: dict[str, StockMeta],
         stock_news_map: dict[str, tuple[list, list]],
         *,
         factor_signal_map: dict[str, str] | None = None,
@@ -157,7 +157,7 @@ class LLMJudgeEngineImpl:
         factor_matrix : full factor matrix indexed by symbol
         status_map : symbol → (SignalStatus, days_in_top_n, prev_factor_score)
         tech_df : symbol → computed tech DataFrame (with 'close' column)
-        name_map : symbol → display name
+        stock_meta : symbol → StockMeta (name, sector)
         stock_news_map : symbol → (stock_news, announcements)
         factor_signal_map : symbol → factor signal label (BUY/EXIT/WATCHLIST)
         """
@@ -181,7 +181,7 @@ class LLMJudgeEngineImpl:
 
             evidence_pool.append({
                 "symbol": sym,
-                "name": name_map.get(sym, sym),
+                "name": stock_meta[sym].name if sym in stock_meta else sym,
                 "factor_score": f_score,
                 "factor_rank": f_rank,
                 "factor_details": f_details,

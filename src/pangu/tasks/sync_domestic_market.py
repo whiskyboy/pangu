@@ -29,7 +29,7 @@ async def sync_domestic_market(c: Components) -> None:
 async def _sync_domestic_market_impl(c: Components) -> None:
     """Inner implementation of domestic market sync."""
     logger.info("[T3] Syncing domestic market...")
-    pool = c.stock_pool.get_factor_universe()
+    pool = c.stock_pool.get_all_symbols()
     today = today_str()
     start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
     total = len(pool)

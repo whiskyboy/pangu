@@ -71,8 +71,11 @@ class _StubStockPool:
     def remove_from_watchlist(self, symbol: str) -> None:
         pass
 
-    def get_factor_selected(self) -> list[str]:
+    def get_all_symbols(self) -> list[str]:
         return []
+
+    def get_stock_metadata(self) -> dict:
+        return {}
 
 
 class _StubFactorEngine:
@@ -320,7 +323,8 @@ class TestStubInvocation:
         assert isinstance(sp.get_watchlist(), list)
         sp.add_to_watchlist("000001")
         sp.remove_from_watchlist("000001")
-        assert isinstance(sp.get_factor_selected(), list)
+        assert isinstance(sp.get_all_symbols(), list)
+        assert isinstance(sp.get_stock_metadata(), dict)
 
     def test_factor_engine_stubs_return(self) -> None:
         fe = _StubFactorEngine()

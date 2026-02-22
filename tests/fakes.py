@@ -243,8 +243,12 @@ class FakeStockPool:
         if symbol in self._symbols:
             self._symbols.remove(symbol)
 
-    def get_factor_selected(self) -> list[str]:
-        return []
+    def get_all_symbols(self) -> list[str]:
+        return list(self._symbols)
+
+    def get_stock_metadata(self) -> dict:
+        from pangu.models import StockMeta
+        return {s: StockMeta(name=s, sector="") for s in self._symbols}
 
 
 # ---------------------------------------------------------------------------

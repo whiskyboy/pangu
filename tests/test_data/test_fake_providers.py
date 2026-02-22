@@ -144,8 +144,12 @@ class TestFakeStockPool:
     def test_remove_nonexistent_no_error(self, fake_stock_pool: FakeStockPool) -> None:
         fake_stock_pool.remove_from_watchlist("999999")  # should not raise
 
-    def test_factor_selected_empty(self, fake_stock_pool: FakeStockPool) -> None:
-        assert fake_stock_pool.get_factor_selected() == []
+    def test_get_all_symbols(self, fake_stock_pool: FakeStockPool) -> None:
+        assert fake_stock_pool.get_all_symbols() == ["600519", "000858", "300750"]
+
+    def test_get_stock_metadata(self, fake_stock_pool: FakeStockPool) -> None:
+        meta = fake_stock_pool.get_stock_metadata()
+        assert isinstance(meta, dict)
 
     def test_watchlist_returns_copy(self, fake_stock_pool: FakeStockPool) -> None:
         wl1 = fake_stock_pool.get_watchlist()

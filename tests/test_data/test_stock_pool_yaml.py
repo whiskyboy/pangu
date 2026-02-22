@@ -446,8 +446,8 @@ class TestCSI300:
         stocks = pool._get_csi300_stocks()
         assert set(stocks) == {"600519", "000858"}
 
-    def test_get_factor_universe(self, tmp_yaml: Path, db: Database) -> None:
-        """Factor universe = watchlist + CSI300, deduplicated."""
+    def test_get_all_symbols(self, tmp_yaml: Path, db: Database) -> None:
+        """All symbols = watchlist + CSI300, deduplicated."""
         db.save_index_constituents([
             {"symbol": "601899", "name": "紫金矿业", "index_code": "000300",
              "sector": "有色金属", "updated_date": "2026-02-20"},
@@ -456,12 +456,12 @@ class TestCSI300:
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        universe = pool.get_factor_universe()
+        universe = pool.get_all_symbols()
         # watchlist: [601899, 600967], csi300: [601899, 600519]
         # merged: [601899, 600967, 600519] — 601899 deduped
         assert universe == ["601899", "600967", "600519"]
 
-    def test_get_name_sector_maps_unified(self, tmp_yaml: Path, db: Database) -> None:
+    def test_get_stock_metadata_unified(self, tmp_yaml: Path, db: Database) -> None:
         """DB provides CSI300 names/sectors; YAML fills gaps for watchlist-only stocks."""
         db.save_index_constituents([
             {"symbol": "601899", "name": "紫金矿业DB", "index_code": "000300",
@@ -471,20 +471,22 @@ class TestCSI300:
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        name_map, sector_map = pool.get_name_sector_maps()
+        meta = pool.get_stock_metadata()
         # 601899 in both DB and YAML — DB wins
-        assert name_map["601899"] == "紫金矿业DB"
-        assert sector_map["601899"] == "工业金属"
+        assert meta["601899"].name == "紫金矿业DB"
+        assert meta["601899"].sector == "工业金属"
         # 600519 only in DB
-        assert name_map["600519"] == "贵州茅台"
+        assert meta["600519"].name == "贵州茅台"
         # 600967 only in YAML — YAML fills gap
-        assert name_map["600967"] == "内蒙一机"
-        assert sector_map["600967"] == "军工"
+        assert meta["600967"].name == "内蒙一机"
+        assert meta["600967"].sector == "军工"
 
-    def test_get_name_sector_maps_empty_db(self, tmp_yaml: Path, db: Database) -> None:
+    def test_get_stock_metadata_empty_db(self, tmp_yaml: Path, db: Database) -> None:
         """When DB has no constituents, falls back to YAML only."""
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        name_map, sector_map = pool.get_name_sector_maps()
-        assert name_map == {"601899": "紫金矿业", "600967": "内蒙一机"}
-        assert sector_map == {"601899": "有色金属", "600967": "军工"}
+        meta = pool.get_stock_metadata()
+        assert meta["601899"].name == "紫金矿业"
+        assert meta["601899"].sector == "有色金属"
+        assert meta["600967"].name == "内蒙一机"
+        assert meta["600967"].sector == "军工"

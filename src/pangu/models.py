@@ -31,6 +31,14 @@ class Region(Enum):
     GLOBAL = "global"
 
 
+@dataclass
+class StockMeta:
+    """Metadata for a single stock symbol."""
+
+    name: str = ""
+    sector: str = ""
+
+
 class NewsCategory(str, Enum):
     """Distinguishes news articles from company announcements."""
 
