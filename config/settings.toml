@@ -8,9 +8,11 @@ global_market_mapping_path = "config/global_market_mapping.yaml"
 [stock_pool]
 # 过滤上市不满 N 天的新股 (避免数据不足导致因子计算异常)
 min_listing_days = 60
+# 因子池覆盖的指数代码 (000300=沪深300, 000905=中证500)
+indices = ["000300", "000905"]
 
 [strategy]
-# CSI300 因子排名取 Top-N 进入 LLM 综合决策
+# 因子排名取 Top-N 进入 LLM 综合决策
 top_n = 10
 buy_threshold = 0.7
 sell_threshold = 0.3
@@ -38,5 +40,5 @@ signal_verify_time = "16:00"
 news_poll_start_time = "07:00"
 news_poll_end_time = "20:00"
 news_poll_interval_minutes = 60
-# 每月几号同步交易日历和 CSI300 成分股
+# 每月几号同步交易日历和指数成分股
 calendar_sync_day = 1

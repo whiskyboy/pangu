@@ -23,9 +23,13 @@ class StockPool(Protocol):
         ...
 
     def get_all_symbols(self) -> list[str]:
-        """Return all tracked symbols (watchlist + CSI300, deduplicated)."""
+        """Return all tracked symbols (watchlist + configured indices, deduplicated)."""
         ...
 
     def get_stock_metadata(self) -> dict[str, StockMeta]:
         """Return symbol → StockMeta mapping from DB + watchlist."""
+        ...
+
+    def sync_index_constituents(self) -> int:
+        """Sync configured index constituents from upstream data source."""
         ...

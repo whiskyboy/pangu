@@ -1,4 +1,8 @@
-"""YAML-backed StockPoolManager — PRD §4.1.4."""
+"""YAML-backed StockPoolManager — PRD §4.1.4.
+
+Supports configurable indices (e.g. CSI300 + CSI500) via the ``indices``
+parameter, plus a manually curated watchlist from YAML.
+"""
 
 from __future__ import annotations
 
@@ -48,6 +52,7 @@ class StockPoolManager:
         fundamental_provider: FundamentalDataProvider,
         *,
         min_listing_days: int = 60,
+        indices: list[str] | None = None,
     ) -> None:
         self._path = Path(watchlist_path)
         self._storage = storage
@@ -55,6 +60,7 @@ class StockPoolManager:
         self._news = news_provider
         self._fundamental = fundamental_provider
         self._min_listing_days = min_listing_days
+        self._indices = indices or ["000300"]
         self._entries: list[dict[str, str]] = []
         self._load_yaml()
 
@@ -196,7 +202,7 @@ class StockPoolManager:
 
         # Try DB index_constituents
         try:
-            rows = self._storage.load_index_constituents("000300")
+            rows = self._storage.load_all_index_constituents()
         except Exception:  # noqa: BLE001
             rows = []
 
@@ -378,17 +384,16 @@ class StockPoolManager:
         logger.info("sync_trading_calendar: %d new dates saved (%d total)", count, len(dates))
         return count
 
-    # -- CSI300 constituents --
+    # -- Index constituents --
 
-    def sync_csi300_constituents(self) -> int:
-        """Fetch CSI300 constituents and their sector from AkShare.
+    def sync_index_constituents(self) -> int:
+        """Fetch constituents for all configured indices from AkShare.
 
-        Uses ``index_stock_cons("000300")`` for the constituent list and
-        ``stock_individual_info_em(symbol)`` per stock for the sector
-        ("行业") field.  Results are persisted in the ``index_constituents``
-        DB table.
+        Iterates over ``self._indices``, calls ``index_stock_cons(symbol=code)``
+        for each, enriches with sector via ``stock_individual_info_em``, and
+        persists to the ``index_constituents`` DB table.
 
-        Returns the number of rows saved.
+        Returns the total number of rows saved.
         """
         import akshare as ak
 
@@ -396,66 +401,76 @@ class StockPoolManager:
         from pangu.tz import today_str
 
         circuit = CircuitBreaker()
-        df = retry_call(
-            lambda: ak.index_stock_cons(symbol="000300"),
-            circuit=circuit,
-        )
-        if df is None or df.empty:
-            logger.warning("sync_csi300: no constituents returned")
-            return 0
-
         today = today_str()
-        rows: list[dict[str, str]] = []
-        total = len(df)
-        for idx, (_, row) in enumerate(df.iterrows(), 1):
-            symbol = str(row["品种代码"])
-            name = str(row["品种名称"])
-            sector = ""
-            try:
-                info_df = retry_call(
-                    lambda s=symbol: ak.stock_individual_info_em(symbol=s),
-                    circuit=circuit,
-                )
-                if info_df is not None and not info_df.empty:
-                    info_map = {str(r["item"]): str(r["value"]) for _, r in info_df.iterrows()}
-                    sector = info_map.get("行业", "")
-            except Exception:  # noqa: BLE001
-                logger.warning("sync_csi300: sector lookup failed for %s", symbol)
-            rows.append({
-                "symbol": symbol,
-                "name": name,
-                "index_code": "000300",
-                "sector": sector,
-                "updated_date": today,
-            })
-            if idx % 50 == 0:
-                logger.info("sync_csi300: %d/%d stocks processed", idx, total)
+        all_rows: list[dict[str, str]] = []
 
-        count = self._storage.save_index_constituents(rows)
-        logger.info("sync_csi300: %d constituents saved", count)
+        for index_code in self._indices:
+            df = retry_call(
+                lambda code=index_code: ak.index_stock_cons(symbol=code),
+                circuit=circuit,
+            )
+            if df is None or df.empty:
+                logger.warning("sync_index(%s): no constituents returned", index_code)
+                continue
+
+            total = len(df)
+            for idx, (_, row) in enumerate(df.iterrows(), 1):
+                symbol = str(row["品种代码"])
+                name = str(row["品种名称"])
+                sector = ""
+                try:
+                    info_df = retry_call(
+                        lambda s=symbol: ak.stock_individual_info_em(symbol=s),
+                        circuit=circuit,
+                    )
+                    if info_df is not None and not info_df.empty:
+                        info_map = {str(r["item"]): str(r["value"]) for _, r in info_df.iterrows()}
+                        sector = info_map.get("行业", "")
+                except Exception:  # noqa: BLE001
+                    logger.warning("sync_index(%s): sector lookup failed for %s", index_code, symbol)
+                all_rows.append({
+                    "symbol": symbol,
+                    "name": name,
+                    "index_code": index_code,
+                    "sector": sector,
+                    "updated_date": today,
+                })
+                if idx % 50 == 0:
+                    logger.info("sync_index(%s): %d/%d stocks processed", index_code, idx, total)
+
+        count = self._storage.save_index_constituents(all_rows)
+        logger.info("sync_index: %d constituents saved across %d indices", count, len(self._indices))
         return count
 
-    def _get_csi300_stocks(self) -> list[str]:
-        """Return CSI300 constituent symbols from DB."""
-        rows = self._storage.load_index_constituents("000300")
-        return [r["symbol"] for r in rows]
+    def _get_index_stocks(self) -> list[str]:
+        """Return constituent symbols from all configured indices (deduplicated)."""
+        rows = self._storage.load_all_index_constituents()
+        seen: set[str] = set()
+        result: list[str] = []
+        for r in rows:
+            sym = r["symbol"]
+            if sym not in seen:
+                seen.add(sym)
+                result.append(sym)
+        return result
 
     def get_stock_metadata(self) -> dict[str, StockMeta]:
         """Return symbol → StockMeta from DB + watchlist YAML.
 
         Priority: DB (index_constituents) first, then watchlist YAML fills
-        any gaps for stocks not in DB (e.g. watchlist stocks outside CSI300).
+        any gaps for stocks not in DB (e.g. watchlist stocks outside indices).
         """
         from pangu.models import StockMeta
 
         meta: dict[str, StockMeta] = {}
-        # 1. DB constituents (CSI300 etc.)
-        for row in self._storage.load_index_constituents("000300"):
+        # 1. DB constituents (all configured indices)
+        for row in self._storage.load_all_index_constituents():
             sym = row["symbol"]
-            meta[sym] = StockMeta(
-                name=row.get("name") or "",
-                sector=row.get("sector") or "",
-            )
+            if sym not in meta:
+                meta[sym] = StockMeta(
+                    name=row.get("name") or "",
+                    sector=row.get("sector") or "",
+                )
         # 2. Watchlist YAML fills gaps
         for entry in self._entries:
             sym = entry.get("symbol", "")
@@ -475,10 +490,10 @@ class StockPoolManager:
         return meta
 
     def get_all_symbols(self) -> list[str]:
-        """Return all tracked symbols (watchlist + CSI300, deduplicated)."""
+        """Return all tracked symbols (watchlist + configured indices, deduplicated)."""
         seen: set[str] = set()
         result: list[str] = []
-        for sym in self.get_watchlist() + self._get_csi300_stocks():
+        for sym in self.get_watchlist() + self._get_index_stocks():
             if sym not in seen:
                 seen.add(sym)
                 result.append(sym)

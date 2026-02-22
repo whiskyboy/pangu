@@ -1,4 +1,4 @@
-"""T3: Sync daily K-lines + fundamentals for watchlist + CSI300."""
+"""T3: Sync daily K-lines + fundamentals for the full stock pool."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ _BARS_FAIL_THRESHOLD = 0.5
 
 
 async def sync_domestic_market(c: Components) -> None:
-    """Sync daily K-lines + fundamentals for watchlist + CSI300."""
+    """Sync daily K-lines + fundamentals for the full stock pool."""
     try:
         await _sync_domestic_market_impl(c)
     except Exception:  # noqa: BLE001

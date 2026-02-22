@@ -210,21 +210,21 @@ class TradingScheduler:
           T5 calendar → T3 domestic (K-lines + fundamentals) →
           T1 global → T2 news → T4 signals
 
-        T5 is skipped if CSI300 constituents were synced within the last 7 days.
+        T5 is skipped if index constituents were synced within the last 7 days.
         """
         logger.info("=== run_once: executing all tasks ===")
 
-        # Skip T5 if CSI300 recently synced
+        # Skip T5 if index constituents recently synced
         skip_t5 = False
         try:
-            rows = self._c.db.load_index_constituents("000300")
+            rows = self._c.db.load_all_index_constituents()
             if rows and isinstance(rows, list) and len(rows) > 0:
                 import datetime as _dt_mod
                 latest = max(r.get("updated_date", "") for r in rows)
                 latest_date = _dt_mod.date.fromisoformat(latest)
                 days_ago = (_now().date() - latest_date).days
                 if days_ago <= 7:
-                    logger.info("[T5] CSI300 synced %d day(s) ago, skipping", days_ago)
+                    logger.info("[T5] Index constituents synced %d day(s) ago, skipping", days_ago)
                     skip_t5 = True
         except Exception:  # noqa: BLE001
             pass

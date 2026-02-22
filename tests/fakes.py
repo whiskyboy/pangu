@@ -250,6 +250,9 @@ class FakeStockPool:
         from pangu.models import StockMeta
         return {s: StockMeta(name=s, sector="") for s in self._symbols}
 
+    def sync_index_constituents(self) -> int:
+        return 0
+
 
 # ---------------------------------------------------------------------------
 # FakeLLMJudgeEngine  (was in pangu.strategy.llm_engine)

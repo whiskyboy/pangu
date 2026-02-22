@@ -89,6 +89,7 @@ def build_components() -> tuple[Components, str, Settings]:
         news_provider=news,
         fundamental_provider=fundamental,
         min_listing_days=pool_cfg.get("min_listing_days", 60),
+        indices=pool_cfg.get("indices"),
     )
 
     # Sector mapping

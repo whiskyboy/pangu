@@ -843,6 +843,19 @@ class Database:
             for r in rows
         ]
 
+    def load_all_index_constituents(self) -> list[dict]:
+        """Load constituents for all index codes."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT symbol, name, index_code, sector, updated_date "
+                "FROM index_constituents ORDER BY symbol",
+            ).fetchall()
+        return [
+            {"symbol": r[0], "name": r[1], "index_code": r[2],
+             "sector": r[3], "updated_date": r[4]}
+            for r in rows
+        ]
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

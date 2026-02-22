@@ -77,6 +77,9 @@ class _StubStockPool:
     def get_stock_metadata(self) -> dict:
         return {}
 
+    def sync_index_constituents(self) -> int:
+        return 0
+
 
 class _StubFactorEngine:
     def compute(

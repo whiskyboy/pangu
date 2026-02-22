@@ -405,14 +405,14 @@ class TestSyncTradingCalendar:
 
 
 # ---------------------------------------------------------------------------
-# CSI300 constituents
+# Index constituents
 # ---------------------------------------------------------------------------
 
 
-class TestCSI300:
+class TestIndexConstituents:
     @patch("akshare.stock_individual_info_em")
     @patch("akshare.index_stock_cons")
-    def test_sync_csi300(
+    def test_sync_index_constituents(
         self, mock_cons: MagicMock, mock_info: MagicMock,
         tmp_yaml: Path, db: Database,
     ) -> None:
@@ -431,10 +431,41 @@ class TestCSI300:
         })
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        count = pool.sync_csi300_constituents()
+        count = pool.sync_index_constituents()
         assert count == 2
 
-    def test_get_csi300_stocks_from_db(self, tmp_yaml: Path, db: Database) -> None:
+    @patch("akshare.stock_individual_info_em")
+    @patch("akshare.index_stock_cons")
+    def test_sync_multi_index(
+        self, mock_cons: MagicMock, mock_info: MagicMock,
+        tmp_yaml: Path, db: Database,
+    ) -> None:
+        """Sync multiple indices — rows from both are saved."""
+        def fake_cons(symbol: str) -> pd.DataFrame:
+            if symbol == "000300":
+                return pd.DataFrame({
+                    "品种代码": ["600519"],
+                    "品种名称": ["贵州茅台"],
+                    "纳入日期": ["2020-01-01"],
+                })
+            return pd.DataFrame({
+                "品种代码": ["002475"],
+                "品种名称": ["立讯精密"],
+                "纳入日期": ["2021-06-01"],
+            })
+
+        mock_cons.side_effect = fake_cons
+        mock_info.return_value = pd.DataFrame({
+            "item": ["行业"], "value": ["电子"],
+        })
+        m, n, f = _mock_providers()
+        pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300", "000905"])
+        count = pool.sync_index_constituents()
+        assert count == 2
+        assert len(db.load_index_constituents("000300")) == 1
+        assert len(db.load_index_constituents("000905")) == 1
+
+    def test_get_index_stocks_from_db(self, tmp_yaml: Path, db: Database) -> None:
         db.save_index_constituents([
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
              "sector": "白酒", "updated_date": "2026-02-20"},
@@ -443,11 +474,27 @@ class TestCSI300:
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        stocks = pool._get_csi300_stocks()
+        stocks = pool._get_index_stocks()
         assert set(stocks) == {"600519", "000858"}
 
+    def test_get_index_stocks_multi_index_dedup(self, tmp_yaml: Path, db: Database) -> None:
+        """Same stock in two indices is deduplicated."""
+        db.save_index_constituents([
+            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+            {"symbol": "600519", "name": "贵州茅台", "index_code": "000905",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+            {"symbol": "002475", "name": "立讯精密", "index_code": "000905",
+             "sector": "电子", "updated_date": "2026-02-20"},
+        ])
+        m, n, f = _mock_providers()
+        pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300", "000905"])
+        stocks = pool._get_index_stocks()
+        assert len(stocks) == 2
+        assert set(stocks) == {"600519", "002475"}
+
     def test_get_all_symbols(self, tmp_yaml: Path, db: Database) -> None:
-        """All symbols = watchlist + CSI300, deduplicated."""
+        """All symbols = watchlist + configured indices, deduplicated."""
         db.save_index_constituents([
             {"symbol": "601899", "name": "紫金矿业", "index_code": "000300",
              "sector": "有色金属", "updated_date": "2026-02-20"},
@@ -457,12 +504,12 @@ class TestCSI300:
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         universe = pool.get_all_symbols()
-        # watchlist: [601899, 600967], csi300: [601899, 600519]
+        # watchlist: [601899, 600967], index: [601899, 600519]
         # merged: [601899, 600967, 600519] — 601899 deduped
         assert universe == ["601899", "600967", "600519"]
 
     def test_get_stock_metadata_unified(self, tmp_yaml: Path, db: Database) -> None:
-        """DB provides CSI300 names/sectors; YAML fills gaps for watchlist-only stocks."""
+        """DB provides index names/sectors; YAML fills gaps for watchlist-only stocks."""
         db.save_index_constituents([
             {"symbol": "601899", "name": "紫金矿业DB", "index_code": "000300",
              "sector": "工业金属", "updated_date": "2026-02-20"},

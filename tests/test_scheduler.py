@@ -54,7 +54,7 @@ def mock_components() -> Components:
     from pangu.models import StockMeta
     stock_pool.get_stock_metadata.return_value = {"600519": StockMeta(name="贵州茅台", sector="白酒")}
     stock_pool.sync_trading_calendar.return_value = 0
-    stock_pool.sync_csi300_constituents = MagicMock(return_value=0)
+    stock_pool.sync_index_constituents = MagicMock(return_value=0)
 
     tech_engine = MagicMock()
     tech_engine.compute.return_value = pd.DataFrame({
@@ -372,23 +372,23 @@ class TestT4:
 
 class TestT5:
     @pytest.mark.asyncio
-    async def test_syncs_calendar_and_csi300(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.stock_pool.sync_csi300_constituents = MagicMock(return_value=300)
+    async def test_syncs_calendar_and_index_constituents(self, scheduler: TradingScheduler) -> None:
+        scheduler._c.stock_pool.sync_index_constituents = MagicMock(return_value=300)
         await scheduler.sync_reference_data()
         scheduler._c.stock_pool.sync_trading_calendar.assert_called_once()
-        scheduler._c.stock_pool.sync_csi300_constituents.assert_called_once()
+        scheduler._c.stock_pool.sync_index_constituents.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_handles_calendar_failure(self, scheduler: TradingScheduler) -> None:
         scheduler._c.stock_pool.sync_trading_calendar.side_effect = RuntimeError("fail")
-        scheduler._c.stock_pool.sync_csi300_constituents = MagicMock(return_value=300)
+        scheduler._c.stock_pool.sync_index_constituents = MagicMock(return_value=300)
         await scheduler.sync_reference_data()  # should not raise
-        # CSI300 sync should still be called
-        scheduler._c.stock_pool.sync_csi300_constituents.assert_called_once()
+        # Index constituents sync should still be called
+        scheduler._c.stock_pool.sync_index_constituents.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handles_csi300_failure(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.stock_pool.sync_csi300_constituents = MagicMock(side_effect=RuntimeError("fail"))
+    async def test_handles_index_constituents_failure(self, scheduler: TradingScheduler) -> None:
+        scheduler._c.stock_pool.sync_index_constituents = MagicMock(side_effect=RuntimeError("fail"))
         await scheduler.sync_reference_data()  # should not raise
 
 
