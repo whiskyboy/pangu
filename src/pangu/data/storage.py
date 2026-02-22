@@ -630,7 +630,7 @@ class Database:
     # ------------------------------------------------------------------
 
     def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:
-        """INSERT OR REPLACE fundamentals rows from *df*. Returns row count."""
+        """Upsert fundamentals rows, merging non-NULL fields. Returns row count."""
         if df.empty:
             return 0
         rows: list[tuple[Any, ...]] = []
@@ -647,9 +647,16 @@ class Database:
             ))
         with self._lock:
             self._conn.executemany(
-                "INSERT OR REPLACE INTO fundamentals "
+                "INSERT INTO fundamentals "
                 "(symbol, date, pe_ttm, pb, roe_ttm, revenue_yoy, profit_yoy, market_cap) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(symbol, date) DO UPDATE SET "
+                "pe_ttm = COALESCE(excluded.pe_ttm, pe_ttm), "
+                "pb = COALESCE(excluded.pb, pb), "
+                "roe_ttm = COALESCE(excluded.roe_ttm, roe_ttm), "
+                "revenue_yoy = COALESCE(excluded.revenue_yoy, revenue_yoy), "
+                "profit_yoy = COALESCE(excluded.profit_yoy, profit_yoy), "
+                "market_cap = COALESCE(excluded.market_cap, market_cap)",
                 rows,
             )
             self._conn.commit()
@@ -665,6 +672,23 @@ class Database:
                 "ORDER BY date",
                 self._conn,
                 params=(symbol, start, end),
+            )
+
+    def load_latest_fundamentals(self, symbols: list[str]) -> pd.DataFrame:
+        """Load the most recent fundamentals row for each symbol."""
+        if not symbols:
+            return pd.DataFrame()
+        placeholders = ",".join("?" for _ in symbols)
+        with self._lock:
+            return pd.read_sql(
+                f"SELECT f.* FROM fundamentals f "
+                f"INNER JOIN ("
+                f"  SELECT symbol, MAX(date) AS max_date "
+                f"  FROM fundamentals WHERE symbol IN ({placeholders}) "
+                f"  GROUP BY symbol"
+                f") m ON f.symbol = m.symbol AND f.date = m.max_date",
+                self._conn,
+                params=symbols,
             )
 
     # ------------------------------------------------------------------

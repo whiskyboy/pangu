@@ -50,33 +50,21 @@ async def _generate_signals_impl(c: Components) -> None:
     tech_df: dict[str, pd.DataFrame] = {}
     for symbol in factor_universe:
         try:
-            bars = c.market.get_daily_bars(symbol, start, today)
+            bars = c.db.load_daily_bars(symbol, start, today)
             if bars is not None and not bars.empty:
                 tech_df[symbol] = c.tech_engine.compute(bars)
         except Exception:  # noqa: BLE001
             logger.warning("[T4] %s: tech failed", symbol, exc_info=True)
     logger.info("[T4] Tech factors: %d/%d", len(tech_df), len(factor_universe))
 
-    # 3. Compute fundamental factors for full universe
-    fund_rows: list[dict] = []
-    for symbol in factor_universe:
-        try:
-            val = c.fundamental.get_valuation(symbol)
-            val["symbol"] = symbol
-            fund_rows.append(val)
-        except Exception:  # noqa: BLE001
-            logger.warning("[T4] %s: fundamentals failed", symbol, exc_info=True)
-    fund_raw = pd.DataFrame(fund_rows)
+    # 3. Compute fundamental factors for full universe (from DB, T3 synced)
+    fund_raw = c.db.load_latest_fundamentals(list(factor_universe))
     if not fund_raw.empty and "symbol" in fund_raw.columns:
         fund_raw = fund_raw.set_index("symbol")
     fund_df = c.fund_engine.compute(fund_raw)
 
-    # 4. Global snapshot + macro (Provider reads DB cache from T1)
-    try:
-        global_snapshot = c.market.get_global_snapshot()
-    except Exception:  # noqa: BLE001
-        logger.warning("[T4] Global snapshot failed", exc_info=True)
-        global_snapshot = pd.DataFrame()
+    # 4. Global snapshot + macro (from DB, T1 synced)
+    global_snapshot = c.db.load_latest_global_snapshots()
     macro_factors = c.macro_engine.compute(global_snapshot)
 
     # 5. Load telegraph from DB (T2 accumulated 24h news)
