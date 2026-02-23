@@ -118,6 +118,34 @@ class TestWeightedScore:
         scores = _weighted_score(df, weights)
         assert pytest.approx(scores.iloc[0]) == 1.0
 
+    def test_negative_weights(self) -> None:
+        """Negative weight: higher factor value → lower score (e.g. PE_TTM)."""
+        df = pd.DataFrame({"val": [1.0, -1.0]}, index=["cheap", "expensive"])
+        weights = {"val": -0.10}
+        scores = _weighted_score(df, weights)
+        assert scores["cheap"] < scores["expensive"]
+
+    def test_nan_excluded_from_weight(self) -> None:
+        """NaN factors should not count toward total_w for that stock."""
+        df = pd.DataFrame({
+            "a": [1.0, 1.0],
+            "b": [1.0, float("nan")],
+        }, index=["full", "partial"])
+        weights = {"a": 0.5, "b": 0.5}
+        s = _weighted_score(df, weights)
+        # "full" uses both factors; "partial" uses only "a"
+        # full: (1*0.5 + 1*0.5) / (0.5+0.5) = 1.0
+        # partial: (1*0.5 + 0*0.5) / (0.5) = 1.0  (NaN weight excluded)
+        assert pytest.approx(s["full"]) == 1.0
+        assert pytest.approx(s["partial"]) == 1.0
+
+    def test_all_nan_returns_zero(self) -> None:
+        """Stock with all-NaN factors should score 0."""
+        df = pd.DataFrame({"a": [float("nan")]})
+        weights = {"a": 0.5}
+        s = _weighted_score(df, weights)
+        assert pytest.approx(s.iloc[0]) == 0.0
+
 
 class TestMinmaxNormalize:
     def test_range_zero_one(self) -> None:
@@ -130,6 +158,22 @@ class TestMinmaxNormalize:
         s = pd.Series([5.0, 5.0, 5.0])
         result = _minmax_normalize(s)
         assert (result == 0.5).all()
+
+    def test_single_element_returns_half(self) -> None:
+        s = pd.Series([42.0])
+        result = _minmax_normalize(s)
+        assert result.iloc[0] == 0.5
+
+    def test_winsorize_reduces_outlier_impact(self) -> None:
+        """An extreme outlier should not compress normal scores to near zero."""
+        normal = list(np.linspace(0.1, 0.4, 100))
+        outlier = [5.0]  # extreme high
+        s = pd.Series(normal + outlier)
+        result = _minmax_normalize(s)
+        # Without winsorize: max normal ≈ 0.4/5.0 ≈ 0.08
+        # With winsorize: outlier clipped, normal scores spread across [0, 1]
+        normal_scores = result.iloc[:100]
+        assert normal_scores.max() > 0.5, "Normal scores should not be compressed"
 
 
 # ---------------------------------------------------------------------------
