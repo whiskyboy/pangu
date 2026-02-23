@@ -829,6 +829,19 @@ class Database:
             self._conn.commit()
         return len(tuples)
 
+    def delete_stale_index_constituents(self, active_codes: list[str]) -> int:
+        """Delete constituents whose index_code is not in *active_codes*."""
+        if not active_codes:
+            return 0
+        placeholders = ",".join("?" for _ in active_codes)
+        with self._lock:
+            cur = self._conn.execute(
+                f"DELETE FROM index_constituents WHERE index_code NOT IN ({placeholders})",
+                active_codes,
+            )
+            self._conn.commit()
+        return cur.rowcount
+
     def load_index_constituents(self, index_code: str) -> list[dict]:
         """Load constituents for a given index code."""
         with self._lock:

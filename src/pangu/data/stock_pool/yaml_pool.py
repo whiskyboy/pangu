@@ -403,6 +403,9 @@ class StockPoolManager:
                     logger.info("sync_index(%s): %d/%d stocks processed", index_code, idx, total)
 
         count = self._storage.save_index_constituents(all_rows)
+        removed = self._storage.delete_stale_index_constituents(self._indices)
+        if removed:
+            logger.info("sync_index: removed %d constituents from unconfigured indices", removed)
         logger.info("sync_index: %d constituents saved across %d indices", count, len(self._indices))
         return count
 

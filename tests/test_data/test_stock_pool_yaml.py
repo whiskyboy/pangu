@@ -396,6 +396,37 @@ class TestIndexConstituents:
         assert len(db.load_index_constituents("000300")) == 1
         assert len(db.load_index_constituents("000905")) == 1
 
+    @patch("akshare.stock_individual_info_em")
+    @patch("akshare.index_stock_cons")
+    def test_sync_removes_unconfigured_index(
+        self, mock_cons: MagicMock, mock_info: MagicMock,
+        tmp_yaml: Path, db: Database,
+    ) -> None:
+        """After removing an index from config, its constituents are cleaned up."""
+        # Pre-populate DB with two indices
+        db.save_index_constituents([
+            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
+             "sector": "白酒", "updated_date": "2026-02-20"},
+            {"symbol": "002475", "name": "立讯精密", "index_code": "000905",
+             "sector": "电子", "updated_date": "2026-02-20"},
+        ])
+        assert len(db.load_index_constituents("000905")) == 1
+
+        # Now create pool with only 000300 configured
+        mock_cons.return_value = pd.DataFrame({
+            "品种代码": ["600519"], "品种名称": ["贵州茅台"], "纳入日期": ["2020-01-01"],
+        })
+        mock_info.return_value = pd.DataFrame({
+            "item": ["行业"], "value": ["白酒"],
+        })
+        m, n, f = _mock_providers()
+        pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300"])
+        pool.sync_index_constituents()
+
+        # 000905 constituents should be removed
+        assert len(db.load_index_constituents("000905")) == 0
+        assert len(db.load_index_constituents("000300")) == 1
+
     def test_get_index_stocks_from_db(self, tmp_yaml: Path, db: Database) -> None:
         db.save_index_constituents([
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
