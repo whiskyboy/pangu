@@ -87,42 +87,6 @@ class StockPoolManager:
             yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
         )
 
-    # -- Data backfill --
-
-    def backfill_missing_data(self) -> None:
-        """Check watchlist stocks for missing or stale data and pull if needed."""
-        from pangu.tz import today_str
-
-        today = today_str()
-
-        for symbol in self.get_watchlist():
-            bars = self._storage.load_daily_bars(symbol, "2000-01-01", today)
-            if bars.empty:
-                logger.info("No data for %s, running initial data pull…", symbol)
-                self._init_stock_data(symbol)
-            else:
-                last_date = str(bars["date"].iloc[-1])
-                if self._is_data_stale(last_date, today):
-                    logger.info(
-                        "Stale data for %s (last: %s), backfilling…",
-                        symbol, last_date,
-                    )
-                    self._init_stock_data(symbol)
-
-    def _is_data_stale(self, last_date: str, today: str) -> bool:
-        """Return True if there are missed trading days since *last_date*.
-
-        Uses the trading calendar when available; falls back to a 3-day
-        natural-day gap when the calendar is empty.
-        """
-        from pangu.utils import date_str
-
-        result = self._storage.has_trading_day_between(last_date, today)
-        if result is not None:
-            return result
-        # Calendar empty — fallback to 3 natural days
-        return last_date < date_str(days_ago=3)
-
     # -- Data initialization --
 
     def _init_stock_data(self, symbol: str) -> None:

@@ -6,7 +6,7 @@ Registers 6 cron tasks (times configurable via [scheduler] in settings.toml):
   T3 sync_domestic_market  — trading days (default 15:30)
   T4 generate_signals      — trading days (default 08:15)
   T5 sync_reference_data   — monthly (default 1st at 06:00)
-  T6 verify_signals        — trading days (default 16:00)
+  T6 verify_signals        — trading days (default 20:00)
 """
 
 from __future__ import annotations
@@ -155,8 +155,8 @@ class TradingScheduler:
             name="T5 基础数据同步",
         )
 
-        # T6: verify signals — after T3 (default 16:00)
-        t6_h, t6_m = _parse_time(cfg.get("signal_verify_time", "16:00"))
+        # T6: verify signals — after T3 (default 20:00)
+        t6_h, t6_m = _parse_time(cfg.get("signal_verify_time", "20:00"))
         self._scheduler.add_job(
             self._run_if_trading_day, "cron",
             args=[self.verify_signals],

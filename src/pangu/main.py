@@ -202,7 +202,6 @@ async def _run_init() -> None:
     scheduler = TradingScheduler(components, timezone=_tz, scheduler_cfg=settings.scheduler)
     logger.info("=== init: syncing reference data + domestic market ===")
     await scheduler.sync_reference_data()
-    components.stock_pool.backfill_missing_data()
     await scheduler.sync_domestic_market()
     logger.info("=== init complete ===")
 
