@@ -22,10 +22,9 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "macd_hist": 0.20,
     "bias_20": 0.10,
     "obv": 0.10,
-    "atr_14": 0.10,
     "volume_ratio": 0.05,
-    "pe_ttm": 0.10,
-    "pb": 0.05,
+    "pe_ttm": -0.10,
+    "pb": -0.05,
     "roe_ttm": 0.10,
     "macro_adj": 0.05,
 }
@@ -66,21 +65,27 @@ def _zscore_normalize(df: pd.DataFrame) -> pd.DataFrame:
 def _weighted_score(normalized: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
     """Weighted sum of factor columns. Missing columns are skipped."""
     score = pd.Series(0.0, index=normalized.index)
-    total_w = 0.0
+    # Per-stock effective weight: only count factors with actual data
+    total_w = pd.Series(0.0, index=normalized.index)
     for col, w in weights.items():
         if col in normalized.columns:
+            mask = normalized[col].notna()
             score += normalized[col].fillna(0.0) * w
-            total_w += w
-    if total_w > 0:
-        score /= total_w
-    return score
+            total_w += mask.astype(float) * abs(w)
+    total_w = total_w.replace(0.0, 1.0)  # avoid division by zero
+    return score / total_w
 
 
 def _minmax_normalize(scores: pd.Series) -> pd.Series:
-    """Normalize to 0-1 range."""
-    mn, mx = scores.min(), scores.max()
+    """Normalize to 0-1 range with winsorize to reduce outlier impact."""
+    if len(scores) < 2:
+        return pd.Series(0.5, index=scores.index)
+    lo = scores.quantile(0.01)
+    hi = scores.quantile(0.99)
+    clipped = scores.clip(lower=lo, upper=hi)
+    mn, mx = clipped.min(), clipped.max()
     if mx - mn > 0:
-        return (scores - mn) / (mx - mn)
+        return (clipped - mn) / (mx - mn)
     return pd.Series(0.5, index=scores.index)
 
 
