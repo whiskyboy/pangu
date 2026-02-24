@@ -675,21 +675,43 @@ class Database:
             )
 
     def load_latest_fundamentals(self, symbols: list[str]) -> pd.DataFrame:
-        """Load the most recent fundamentals row for each symbol."""
+        """Load fundamentals with per-column latest non-NULL value for each symbol.
+
+        PE/PB come from daily valuation rows while ROE/revenue/profit come from
+        quarterly financial rows.  A simple ``MAX(date)`` would pick only the
+        daily row and lose all quarterly fields.  This query coalesces the most
+        recent non-NULL value for every column independently.
+        """
         if not symbols:
             return pd.DataFrame()
         placeholders = ",".join("?" for _ in symbols)
+        query = (
+            f"SELECT symbol, "
+            f"  MAX(date) AS date, "
+            f"  (SELECT f2.pe_ttm FROM fundamentals f2 "
+            f"   WHERE f2.symbol = f.symbol AND f2.pe_ttm IS NOT NULL "
+            f"   ORDER BY f2.date DESC LIMIT 1) AS pe_ttm, "
+            f"  (SELECT f2.pb FROM fundamentals f2 "
+            f"   WHERE f2.symbol = f.symbol AND f2.pb IS NOT NULL "
+            f"   ORDER BY f2.date DESC LIMIT 1) AS pb, "
+            f"  (SELECT f2.roe_ttm FROM fundamentals f2 "
+            f"   WHERE f2.symbol = f.symbol AND f2.roe_ttm IS NOT NULL "
+            f"   ORDER BY f2.date DESC LIMIT 1) AS roe_ttm, "
+            f"  (SELECT f2.revenue_yoy FROM fundamentals f2 "
+            f"   WHERE f2.symbol = f.symbol AND f2.revenue_yoy IS NOT NULL "
+            f"   ORDER BY f2.date DESC LIMIT 1) AS revenue_yoy, "
+            f"  (SELECT f2.profit_yoy FROM fundamentals f2 "
+            f"   WHERE f2.symbol = f.symbol AND f2.profit_yoy IS NOT NULL "
+            f"   ORDER BY f2.date DESC LIMIT 1) AS profit_yoy, "
+            f"  (SELECT f2.market_cap FROM fundamentals f2 "
+            f"   WHERE f2.symbol = f.symbol AND f2.market_cap IS NOT NULL "
+            f"   ORDER BY f2.date DESC LIMIT 1) AS market_cap "
+            f"FROM fundamentals f "
+            f"WHERE symbol IN ({placeholders}) "
+            f"GROUP BY symbol"
+        )
         with self._lock:
-            return pd.read_sql(
-                f"SELECT f.* FROM fundamentals f "
-                f"INNER JOIN ("
-                f"  SELECT symbol, MAX(date) AS max_date "
-                f"  FROM fundamentals WHERE symbol IN ({placeholders}) "
-                f"  GROUP BY symbol"
-                f") m ON f.symbol = m.symbol AND f.date = m.max_date",
-                self._conn,
-                params=symbols,
-            )
+            return pd.read_sql(query, self._conn, params=symbols)
 
     # ------------------------------------------------------------------
     # global_snapshots
