@@ -17,3 +17,7 @@ class MarketDataProvider(Protocol):
     def get_global_snapshot(self) -> pd.DataFrame:
         """Aggregate all international quotes into a single snapshot."""
         ...
+
+    def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        """Return index daily OHLCV bars (e.g. CSI300 '000300')."""
+        ...

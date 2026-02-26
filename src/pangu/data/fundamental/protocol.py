@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 import pandas as pd
 
 
 class FundamentalDataProvider(Protocol):
-    """Interface for A-share fundamental / valuation data."""
+    """Interface for A-share fundamental data."""
 
-    def get_valuation(self, symbol: str) -> dict[str, Any]:
-        """Return valuation metrics: PE, PB, PS, market cap."""
-        ...
-
-    def get_financial_indicator(self, symbol: str) -> pd.DataFrame:
+    def get_financial_indicator(
+        self, symbol: str, start: str | None = None, end: str | None = None,
+    ) -> pd.DataFrame:
         """Return financial indicators: ROE, revenue growth, net profit growth."""
         ...

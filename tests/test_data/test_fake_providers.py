@@ -56,24 +56,6 @@ class TestFakeMarketDataProvider:
 
 
 class TestFakeFundamentalDataProvider:
-    def test_valuation_keys(self, fake_fundamental: FakeFundamentalDataProvider) -> None:
-        v = fake_fundamental.get_valuation("600519")
-        expected = {"pe_ttm", "pb", "ps", "market_cap"}
-        assert expected == set(v.keys())
-
-    def test_valuation_known_stock(self, fake_fundamental: FakeFundamentalDataProvider) -> None:
-        v = fake_fundamental.get_valuation("600519")
-        assert v["pe_ttm"] == 30.5
-
-    def test_valuation_unknown_stock(self, fake_fundamental: FakeFundamentalDataProvider) -> None:
-        v = fake_fundamental.get_valuation("999999")
-        assert v["pe_ttm"] == 15.0  # default
-
-    def test_valuation_returns_copy(self, fake_fundamental: FakeFundamentalDataProvider) -> None:
-        v1 = fake_fundamental.get_valuation("600519")
-        v2 = fake_fundamental.get_valuation("600519")
-        assert v1 is not v2  # should be independent dicts
-
     def test_financial_indicator_columns(self, fake_fundamental: FakeFundamentalDataProvider) -> None:
         df = fake_fundamental.get_financial_indicator("600519")
         expected = {"symbol", "date", "roe_ttm", "revenue_yoy", "profit_yoy"}

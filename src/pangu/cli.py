@@ -132,6 +132,93 @@ def run_start() -> None:
 
 
 # ---------------------------------------------------------------------------
+# backfill commands
+# ---------------------------------------------------------------------------
+
+@main.group()
+def backfill() -> None:
+    """Backfill historical data from BaoStock."""
+
+
+@backfill.command("bars")
+@click.option("--start", required=True, help="Start date (YYYY-MM-DD)")
+def backfill_bars(start: str) -> None:
+    """Backfill daily OHLCV + PE/PB for all pool stocks."""
+    from pangu.main import build_components, load_env
+    load_env()
+    c, _, _ = build_components()
+
+    from pangu.tz import today_str
+
+    pool = c.stock_pool.get_all_symbols()
+    today = today_str()
+    total = len(pool)
+    ok, fail = 0, 0
+
+    click.echo(f"Backfilling {total} stocks from {start} to {today}...")
+    for i, symbol in enumerate(pool, 1):
+        try:
+            df = c.market.get_daily_bars(symbol, start, today)
+            if df is not None and not df.empty:
+                ok += 1
+            else:
+                fail += 1
+        except Exception as e:  # noqa: BLE001
+            fail += 1
+            click.echo(f"  ✗ {symbol}: {e}")
+        if i % 50 == 0 or i == total:
+            click.echo(f"  [{i}/{total}] ok={ok} fail={fail}")
+
+    click.echo(f"\n✅ Backfill bars done: {ok} ok, {fail} failed")
+
+
+@backfill.command("index")
+@click.option("--start", required=True, help="Start date (YYYY-MM-DD)")
+@click.option("--symbol", default="000300", help="Index code (default: 000300)")
+def backfill_index(start: str, symbol: str) -> None:
+    """Backfill index daily bars (default: CSI300)."""
+    from pangu.main import build_components, load_env
+    load_env()
+    c, _, _ = build_components()
+
+    from pangu.tz import today_str
+
+    today = today_str()
+    click.echo(f"Backfilling index {symbol} from {start} to {today}...")
+    df = c.market.get_index_daily_bars(symbol, start, today)
+    click.echo(f"✅ Index {symbol}: {len(df)} bars loaded")
+
+
+@backfill.command("fundamentals")
+@click.option("--start", required=True, help="Start date (YYYY-MM-DD, e.g. 2022-10-01)")
+def backfill_fundamentals(start: str) -> None:
+    """Backfill quarterly financial indicators."""
+    from pangu.main import build_components, load_env
+    load_env()
+    c, _, _ = build_components()
+
+    pool = c.stock_pool.get_all_symbols()
+    total = len(pool)
+    ok, fail = 0, 0
+
+    click.echo(f"Backfilling fundamentals for {total} stocks from {start}...")
+    for i, symbol in enumerate(pool, 1):
+        try:
+            df = c.fundamental.get_financial_indicator(symbol, start=start)
+            if df is not None and not df.empty:
+                ok += 1
+            else:
+                fail += 1
+        except Exception as e:  # noqa: BLE001
+            fail += 1
+            click.echo(f"  ✗ {symbol}: {e}")
+        if i % 50 == 0 or i == total:
+            click.echo(f"  [{i}/{total}] ok={ok} fail={fail}")
+
+    click.echo(f"\n✅ Backfill fundamentals done: {ok} ok, {fail} failed")
+
+
+# ---------------------------------------------------------------------------
 # status command
 # ---------------------------------------------------------------------------
 

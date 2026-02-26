@@ -8,27 +8,10 @@ import pandas as pd
 import pytest
 
 from pangu.data.fundamental.akshare import AkShareFundamentalProvider
-from pangu.data.storage import Database
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def db() -> Database:
-    d = Database(":memory:")
-    d.init_tables()
-    return d
-
-
-def _fake_individual_info_df() -> pd.DataFrame:
-    """Simulate ak.stock_individual_info_em() return."""
-    return pd.DataFrame({
-        "item": ["最新", "股票代码", "股票简称", "总股本", "流通股", "总市值", "流通市值", "行业", "上市时间"],
-        "value": [50.0, "601899", "紫金矿业", 2644116028.0, 2644116028.0,
-                  1.32e11, 1.32e11, "黄金", "20030414"],
-    })
 
 
 def _fake_financial_df() -> pd.DataFrame:
@@ -53,111 +36,6 @@ def _fake_financial_df() -> pd.DataFrame:
             "主营业务利润(元)": "45000000000",
         },
     ])
-
-
-# ---------------------------------------------------------------------------
-# get_valuation
-# ---------------------------------------------------------------------------
-
-
-class TestGetValuation:
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_returns_valuation_dict(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
-        mock_info.return_value = _fake_individual_info_df()
-        mock_fin.return_value = _fake_financial_df()
-        provider = AkShareFundamentalProvider(request_interval=0)
-        val = provider.get_valuation("601899")
-
-        assert val["market_cap"] == 1.32e11
-        assert val["pe_ttm"] is not None
-        assert val["pe_ttm"] > 0
-        assert val["pb"] is not None
-        assert val["pb"] > 0
-
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_pe_calculation(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
-        mock_info.return_value = _fake_individual_info_df()
-        mock_fin.return_value = _fake_financial_df()
-        provider = AkShareFundamentalProvider(request_interval=0)
-        val = provider.get_valuation("601899")
-
-        # PE = market_cap / (EPS * total_shares) = 1.32e11 / (1.80 * 2644116028)
-        expected_pe = 1.32e11 / (1.80 * 2644116028.0)
-        assert val["pe_ttm"] == pytest.approx(expected_pe, rel=0.01)
-
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_pb_calculation(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
-        mock_info.return_value = _fake_individual_info_df()
-        mock_fin.return_value = _fake_financial_df()
-        provider = AkShareFundamentalProvider(request_interval=0)
-        val = provider.get_valuation("601899")
-
-        # PB = market_cap / (BPS * total_shares) = 1.32e11 / (9.20 * 2644116028)
-        expected_pb = 1.32e11 / (9.20 * 2644116028.0)
-        assert val["pb"] == pytest.approx(expected_pb, rel=0.01)
-
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_empty_info_returns_partial(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
-        mock_info.return_value = pd.DataFrame()
-        mock_fin.return_value = _fake_financial_df()
-        provider = AkShareFundamentalProvider(request_interval=0)
-        val = provider.get_valuation("601899")
-
-        assert val["market_cap"] is None
-        assert val["pe_ttm"] is None
-
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_empty_fin_returns_market_cap_only(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
-        mock_info.return_value = _fake_individual_info_df()
-        mock_fin.return_value = pd.DataFrame()
-        provider = AkShareFundamentalProvider(request_interval=0)
-        val = provider.get_valuation("601899")
-
-        assert val["market_cap"] == 1.32e11
-        assert val["pe_ttm"] is None
-        assert val["pb"] is None
-
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_exception_returns_none_values(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
-        mock_info.side_effect = ConnectionError("down")
-        provider = AkShareFundamentalProvider(request_interval=0)
-        from pangu.utils import CircuitBreaker
-        provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
-        val = provider.get_valuation("601899")
-
-        assert val["pe_ttm"] is None
-        assert val["market_cap"] is None
-
-    @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_persists_to_storage(
-        self, mock_info: MagicMock, mock_fin: MagicMock, db: Database,
-    ) -> None:
-        mock_info.return_value = _fake_individual_info_df()
-        mock_fin.return_value = _fake_financial_df()
-        provider = AkShareFundamentalProvider(storage=db, request_interval=0)
-        provider.get_valuation("601899")
-
-        stored = db.load_fundamentals("601899", "2020-01-01", "2030-01-01")
-        assert len(stored) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -208,17 +86,6 @@ class TestGetFinancialIndicator:
         assert df.empty
 
     @patch("akshare.stock_financial_analysis_indicator")
-    def test_persists_to_storage(
-        self, mock_fin: MagicMock, db: Database,
-    ) -> None:
-        mock_fin.return_value = _fake_financial_df()
-        provider = AkShareFundamentalProvider(storage=db, request_interval=0)
-        provider.get_financial_indicator("601899")
-
-        stored = db.load_fundamentals("601899", "2020-01-01", "2030-01-01")
-        assert len(stored) == 2
-
-    @patch("akshare.stock_financial_analysis_indicator")
     def test_handles_nan_fields(self, mock_fin: MagicMock) -> None:
         """Missing/empty financial fields should become None."""
         df_raw = pd.DataFrame([{
@@ -260,12 +127,8 @@ class TestGetFinancialIndicator:
         assert df.iloc[0]["profit_yoy"] == 0.0
 
     @patch("akshare.stock_financial_analysis_indicator")
-    @patch("akshare.stock_individual_info_em")
-    def test_nan_values_become_none(
-        self, mock_info: MagicMock, mock_fin: MagicMock,
-    ) -> None:
+    def test_nan_values_become_none(self, mock_fin: MagicMock) -> None:
         """NaN values from AkShare should become None, not propagate."""
-        mock_info.return_value = _fake_individual_info_df()
         df_raw = pd.DataFrame([{
             "日期": "2025-09-30",
             "摊薄每股收益(元)": float("nan"),
@@ -277,10 +140,6 @@ class TestGetFinancialIndicator:
         }])
         mock_fin.return_value = df_raw
         provider = AkShareFundamentalProvider(request_interval=0)
-
-        val = provider.get_valuation("601899")
-        assert val["pe_ttm"] is None
-        assert val["pb"] is None
 
         df = provider.get_financial_indicator("601899")
         assert df.iloc[0]["roe_ttm"] is None

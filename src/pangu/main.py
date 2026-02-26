@@ -34,8 +34,8 @@ def load_env() -> None:
 load_env()
 
 from pangu.config import Settings, load_settings
-from pangu.data.fundamental import AkShareFundamentalProvider
-from pangu.data.market import AkShareMarketDataProvider
+from pangu.data.fundamental import AkShareFundamentalProvider, BaoStockFundamentalProvider, CompositeFundamentalProvider
+from pangu.data.market import AkShareMarketDataProvider, BaoStockMarketDataProvider, CompositeMarketDataProvider
 from pangu.data.news import AkShareNewsDataProvider
 from pangu.data.stock_pool import StockPoolManager
 from pangu.data.storage import Database
@@ -75,10 +75,14 @@ def build_components() -> tuple[Components, str, Settings]:
     db.init_tables()
     logger.info("SQLite initialized: %s", db_path)
 
-    # Data providers
-    market = AkShareMarketDataProvider(storage=db)
+    # Data providers — BaoStock primary, AkShare fallback
+    baostock_market = BaoStockMarketDataProvider()
+    akshare_market = AkShareMarketDataProvider(storage=db)
+    market = CompositeMarketDataProvider(storage=db, providers=[baostock_market, akshare_market])
     news = AkShareNewsDataProvider(storage=db)
-    fundamental = AkShareFundamentalProvider(storage=db)
+    baostock_fund = BaoStockFundamentalProvider()
+    akshare_fund = AkShareFundamentalProvider()
+    fundamental = CompositeFundamentalProvider(storage=db, providers=[baostock_fund, akshare_fund])
 
     sys_cfg = settings.system
     pool_cfg = settings.stock_pool

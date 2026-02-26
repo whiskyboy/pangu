@@ -42,10 +42,6 @@ def mock_components() -> Components:
     news.get_announcements.return_value = []
 
     fundamental = MagicMock()
-    fundamental.get_valuation.return_value = {
-        "pe_ttm": 20.0, "pb": 2.0, "roe_ttm": 0.15,
-        "market_cap": 1e10,
-    }
 
     stock_pool = MagicMock()
     stock_pool.get_watchlist.return_value = ["600519"]
@@ -217,7 +213,7 @@ class TestT3:
         await scheduler.sync_domestic_market()
         scheduler._c.stock_pool.get_all_symbols.assert_called_once()
         scheduler._c.market.get_daily_bars.assert_called()
-        scheduler._c.fundamental.get_valuation.assert_called()
+        scheduler._c.fundamental.get_financial_indicator.assert_called()
 
     @pytest.mark.asyncio
     async def test_handles_partial_failure(self, scheduler: TradingScheduler) -> None:
@@ -411,7 +407,7 @@ class TestRunOnce:
         # All 5 tasks should have been called
         scheduler._c.stock_pool.sync_trading_calendar.assert_called()  # T5
         scheduler._c.market.get_daily_bars.assert_called()  # T3
-        scheduler._c.fundamental.get_valuation.assert_called()  # T3
+        scheduler._c.fundamental.get_financial_indicator.assert_called()  # T3
         scheduler._c.market.get_global_snapshot.assert_called()  # T1 + T4
         scheduler._c.news.get_latest_news.assert_called()  # T2
         scheduler._c.factor_strategy.generate_signals.assert_called()  # T4

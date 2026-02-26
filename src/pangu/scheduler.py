@@ -17,8 +17,8 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from pangu.data.fundamental import AkShareFundamentalProvider
-from pangu.data.market import AkShareMarketDataProvider
+from pangu.data.fundamental import CompositeFundamentalProvider
+from pangu.data.market import CompositeMarketDataProvider
 from pangu.data.news import AkShareNewsDataProvider
 from pangu.data.stock_pool import StockPoolManager
 from pangu.data.storage import Database
@@ -53,9 +53,9 @@ class Components:
     """All injected components for task execution."""
 
     db: Database
-    market: AkShareMarketDataProvider
+    market: CompositeMarketDataProvider
     news: AkShareNewsDataProvider
-    fundamental: AkShareFundamentalProvider
+    fundamental: CompositeFundamentalProvider
     stock_pool: StockPoolManager
     tech_engine: PandasTAFactorEngine
     fund_engine: FundamentalFactorEngine

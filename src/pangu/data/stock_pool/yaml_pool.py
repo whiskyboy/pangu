@@ -40,7 +40,7 @@ class StockPoolManager:
     news_provider : NewsDataProvider
         Provider for stock news and announcements.
     fundamental_provider : FundamentalDataProvider
-        Provider for valuation and financial indicators.
+        Provider for financial indicators.
     """
 
     def __init__(
@@ -108,29 +108,10 @@ class StockPoolManager:
         except Exception:  # noqa: BLE001
             logger.warning("init %s: daily bars failed", symbol, exc_info=True)
 
-        # 2. Fundamentals (valuation + financial indicators)
+        # 2. Fundamentals (financial indicators)
         try:
-            val = self._fundamental.get_valuation(symbol)
             fin = self._fundamental.get_financial_indicator(symbol)
-            if val or (fin is not None and not fin.empty):
-                import pandas as pd
-
-                today = date_str()
-                row: dict[str, Any] = {"date": today}
-                if val:
-                    row.update({
-                        "pe_ttm": val.get("pe_ttm"),
-                        "pb": val.get("pb"),
-                        "market_cap": val.get("market_cap"),
-                    })
-                if fin is not None and not fin.empty:
-                    latest = fin.iloc[-1]
-                    row.update({
-                        "roe_ttm": latest.get("roe_ttm"),
-                        "revenue_yoy": latest.get("revenue_yoy"),
-                        "profit_yoy": latest.get("profit_yoy"),
-                    })
-                self._storage.save_fundamentals(symbol, pd.DataFrame([row]))
+            if fin is not None and not fin.empty:
                 logger.info("init %s: fundamentals saved", symbol)
         except Exception:  # noqa: BLE001
             logger.warning("init %s: fundamentals failed", symbol, exc_info=True)

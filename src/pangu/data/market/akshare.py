@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 
 import pandas as pd
 
-from pangu.data.market.baostock import BaoStockMarketDataProvider
 from pangu.utils import CircuitBreaker, ThrottleMixin, retry_call
 
 logger = logging.getLogger(__name__)
@@ -28,24 +26,21 @@ _HIST_COL_MAP = {
 
 
 class AkShareMarketDataProvider(ThrottleMixin):
-    """Real A-share market data backed by AkShare + SQLite cache.
+    """Pure AkShare API provider for A-share market data.
 
     Parameters
     ----------
     storage : Database | None
-        If provided, daily bars are cached in SQLite with incremental updates.
+        If provided, ``get_global_snapshot`` caches results in SQLite.
+        Daily bars caching is handled by :class:`CompositeMarketDataProvider`.
     request_interval : float
         Minimum seconds between AkShare API calls (default 0.5).
-    fallback : BaoStockMarketDataProvider | None
-        If provided, daily bars automatically fall back to BaoStock when
-        AkShare fails (circuit breaker open or retries exhausted).
     """
 
     def __init__(
         self,
         storage=None,
         request_interval: float = 0.5,
-        fallback: BaoStockMarketDataProvider | None = None,
     ) -> None:
         import akshare  # noqa: F811  — lazy import so tests can mock
 
@@ -53,7 +48,6 @@ class AkShareMarketDataProvider(ThrottleMixin):
         self._storage = storage
         self.__init_throttle__(request_interval)
         self._circuit = CircuitBreaker()
-        self._fallback = fallback
 
     # -- helpers --
 
@@ -76,73 +70,31 @@ class AkShareMarketDataProvider(ThrottleMixin):
     # -- Protocol methods --
 
     def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        """Fetch daily bars with SQLite cache + incremental update + BaoStock fallback."""
-        # Try cache first
-        if self._storage is not None:
-            last = self._storage.get_last_sync_date(symbol, "daily_bars")
-            if last is not None and last >= end:
-                return self._storage.load_daily_bars(symbol, start, end)
-            # Incremental: fetch from (last+1) to end
-            if last:
-                next_day = (datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-                fetch_start = next_day
-            else:
-                fetch_start = start
-        else:
-            fetch_start = start
-
-        # AkShare uses date format YYYYMMDD
-        ak_start = fetch_start.replace("-", "")
+        """Fetch daily bars via AkShare stock_zh_a_hist (pure API call)."""
+        ak_start = start.replace("-", "")
         ak_end = end.replace("-", "")
-
         try:
             self._throttle()
-            df = retry_call(
+            raw = retry_call(
                 lambda: self._ak.stock_zh_a_hist(
                     symbol=symbol, period="daily",
                     start_date=ak_start, end_date=ak_end, adjust="qfq",
                 ),
                 circuit=self._circuit,
             )
+            if raw is not None and not raw.empty:
+                df = self._clean_hist(raw)
+                return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
         except Exception:  # noqa: BLE001
-            logger.warning(
-                "AkShare get_daily_bars failed for %s, trying fallback", symbol, exc_info=True,
-            )
-            df = None
+            logger.warning("AkShare get_daily_bars failed for %s", symbol, exc_info=True)
 
-        # Fallback to BaoStock only on AkShare failure (not empty results)
-        if df is None and self._fallback is not None:
-            logger.info("Falling back to BaoStock for %s daily bars", symbol)
-            try:
-                fallback_df = self._fallback.get_daily_bars(symbol, fetch_start, end)
-                if fallback_df is not None and not fallback_df.empty:
-                    df = fallback_df
-            except Exception:  # noqa: BLE001
-                logger.warning("BaoStock fallback also failed for %s", symbol, exc_info=True)
-
-        # No storage — return whatever we got
-        if self._storage is None:
-            if df is None or df.empty:
-                return pd.DataFrame(
-                    columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-                )
-            df = self._clean_hist(df)
-            return df[(df["date"] >= start) & (df["date"] <= end)].reset_index(drop=True)
-
-        # df is None means API call failed — don't touch sync_log
-        if df is None:
-            return self._storage.load_daily_bars(symbol, start, end)
-
-        # API succeeded (may be empty on non-trading days)
-        if not df.empty:
-            df = self._clean_hist(df)
-            self._storage.save_daily_bars(symbol, df)
-
-        self._storage.update_sync_log(
-            symbol, "daily_bars", "ok", "akshare",
-            last_date=df["date"].max() if not df.empty else end,
+        return pd.DataFrame(
+            columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
         )
-        return self._storage.load_daily_bars(symbol, start, end)
+
+    def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        """Not supported by AkShare provider."""
+        raise NotImplementedError("AkShare does not support index daily bars")
 
     # -- international market data — PRD §4.1.1 --
 

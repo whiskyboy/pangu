@@ -63,9 +63,6 @@ def _mock_providers() -> tuple[MagicMock, MagicMock, MagicMock]:
     news.get_announcements.return_value = []
 
     fundamental = MagicMock()
-    fundamental.get_valuation.return_value = {
-        "pe_ttm": 20.0, "pb": 3.0, "market_cap": 5000.0,
-    }
     fundamental.get_financial_indicator.return_value = pd.DataFrame([{
         "roe_ttm": 0.15, "revenue_yoy": 0.10, "profit_yoy": 0.12,
     }])
@@ -132,7 +129,6 @@ class TestAddToWatchlist:
         pool.add_to_watchlist("601899", name="紫金矿业")
 
         m.get_daily_bars.assert_called_once()
-        f.get_valuation.assert_called_once_with("601899")
         f.get_financial_indicator.assert_called_once_with("601899")
         n.get_stock_news.assert_called_once_with("601899", limit=20)
         n.get_announcements.assert_called_once_with("601899", limit=20)
@@ -145,21 +141,19 @@ class TestAddToWatchlist:
         bars = db.load_daily_bars("601899", "2026-01-01", "2026-12-31")
         assert len(bars) == 2
 
-    def test_saves_fundamentals_to_db(self, empty_yaml: Path, db: Database) -> None:
+    def test_calls_financial_indicator(self, empty_yaml: Path, db: Database) -> None:
         m, n, f = _mock_providers()
         pool = StockPoolManager(empty_yaml, db, m, n, f)
         pool.add_to_watchlist("601899")
 
-        funds = db.load_fundamentals("601899", "2026-01-01", "2026-12-31")
-        assert len(funds) == 1
-        assert funds.iloc[0]["pe_ttm"] == 20.0
+        f.get_financial_indicator.assert_called_once_with("601899")
 
     def test_init_failure_does_not_block_add(
         self, empty_yaml: Path, db: Database
     ) -> None:
         m, n, f = _mock_providers()
         m.get_daily_bars.side_effect = ConnectionError("network error")
-        f.get_valuation.side_effect = ConnectionError("network error")
+        f.get_financial_indicator.side_effect = ConnectionError("network error")
 
         pool = StockPoolManager(empty_yaml, db, m, n, f)
         pool.add_to_watchlist("601899")

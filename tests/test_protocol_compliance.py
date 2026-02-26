@@ -41,12 +41,14 @@ class _StubMarket:
     def get_global_snapshot(self) -> pd.DataFrame:
         return pd.DataFrame()
 
+    def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        return pd.DataFrame()
+
 
 class _StubFundamental:
-    def get_valuation(self, symbol: str) -> dict:
-        return {}
-
-    def get_financial_indicator(self, symbol: str) -> pd.DataFrame:
+    def get_financial_indicator(
+        self, symbol: str, start: str | None = None, end: str | None = None,
+    ) -> pd.DataFrame:
         return pd.DataFrame()
 
 
@@ -310,10 +312,10 @@ class TestStubInvocation:
         m = _StubMarket()
         assert isinstance(m.get_daily_bars("000001", "2025-01-01", "2025-06-01"), pd.DataFrame)
         assert isinstance(m.get_global_snapshot(), pd.DataFrame)
+        assert isinstance(m.get_index_daily_bars("000300", "2025-01-01", "2025-06-01"), pd.DataFrame)
 
     def test_fundamental_stubs_return(self) -> None:
         f = _StubFundamental()
-        assert isinstance(f.get_valuation("000001"), dict)
         assert isinstance(f.get_financial_indicator("000001"), pd.DataFrame)
 
     def test_news_stubs_return(self) -> None:

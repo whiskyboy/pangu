@@ -115,31 +115,40 @@ class FakeMarketDataProvider:
             ignore_index=True,
         )
 
+    def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        """Generate fake index daily bars."""
+        rng = np.random.default_rng(hash(symbol) % 2**31)
+        dates = pd.bdate_range(start, end)
+        n = len(dates)
+        if n == 0:
+            return pd.DataFrame(
+                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
+            )
+        base = 3500.0
+        close = base * np.cumprod(1 + rng.normal(0.0005, 0.01, n))
+        return pd.DataFrame({
+            "date": [d.strftime("%Y-%m-%d") for d in dates],
+            "open": close * rng.uniform(0.99, 1.01, n),
+            "high": close * rng.uniform(1.0, 1.02, n),
+            "low": close * rng.uniform(0.98, 1.0, n),
+            "close": close,
+            "volume": rng.integers(1_000_000, 5_000_000, n).astype(float),
+            "amount": rng.integers(10_000_000, 50_000_000, n).astype(float),
+            "adj_factor": np.ones(n),
+        })
+
 
 # ---------------------------------------------------------------------------
 # FakeFundamentalDataProvider  (was in pangu.data.fundamental)
 # ---------------------------------------------------------------------------
 
-_VALUATIONS: dict[str, dict[str, Any]] = {
-    "600519": {"pe_ttm": 30.5, "pb": 10.2, "ps": 15.0, "market_cap": 2.2e12},
-    "000858": {"pe_ttm": 22.0, "pb": 5.8, "ps": 8.0, "market_cap": 5.8e11},
-    "300750": {"pe_ttm": 25.0, "pb": 4.5, "ps": 6.0, "market_cap": 9.0e11},
-    "601318": {"pe_ttm": 8.5, "pb": 1.1, "ps": 1.5, "market_cap": 8.7e11},
-    "000001": {"pe_ttm": 6.0, "pb": 0.6, "ps": 2.0, "market_cap": 2.3e11},
-}
-
-_DEFAULT_VALUATION: dict[str, Any] = {
-    "pe_ttm": 15.0, "pb": 2.0, "ps": 3.0, "market_cap": 1.0e11,
-}
-
 
 class FakeFundamentalDataProvider:
     """Deterministic fake data for testing."""
 
-    def get_valuation(self, symbol: str) -> dict[str, Any]:
-        return dict(_VALUATIONS.get(symbol, _DEFAULT_VALUATION))
-
-    def get_financial_indicator(self, symbol: str) -> pd.DataFrame:
+    def get_financial_indicator(
+        self, symbol: str, start: str | None = None, end: str | None = None,
+    ) -> pd.DataFrame:
         return pd.DataFrame([{
             "symbol": symbol,
             "date": "2025-12-31",

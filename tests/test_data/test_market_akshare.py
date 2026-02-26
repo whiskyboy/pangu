@@ -9,6 +9,7 @@ import pytest
 
 from pangu.data.market.akshare import AkShareMarketDataProvider
 from pangu.data.market.baostock import BaoStockMarketDataProvider, _to_bs_code
+from pangu.data.market.composite import CompositeMarketDataProvider
 from pangu.utils import CircuitBreaker, retry_call as _retry_call
 from pangu.data.storage import Database
 
@@ -142,45 +143,34 @@ class TestGetDailyBars:
 
     @patch("akshare.stock_zh_a_hist")
     def test_caches_to_sqlite(self, mock_hist: MagicMock, db: Database) -> None:
+        """Composite handles caching; AkShare alone does not write sync_log."""
         mock_hist.return_value = _fake_hist_df()
         provider = AkShareMarketDataProvider(storage=db, request_interval=0)
 
         df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
         assert len(df) == 2
-
-        # Sync log should be updated
-        assert db.get_last_sync_date("600519", "daily_bars") == "2026-01-03"
+        # Pure AkShare provider does NOT write sync_log
+        assert db.get_last_sync_date("600519", "daily_bars") is None
 
     @patch("akshare.stock_zh_a_hist")
-    def test_serves_from_cache(self, mock_hist: MagicMock, db: Database) -> None:
-        """When cache is up-to-date, AkShare should NOT be called."""
+    def test_serves_from_api_each_time(self, mock_hist: MagicMock, db: Database) -> None:
+        """Pure AkShare provider always calls API (no caching)."""
         mock_hist.return_value = _fake_hist_df()
         provider = AkShareMarketDataProvider(storage=db, request_interval=0)
 
-        # First call populates cache
         provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
-        mock_hist.reset_mock()
-
-        # Second call — cache hit
-        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
-        assert len(df) == 2
-        mock_hist.assert_not_called()
+        provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
+        assert mock_hist.call_count == 2
 
     @patch("akshare.stock_zh_a_hist")
-    def test_empty_response_falls_back_to_cache(
+    def test_empty_response_returns_empty(
         self, mock_hist: MagicMock, db: Database
     ) -> None:
-        """If AkShare returns empty, fall back to whatever is in cache."""
-        # Seed cache
-        mock_hist.return_value = _fake_hist_df()
-        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
-        provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
-
-        # Now request a later range — AkShare returns empty
+        """If AkShare returns empty, return empty DataFrame."""
         mock_hist.return_value = pd.DataFrame()
+        provider = AkShareMarketDataProvider(storage=db, request_interval=0)
         df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-05")
-        # Should return cached data
-        assert len(df) == 2
+        assert df.empty
 
     @patch("akshare.stock_zh_a_hist")
     def test_no_storage_empty_response(self, mock_hist: MagicMock) -> None:
@@ -190,12 +180,12 @@ class TestGetDailyBars:
         assert df.empty
 
     @patch("akshare.stock_zh_a_hist")
-    def test_bad_columns_raises(self, mock_hist: MagicMock) -> None:
-        """_clean_hist should raise if critical columns are missing."""
+    def test_bad_columns_returns_empty(self, mock_hist: MagicMock) -> None:
+        """_clean_hist raises on bad columns; provider catches and returns empty."""
         mock_hist.return_value = pd.DataFrame({"foo": [1], "bar": [2]})
         provider = AkShareMarketDataProvider(request_interval=0)
-        with pytest.raises(ValueError, match="missing critical columns"):
-            provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
+        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
+        assert df.empty
 
 
 # ---------------------------------------------------------------------------
@@ -471,21 +461,22 @@ class TestBaoStockDailyBars:
     def test_fetches_and_cleans(self, mock_query: MagicMock, mock_login: MagicMock) -> None:
         mock_login.return_value = MagicMock(error_code="0")
         fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "pctChg"]
+                   "preclose", "volume", "amount", "adjustflag", "pctChg",
+                   "peTTM", "pbMRQ"]
         rows = [
             ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "8.00"],
+             "10.0", "100000", "1080000", "2", "8.00", "25.3", "8.1"],
             ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
-             "10.8", "120000", "1344000", "2", "3.70"],
+             "10.8", "120000", "1344000", "2", "3.70", "26.0", "8.3"],
         ]
         mock_query.return_value = _fake_bs_result(fields, rows)
 
         provider = BaoStockMarketDataProvider()
         df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
 
-        assert list(df.columns) == [
-            "date", "open", "high", "low", "close", "volume", "amount", "adj_factor",
-        ]
+        # Raw provider returns all columns including peTTM/pbMRQ
+        assert "peTTM" in df.columns
+        assert "pbMRQ" in df.columns
         assert len(df) == 2
         assert df.iloc[0]["close"] == pytest.approx(10.8)
         mock_query.assert_called_once()
@@ -493,8 +484,8 @@ class TestBaoStockDailyBars:
 
     @patch("baostock.login")
     @patch("baostock.query_history_k_data_plus")
-    def test_saves_to_storage(self, mock_query: MagicMock, mock_login: MagicMock,
-                              db: Database) -> None:
+    def test_no_storage_interaction(self, mock_query: MagicMock, mock_login: MagicMock) -> None:
+        """Pure BaoStock provider does not write to storage."""
         mock_login.return_value = MagicMock(error_code="0")
         fields = ["date", "code", "open", "high", "low", "close",
                    "preclose", "volume", "amount", "adjustflag", "pctChg"]
@@ -504,12 +495,9 @@ class TestBaoStockDailyBars:
         ]
         mock_query.return_value = _fake_bs_result(fields, rows)
 
-        provider = BaoStockMarketDataProvider(storage=db)
-        provider.get_daily_bars("600519", "2026-01-02", "2026-01-02")
-
-        # Sync log should show source=baostock, status=fallback
-        last = db.get_last_sync_date("600519", "daily_bars")
-        assert last == "2026-01-02"
+        provider = BaoStockMarketDataProvider()
+        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-02")
+        assert len(df) == 1
         provider.close()
 
     @patch("baostock.login")
@@ -563,95 +551,118 @@ class TestBaoStockSession:
 
 
 # ---------------------------------------------------------------------------
-# AkShare → BaoStock fallback integration
+# CompositeMarketDataProvider — provider chain + caching
 # ---------------------------------------------------------------------------
 
 
-class TestAkShareFallback:
+class TestCompositeProviderChain:
     @patch("akshare.stock_zh_a_hist")
     @patch("baostock.login")
     @patch("baostock.query_history_k_data_plus")
-    def test_fallback_on_akshare_exception(
+    def test_fallback_on_primary_exception(
         self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
-        mock_ak_hist: MagicMock,
+        mock_ak_hist: MagicMock, db: Database,
     ) -> None:
-        """When AkShare raises, BaoStock fallback should be used."""
-        mock_ak_hist.side_effect = ConnectionError("AkShare down")
+        """When BaoStock raises, AkShare fallback should be used."""
+        mock_bs_login.return_value = MagicMock(error_code="0")
+        rs = MagicMock()
+        rs.error_code = "10001"
+        rs.error_msg = "query failed"
+        mock_bs_query.return_value = rs
+        mock_ak_hist.return_value = _fake_hist_df()
+
+        baostock = BaoStockMarketDataProvider()
+        akshare = AkShareMarketDataProvider(storage=db, request_interval=0)
+        composite = CompositeMarketDataProvider(storage=db, providers=[baostock, akshare])
+
+        df = composite.get_daily_bars("600519", "2026-01-02", "2026-01-03")
+        assert len(df) == 2
+        assert df.iloc[0]["close"] == pytest.approx(10.8)
+        baostock.close()
+
+    @patch("akshare.stock_zh_a_hist")
+    @patch("baostock.login")
+    @patch("baostock.query_history_k_data_plus")
+    def test_caches_to_sqlite(
+        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
+        mock_ak_hist: MagicMock, db: Database,
+    ) -> None:
+        """Composite caches data and serves from cache on subsequent calls."""
+        mock_bs_login.return_value = MagicMock(error_code="0")
+        fields = ["date", "code", "open", "high", "low", "close",
+                   "preclose", "volume", "amount", "adjustflag", "pctChg",
+                   "peTTM", "pbMRQ"]
+        rows = [
+            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
+             "10.0", "100000", "1080000", "2", "8.00", "25.3", "8.1"],
+            ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
+             "10.8", "120000", "1344000", "2", "3.70", "26.0", "8.3"],
+        ]
+        mock_bs_query.return_value = _fake_bs_result(fields, rows)
+
+        baostock = BaoStockMarketDataProvider()
+        akshare = AkShareMarketDataProvider(storage=db, request_interval=0)
+        composite = CompositeMarketDataProvider(storage=db, providers=[baostock, akshare])
+
+        df = composite.get_daily_bars("600519", "2026-01-02", "2026-01-03")
+        assert len(df) == 2
+
+        # Sync log should be updated
+        assert db.get_last_sync_date("600519", "daily_bars") == "2026-01-03"
+
+        # Second call — cache hit (no API call)
+        mock_bs_query.reset_mock()
+        df2 = composite.get_daily_bars("600519", "2026-01-02", "2026-01-03")
+        assert len(df2) == 2
+        mock_bs_query.assert_not_called()
+        baostock.close()
+
+    @patch("akshare.stock_zh_a_hist")
+    @patch("baostock.login")
+    @patch("baostock.query_history_k_data_plus")
+    def test_both_fail_returns_cached(
+        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
+        mock_ak_hist: MagicMock, db: Database,
+    ) -> None:
+        """When both providers fail, cached data should be returned."""
+        # Seed cache via successful BaoStock call
         mock_bs_login.return_value = MagicMock(error_code="0")
         fields = ["date", "code", "open", "high", "low", "close",
                    "preclose", "volume", "amount", "adjustflag", "pctChg"]
         rows = [
             ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
              "10.0", "100000", "1080000", "2", "8.00"],
+            ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
+             "10.8", "120000", "1344000", "2", "3.70"],
         ]
         mock_bs_query.return_value = _fake_bs_result(fields, rows)
 
-        fallback = BaoStockMarketDataProvider()
-        provider = AkShareMarketDataProvider(request_interval=0, fallback=fallback)
-        # Override circuit breaker to avoid long retries
-        provider._circuit = CircuitBreaker(threshold=1, cooldown=0)
+        baostock = BaoStockMarketDataProvider()
+        akshare = AkShareMarketDataProvider(storage=db, request_interval=0)
+        composite = CompositeMarketDataProvider(storage=db, providers=[baostock, akshare])
 
-        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-02")
-        assert len(df) == 1
-        assert df.iloc[0]["close"] == pytest.approx(10.8)
-        mock_bs_query.assert_called_once()
-        fallback.close()
+        composite.get_daily_bars("600519", "2026-01-02", "2026-01-03")
 
-    @patch("akshare.stock_zh_a_hist")
-    @patch("baostock.login")
-    @patch("baostock.query_history_k_data_plus")
-    def test_no_fallback_on_empty_response(
-        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
-        mock_ak_hist: MagicMock,
-    ) -> None:
-        """When AkShare returns empty, BaoStock fallback should NOT be used."""
-        mock_ak_hist.return_value = pd.DataFrame()
-
-        fallback = BaoStockMarketDataProvider()
-        provider = AkShareMarketDataProvider(request_interval=0, fallback=fallback)
-
-        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-02")
-        assert len(df) == 0
-        mock_bs_query.assert_not_called()
-        fallback.close()
-
-    @patch("akshare.stock_zh_a_hist")
-    def test_no_fallback_returns_empty(self, mock_ak_hist: MagicMock) -> None:
-        """Without fallback, AkShare failure should return empty DataFrame."""
-        mock_ak_hist.side_effect = ConnectionError("AkShare down")
-        provider = AkShareMarketDataProvider(request_interval=0)
-        # Override to speed up
-        provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
-
-        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-02")
-        assert df.empty
-
-    @patch("akshare.stock_zh_a_hist")
-    @patch("baostock.login")
-    @patch("baostock.query_history_k_data_plus")
-    def test_both_fail_falls_back_to_cache(
-        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
-        mock_ak_hist: MagicMock, db: Database,
-    ) -> None:
-        """When both AkShare and BaoStock fail, cached data should be returned."""
-        # Seed cache via a successful AkShare call
-        mock_ak_hist.return_value = _fake_hist_df()
-        fallback = BaoStockMarketDataProvider(storage=db)
-        provider = AkShareMarketDataProvider(
-            storage=db, request_interval=0, fallback=fallback,
-        )
-        provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
-
-        # Now both fail
-        mock_ak_hist.return_value = pd.DataFrame()
-        mock_bs_login.return_value = MagicMock(error_code="0")
-        mock_bs_query.return_value = _fake_bs_result(
+        # Now both fail for a later range
+        rs_empty = _fake_bs_result(
             ["date", "code", "open", "high", "low", "close",
-             "preclose", "volume", "amount", "adjustflag", "pctChg"],
-            [],
+             "preclose", "volume", "amount", "adjustflag", "pctChg"], [],
         )
+        mock_bs_query.return_value = rs_empty
+        mock_ak_hist.return_value = pd.DataFrame()
 
-        df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-05")
+        df = composite.get_daily_bars("600519", "2026-01-02", "2026-01-05")
         # Should return 2 rows from cache
         assert len(df) == 2
-        fallback.close()
+        baostock.close()
+
+    @patch("akshare.stock_zh_a_hist")
+    def test_no_fallback_returns_empty(self, mock_ak_hist: MagicMock, db: Database) -> None:
+        """With only AkShare and it fails, return empty from cache."""
+        mock_ak_hist.side_effect = ConnectionError("AkShare down")
+        akshare = AkShareMarketDataProvider(storage=db, request_interval=0)
+        akshare._circuit = CircuitBreaker(threshold=100, cooldown=0)
+        composite = CompositeMarketDataProvider(storage=db, providers=[akshare])
+
+        df = composite.get_daily_bars("600519", "2026-01-02", "2026-01-02")
+        assert df.empty
