@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from pangu.utils import CircuitBreaker, retry_call
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,7 @@ class BaoStockFundamentalProvider:
         self._bs = bs
         self._logged_in = False
         self._login_lock = threading.Lock()
+        self._circuit = CircuitBreaker()
 
     def _ensure_login(self) -> None:
         with self._login_lock:
@@ -37,6 +40,16 @@ class BaoStockFundamentalProvider:
                 if lg.error_code != "0":
                     raise RuntimeError(f"BaoStock login failed: {lg.error_msg}")
                 self._logged_in = True
+
+    def _relogin(self) -> None:
+        """Force a fresh login (e.g. after session expiry)."""
+        with self._login_lock:
+            try:
+                self._bs.logout()
+            except Exception:  # noqa: BLE001
+                pass
+            self._logged_in = False
+        self._ensure_login()
 
     def close(self) -> None:
         with self._login_lock:
@@ -49,6 +62,18 @@ class BaoStockFundamentalProvider:
             self.close()
         except AttributeError:
             pass
+
+    def _query_with_retry(self, query_fn):
+        """Execute a BaoStock query with exponential backoff and session recovery."""
+        def _checked():
+            self._ensure_login()
+            rs = query_fn()
+            if rs.error_code != "0":
+                if "未登录" in getattr(rs, "error_msg", ""):
+                    self._relogin()
+                raise RuntimeError(getattr(rs, "error_msg", "unknown error"))
+            return rs
+        return retry_call(_checked, circuit=self._circuit)
 
     @staticmethod
     def _to_bs_code(symbol: str) -> str:
@@ -105,7 +130,6 @@ class BaoStockFundamentalProvider:
         self, symbol: str, start: str | None = None, end: str | None = None,
     ) -> pd.DataFrame:
         """Fetch quarterly financial data from BaoStock."""
-        self._ensure_login()
         bs_code = self._to_bs_code(symbol)
 
         from pangu.tz import now as _now
@@ -121,7 +145,9 @@ class BaoStockFundamentalProvider:
         for year in range(start_year, current_year + 1):
             for quarter in range(1, 5):
                 try:
-                    rs_p = self._bs.query_profit_data(bs_code, year=year, quarter=quarter)
+                    rs_p = self._query_with_retry(
+                        lambda y=year, q=quarter: self._bs.query_profit_data(bs_code, year=y, quarter=q),
+                    )
                     df_p = self._query_to_df(rs_p)
                     if not df_p.empty:
                         r = df_p.iloc[0]
@@ -131,10 +157,12 @@ class BaoStockFundamentalProvider:
                             "mb_revenue": self._safe_float(r.get("MBRevenue")),
                         }
                 except Exception:  # noqa: BLE001
-                    pass
+                    logger.debug("profit query failed for %s %dQ%d", symbol, year, quarter)
 
                 try:
-                    rs_g = self._bs.query_growth_data(bs_code, year=year, quarter=quarter)
+                    rs_g = self._query_with_retry(
+                        lambda y=year, q=quarter: self._bs.query_growth_data(bs_code, year=y, quarter=q),
+                    )
                     df_g = self._query_to_df(rs_g)
                     if not df_g.empty:
                         r = df_g.iloc[0]
@@ -158,7 +186,7 @@ class BaoStockFundamentalProvider:
                             "profit_yoy": profit_yoy,
                         })
                 except Exception:  # noqa: BLE001
-                    pass
+                    logger.debug("growth query failed for %s %dQ%d", symbol, year, quarter)
 
         if not rows:
             return pd.DataFrame()

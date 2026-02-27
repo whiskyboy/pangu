@@ -10,8 +10,9 @@ import pytest
 from pangu.data.market.akshare import AkShareMarketDataProvider
 from pangu.data.market.baostock import BaoStockMarketDataProvider, _to_bs_code
 from pangu.data.market.composite import CompositeMarketDataProvider
-from pangu.utils import CircuitBreaker, retry_call as _retry_call
 from pangu.data.storage import Database
+from pangu.utils import CircuitBreaker
+from pangu.utils import retry_call as _retry_call
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -525,7 +526,10 @@ class TestBaoStockDailyBars:
         mock_query.return_value = rs
 
         provider = BaoStockMarketDataProvider()
-        with pytest.raises(RuntimeError, match="query_history_k_data_plus failed"):
+        # Pre-open circuit breaker to skip slow retries in tests
+        provider._circuit = CircuitBreaker(threshold=1, cooldown=9999)
+        provider._circuit.record_failure()
+        with pytest.raises(RuntimeError, match="Circuit breaker is open"):
             provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
         provider.close()
 

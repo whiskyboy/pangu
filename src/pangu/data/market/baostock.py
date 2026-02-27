@@ -7,6 +7,8 @@ import threading
 
 import pandas as pd
 
+from pangu.utils import CircuitBreaker, retry_call
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +58,7 @@ class BaoStockMarketDataProvider:
         self._bs = bs
         self._logged_in = False
         self._login_lock = threading.Lock()
+        self._circuit = CircuitBreaker()
 
     # -- session management --
 
@@ -66,6 +69,16 @@ class BaoStockMarketDataProvider:
                 if lg.error_code != "0":
                     raise RuntimeError(f"BaoStock login failed: {lg.error_msg}")
                 self._logged_in = True
+
+    def _relogin(self) -> None:
+        """Force a fresh login (e.g. after session expiry)."""
+        with self._login_lock:
+            try:
+                self._bs.logout()
+            except Exception:  # noqa: BLE001
+                pass
+            self._logged_in = False
+        self._ensure_login()
 
     def close(self) -> None:
         """Logout from BaoStock session."""
@@ -96,27 +109,32 @@ class BaoStockMarketDataProvider:
         "adjustflag,pctChg,peTTM,pbMRQ"
     )
 
+    def _query_with_retry(self, query_fn):
+        """Execute a BaoStock query with exponential backoff and session recovery."""
+        def _checked():
+            self._ensure_login()
+            rs = query_fn()
+            if rs.error_code != "0":
+                if "未登录" in getattr(rs, "error_msg", ""):
+                    self._relogin()
+                raise RuntimeError(getattr(rs, "error_msg", "unknown error"))
+            return rs
+        return retry_call(_checked, circuit=self._circuit)
+
     def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Fetch daily K-line via bs.query_history_k_data_plus.
 
         Returns OHLCV DataFrame with peTTM/pbMRQ columns (for Composite
         to extract and persist valuation data).
         """
-        self._ensure_login()
-
         bs_code = _to_bs_code(symbol)
-        rs = self._bs.query_history_k_data_plus(
-            bs_code,
-            self._DAILY_FIELDS,
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="2",  # 前复权 = qfq
-        )
-        if rs.error_code != "0":
-            raise RuntimeError(
-                f"BaoStock query_history_k_data_plus failed for {bs_code}: {rs.error_msg}"
+        rs = self._query_with_retry(
+            lambda: self._bs.query_history_k_data_plus(
+                bs_code, self._DAILY_FIELDS,
+                start_date=start, end_date=end,
+                frequency="d", adjustflag="2",
             )
+        )
 
         df = self._query_to_df(rs)
         if df.empty:
@@ -136,21 +154,14 @@ class BaoStockMarketDataProvider:
 
     def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Fetch index daily K-line (e.g. CSI300 '000300')."""
-        self._ensure_login()
-
         bs_code = _to_bs_index_code(symbol)
-        rs = self._bs.query_history_k_data_plus(
-            bs_code,
-            "date,code,open,high,low,close,volume,amount",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="3",  # 指数无复权
-        )
-        if rs.error_code != "0":
-            raise RuntimeError(
-                f"BaoStock index query failed for {bs_code}: {rs.error_msg}"
+        rs = self._query_with_retry(
+            lambda: self._bs.query_history_k_data_plus(
+                bs_code, "date,code,open,high,low,close,volume,amount",
+                start_date=start, end_date=end,
+                frequency="d", adjustflag="3",
             )
+        )
 
         df = self._query_to_df(rs)
         if df.empty:
