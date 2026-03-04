@@ -33,20 +33,25 @@ class CompositeFundamentalProvider:
 
     def get_financial_indicator(
         self, symbol: str, start: str | None = None, end: str | None = None,
+        *, force: bool = False,
     ) -> pd.DataFrame:
-        """Return financial indicators with cache + provider chain fallback."""
+        """Return financial indicators with cache + provider chain fallback.
+
+        If *force* is True, bypass sync interval check and always fetch from providers.
+        """
         from datetime import timedelta
 
         from pangu.tz import now as tz_now
 
-        # Cache check: if synced within interval, read from DB
-        last = self._storage.get_last_sync_date(symbol, "financial_indicator")
-        if last is not None:
-            cutoff = (tz_now() - timedelta(days=_FINANCIAL_SYNC_INTERVAL_DAYS)).strftime("%Y-%m-%d")
-            if last >= cutoff:
-                cached = self._load_financial_from_db(symbol, start, end)
-                if not cached.empty:
-                    return cached
+        # Cache check: if synced within interval, read from DB (skip when force)
+        if not force:
+            last = self._storage.get_last_sync_date(symbol, "financial_indicator")
+            if last is not None:
+                cutoff = (tz_now() - timedelta(days=_FINANCIAL_SYNC_INTERVAL_DAYS)).strftime("%Y-%m-%d")
+                if last >= cutoff:
+                    cached = self._load_financial_from_db(symbol, start, end)
+                    if not cached.empty:
+                        return cached
 
         # Try providers in priority order
         df, source = None, "unknown"

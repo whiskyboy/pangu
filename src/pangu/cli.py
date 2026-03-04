@@ -142,7 +142,8 @@ def backfill() -> None:
 
 @backfill.command("bars")
 @click.option("--start", required=True, help="Start date (YYYY-MM-DD)")
-def backfill_bars(start: str) -> None:
+@click.option("--force", is_flag=True, help="Bypass cache, fetch full range from providers")
+def backfill_bars(start: str, force: bool) -> None:
     """Backfill daily OHLCV + PE/PB for all pool stocks."""
     from pangu.main import build_components, load_env
     load_env()
@@ -155,10 +156,11 @@ def backfill_bars(start: str) -> None:
     total = len(pool)
     ok, fail = 0, 0
 
-    click.echo(f"Backfilling {total} stocks from {start} to {today}...")
+    mode = " (FORCE)" if force else ""
+    click.echo(f"Backfilling {total} stocks from {start} to {today}{mode}...")
     for i, symbol in enumerate(pool, 1):
         try:
-            df = c.market.get_daily_bars(symbol, start, today)
+            df = c.market.get_daily_bars(symbol, start, today, force=force)
             if df is not None and not df.empty:
                 ok += 1
             else:
@@ -175,7 +177,8 @@ def backfill_bars(start: str) -> None:
 @backfill.command("index")
 @click.option("--start", required=True, help="Start date (YYYY-MM-DD)")
 @click.option("--symbol", default="000300", help="Index code (default: 000300)")
-def backfill_index(start: str, symbol: str) -> None:
+@click.option("--force", is_flag=True, help="Bypass cache, fetch full range")
+def backfill_index(start: str, symbol: str, force: bool) -> None:
     """Backfill index daily bars (default: CSI300)."""
     from pangu.main import build_components, load_env
     load_env()
@@ -184,14 +187,15 @@ def backfill_index(start: str, symbol: str) -> None:
     from pangu.tz import today_str
 
     today = today_str()
-    click.echo(f"Backfilling index {symbol} from {start} to {today}...")
-    df = c.market.get_index_daily_bars(symbol, start, today)
+    click.echo(f"Backfilling index {symbol} from {start} to {today}{'(FORCE)' if force else ''}...")
+    df = c.market.get_index_daily_bars(symbol, start, today, force=force)
     click.echo(f"✅ Index {symbol}: {len(df)} bars loaded")
 
 
 @backfill.command("fundamentals")
 @click.option("--start", required=True, help="Start date (YYYY-MM-DD, e.g. 2022-10-01)")
-def backfill_fundamentals(start: str) -> None:
+@click.option("--force", is_flag=True, help="Bypass cache, re-fetch from providers")
+def backfill_fundamentals(start: str, force: bool) -> None:
     """Backfill quarterly financial indicators."""
     from pangu.main import build_components, load_env
     load_env()
@@ -201,10 +205,10 @@ def backfill_fundamentals(start: str) -> None:
     total = len(pool)
     ok, fail = 0, 0
 
-    click.echo(f"Backfilling fundamentals for {total} stocks from {start}...")
+    click.echo(f"Backfilling fundamentals for {total} stocks from {start}{'(FORCE)' if force else ''}...")
     for i, symbol in enumerate(pool, 1):
         try:
-            df = c.fundamental.get_financial_indicator(symbol, start=start)
+            df = c.fundamental.get_financial_indicator(symbol, start=start, force=force)
             if df is not None and not df.empty:
                 ok += 1
             else:

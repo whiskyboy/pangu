@@ -36,14 +36,19 @@ class CompositeMarketDataProvider:
     # Protocol methods
     # ------------------------------------------------------------------
 
-    def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        """Fetch daily bars with cache + provider chain fallback."""
-        # 1. Cache check
-        last = self._storage.get_last_sync_date(symbol, "daily_bars")
+    def get_daily_bars(self, symbol: str, start: str, end: str, *, force: bool = False) -> pd.DataFrame:
+        """Fetch daily bars with cache + provider chain fallback.
+
+        If *force* is True, bypass sync_log and fetch the full [start, end] range.
+        """
+        # 1. Check sync_log once
+        last = None if force else self._storage.get_last_sync_date(symbol, "daily_bars")
+
+        # 2. Cache hit: already have data up to end
         if last is not None and last >= end:
             return self._storage.load_daily_bars(symbol, start, end)
 
-        # 2. Incremental fetch
+        # 3. Determine fetch range (full range if force, incremental otherwise)
         if last:
             next_day = (datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             fetch_start = next_day
@@ -86,10 +91,10 @@ class CompositeMarketDataProvider:
 
         return self._storage.load_daily_bars(symbol, start, end)
 
-    def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+    def get_index_daily_bars(self, symbol: str, start: str, end: str, *, force: bool = False) -> pd.DataFrame:
         """Fetch index daily bars with cache + provider chain fallback."""
-        # Cache check
-        last = self._storage.get_last_sync_date(symbol, "daily_bars")
+        last = None if force else self._storage.get_last_sync_date(symbol, "daily_bars")
+
         if last is not None and last >= end:
             return self._storage.load_daily_bars(symbol, start, end)
 
