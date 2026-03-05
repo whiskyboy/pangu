@@ -147,12 +147,12 @@ CREATE TABLE IF NOT EXISTS factor_pool (
 );
 
 CREATE TABLE IF NOT EXISTS index_constituents (
+    date          TEXT NOT NULL,     -- snapshot date (semi-annual: YYYY-01-01 or YYYY-07-01)
+    index_code    TEXT NOT NULL,     -- e.g. '000300' for CSI300
     symbol        TEXT NOT NULL,
     name          TEXT,
-    index_code    TEXT NOT NULL,     -- e.g. '000300' for CSI300
     sector        TEXT,              -- 东财行业分类
-    updated_date  TEXT NOT NULL,     -- YYYY-MM-DD
-    PRIMARY KEY (symbol, index_code)
+    PRIMARY KEY (date, index_code, symbol)
 );
 """
 
@@ -241,6 +241,29 @@ class Database:
             if col not in sig_cols:
                 self._conn.execute(f"ALTER TABLE trade_signals ADD COLUMN {col} REAL")
         self._conn.commit()
+
+        # Migrate index_constituents: add date column, change PK
+        ic_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(index_constituents)").fetchall()
+        }
+        if "updated_date" in ic_cols and "date" not in ic_cols:
+            self._conn.executescript("""
+                ALTER TABLE index_constituents RENAME TO index_constituents_old;
+                CREATE TABLE index_constituents (
+                    date       TEXT NOT NULL,
+                    index_code TEXT NOT NULL,
+                    symbol     TEXT NOT NULL,
+                    name       TEXT,
+                    sector     TEXT,
+                    PRIMARY KEY (date, index_code, symbol)
+                );
+                INSERT INTO index_constituents (date, index_code, symbol, name, sector)
+                SELECT updated_date, index_code, symbol, name, sector
+                FROM index_constituents_old;
+                DROP TABLE index_constituents_old;
+            """)
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # daily_bars
@@ -831,20 +854,20 @@ class Database:
     def save_index_constituents(self, rows: list[dict]) -> int:
         """INSERT OR REPLACE index constituents.
 
-        Each dict must have: symbol, name, index_code, updated_date.
-        Optional: sector.
+        Each dict must have: date, symbol, index_code.
+        Optional: name, sector.
         """
         if not rows:
             return 0
         tuples = [
-            (r["symbol"], r.get("name"), r["index_code"],
-             r.get("sector"), r["updated_date"])
+            (r["date"], r["index_code"], r["symbol"],
+             r.get("name"), r.get("sector"))
             for r in rows
         ]
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO index_constituents "
-                "(symbol, name, index_code, sector, updated_date) "
+                "(date, index_code, symbol, name, sector) "
                 "VALUES (?, ?, ?, ?, ?)",
                 tuples,
             )
@@ -864,32 +887,89 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
-    def load_index_constituents(self, index_code: str) -> list[dict]:
-        """Load constituents for a given index code."""
+    def load_index_constituents(self, index_code: str, date: str | None = None) -> list[dict]:
+        """Load constituents for a given index code.
+
+        If *date* is given, return that snapshot. Otherwise return the latest snapshot.
+        """
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT symbol, name, index_code, sector, updated_date "
-                "FROM index_constituents WHERE index_code = ? ORDER BY symbol",
-                (index_code,),
-            ).fetchall()
+            if date:
+                rows = self._conn.execute(
+                    "SELECT date, index_code, symbol, name, sector "
+                    "FROM index_constituents WHERE index_code = ? AND date = ? "
+                    "ORDER BY symbol",
+                    (index_code, date),
+                ).fetchall()
+            else:
+                # Latest snapshot
+                rows = self._conn.execute(
+                    "SELECT date, index_code, symbol, name, sector "
+                    "FROM index_constituents WHERE index_code = ? AND date = ("
+                    "  SELECT MAX(date) FROM index_constituents WHERE index_code = ?"
+                    ") ORDER BY symbol",
+                    (index_code, index_code),
+                ).fetchall()
         return [
-            {"symbol": r[0], "name": r[1], "index_code": r[2],
-             "sector": r[3], "updated_date": r[4]}
+            {"date": r[0], "index_code": r[1], "symbol": r[2],
+             "name": r[3], "sector": r[4]}
             for r in rows
         ]
 
-    def load_all_index_constituents(self) -> list[dict]:
-        """Load constituents for all index codes."""
+    def load_all_index_constituents(self, date: str | None = None) -> list[dict]:
+        """Load constituents for all index codes.
+
+        If *date* is given, return that snapshot. Otherwise return the latest snapshot.
+        """
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT symbol, name, index_code, sector, updated_date "
-                "FROM index_constituents ORDER BY symbol",
-            ).fetchall()
+            if date:
+                rows = self._conn.execute(
+                    "SELECT date, index_code, symbol, name, sector "
+                    "FROM index_constituents WHERE date = ? ORDER BY symbol",
+                    (date,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT date, index_code, symbol, name, sector "
+                    "FROM index_constituents WHERE date = ("
+                    "  SELECT MAX(date) FROM index_constituents"
+                    ") ORDER BY symbol",
+                ).fetchall()
         return [
-            {"symbol": r[0], "name": r[1], "index_code": r[2],
-             "sector": r[3], "updated_date": r[4]}
+            {"date": r[0], "index_code": r[1], "symbol": r[2],
+             "name": r[3], "sector": r[4]}
             for r in rows
         ]
+
+    def load_constituents_for_date(self, target_date: str) -> list[str]:
+        """Return stock symbols from the nearest snapshot <= target_date.
+
+        Used for training/backtest to get the constituents active at a given point in time.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT symbol FROM index_constituents "
+                "WHERE date = (SELECT MAX(date) FROM index_constituents WHERE date <= ?) "
+                "ORDER BY symbol",
+                (target_date,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def load_constituents_union(self, start: str, end: str) -> list[str]:
+        """Return all symbols that appeared in any snapshot between start and end.
+
+        Used for training data: include all stocks that were ever in the index during the window.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT symbol FROM index_constituents "
+                "WHERE date >= COALESCE("
+                "  (SELECT MAX(date) FROM index_constituents WHERE date <= ?),"
+                "  ?"
+                ") AND date <= ? "
+                "ORDER BY symbol",
+                (start, start, end),
+            ).fetchall()
+        return [r[0] for r in rows]
 
     # ------------------------------------------------------------------
     # Lifecycle

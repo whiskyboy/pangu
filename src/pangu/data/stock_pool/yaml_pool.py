@@ -378,7 +378,7 @@ class StockPoolManager:
                     "name": name,
                     "index_code": index_code,
                     "sector": sector,
-                    "updated_date": today,
+                    "date": today,
                 })
                 if idx % 50 == 0:
                     logger.info("sync_index(%s): %d/%d stocks processed", index_code, idx, total)
@@ -389,6 +389,93 @@ class StockPoolManager:
             logger.info("sync_index: removed %d constituents from unconfigured indices", removed)
         logger.info("sync_index: %d constituents saved across %d indices", count, len(self._indices))
         return count
+
+    def sync_historical_constituents(
+        self, start: str = "2019-01-01", end: str | None = None,
+    ) -> tuple[int, set[str]]:
+        """Fetch historical index constituents from BaoStock, sampled semi-annually.
+
+        Uses ``bs.query_hs300_stocks(date=)`` and ``bs.query_zz500_stocks(date=)``
+        to get constituents at each sampling date. A-share indices adjust every
+        June and December, so semi-annual sampling matches the real cadence.
+
+        Returns (rows_saved, unique_symbols).
+        """
+        import baostock as bs
+        import pandas as pd
+
+        from pangu.utils import CircuitBreaker, retry_call
+        from pangu.tz import today_str
+
+        end = end or today_str()
+        lg = bs.login()
+        if lg.error_code != "0":
+            raise RuntimeError(f"BaoStock login failed: {lg.error_msg}")
+
+        circuit = CircuitBreaker()
+
+        dates = pd.date_range(start, end, freq="6MS").strftime("%Y-%m-%d").tolist()
+        if end not in dates:
+            dates.append(end)
+
+        _INDEX_QUERIES = {
+            "000300": bs.query_hs300_stocks,
+            "000905": bs.query_zz500_stocks,
+        }
+
+        all_rows: list[dict] = []
+        all_symbols: set[str] = set()
+
+        for d in dates:
+            for idx_code in self._indices:
+                query_fn = _INDEX_QUERIES.get(idx_code)
+                if query_fn is None:
+                    continue
+
+                def _query(fn=query_fn, dt=d):
+                    rs = fn(date=dt)
+                    if rs.error_code != "0":
+                        if "未登录" in getattr(rs, "error_msg", ""):
+                            bs.logout()
+                            lg = bs.login()
+                            if lg.error_code != "0":
+                                raise RuntimeError(f"BaoStock re-login failed: {lg.error_msg}")
+                        raise RuntimeError(getattr(rs, "error_msg", "unknown"))
+                    return rs
+
+                try:
+                    rs = retry_call(_query, circuit=circuit)
+                except Exception:  # noqa: BLE001
+                    logger.warning("sync_historical(%s, %s): query failed", idx_code, d)
+                    continue
+
+                df = rs.get_data()
+                if df.empty:
+                    continue
+
+                for _, r in df.iterrows():
+                    code = r["code"]
+                    if not code.startswith(("sh.", "sz.")):
+                        continue
+                    symbol = code[3:]
+                    all_rows.append({
+                        "date": d,
+                        "index_code": idx_code,
+                        "symbol": symbol,
+                        "name": r.get("code_name", ""),
+                    })
+                    all_symbols.add(symbol)
+
+            logger.info("sync_historical: %s — %d rows so far", d, len(all_rows))
+
+        bs.logout()
+
+        count = self._storage.save_index_constituents(all_rows)
+        logger.info(
+            "sync_historical: %d records saved, %d unique stocks, %d dates",
+            count, len(all_symbols), len(dates),
+        )
+        return count, all_symbols
 
     def _get_index_stocks(self) -> list[str]:
         """Return constituent symbols from all configured indices (deduplicated)."""

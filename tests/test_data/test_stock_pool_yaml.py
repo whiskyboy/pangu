@@ -400,9 +400,9 @@ class TestIndexConstituents:
         # Pre-populate DB with two indices
         db.save_index_constituents([
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
             {"symbol": "002475", "name": "立讯精密", "index_code": "000905",
-             "sector": "电子", "updated_date": "2026-02-20"},
+             "sector": "电子", "date": "2026-02-20"},
         ])
         assert len(db.load_index_constituents("000905")) == 1
 
@@ -424,9 +424,9 @@ class TestIndexConstituents:
     def test_get_index_stocks_from_db(self, tmp_yaml: Path, db: Database) -> None:
         db.save_index_constituents([
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
             {"symbol": "000858", "name": "五粮液", "index_code": "000300",
-             "sector": "食品饮料", "updated_date": "2026-02-20"},
+             "sector": "食品饮料", "date": "2026-02-20"},
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
@@ -437,11 +437,11 @@ class TestIndexConstituents:
         """Same stock in two indices is deduplicated."""
         db.save_index_constituents([
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000905",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
             {"symbol": "002475", "name": "立讯精密", "index_code": "000905",
-             "sector": "电子", "updated_date": "2026-02-20"},
+             "sector": "电子", "date": "2026-02-20"},
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300", "000905"])
@@ -453,9 +453,9 @@ class TestIndexConstituents:
         """All symbols = watchlist + configured indices, deduplicated."""
         db.save_index_constituents([
             {"symbol": "601899", "name": "紫金矿业", "index_code": "000300",
-             "sector": "有色金属", "updated_date": "2026-02-20"},
+             "sector": "有色金属", "date": "2026-02-20"},
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
@@ -468,9 +468,9 @@ class TestIndexConstituents:
         """DB provides index names/sectors; YAML fills gaps for watchlist-only stocks."""
         db.save_index_constituents([
             {"symbol": "601899", "name": "紫金矿业DB", "index_code": "000300",
-             "sector": "工业金属", "updated_date": "2026-02-20"},
+             "sector": "工业金属", "date": "2026-02-20"},
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
         ])
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)

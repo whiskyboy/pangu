@@ -220,7 +220,7 @@ class TradingScheduler:
             rows = self._c.db.load_all_index_constituents()
             if rows and isinstance(rows, list) and len(rows) > 0:
                 import datetime as _dt_mod
-                latest = max(r.get("updated_date", "") for r in rows)
+                latest = max(r.get("date", "") for r in rows)
                 latest_date = _dt_mod.date.fromisoformat(latest)
                 days_ago = (_now().date() - latest_date).days
                 if days_ago <= 7:

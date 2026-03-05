@@ -443,9 +443,9 @@ class TestIndexConstituents:
     def test_save_and_load(self, db: Database) -> None:
         rows = [
             {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
             {"symbol": "000858", "name": "五粮液", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
         ]
         n = db.save_index_constituents(rows)
         assert n == 2
@@ -461,11 +461,11 @@ class TestIndexConstituents:
     def test_upsert(self, db: Database) -> None:
         db.save_index_constituents([
             {"symbol": "600519", "name": "茅台旧", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-01-01"},
+             "sector": "白酒", "date": "2026-01-01"},
         ])
         db.save_index_constituents([
             {"symbol": "600519", "name": "茅台新", "index_code": "000300",
-             "sector": "食品饮料", "updated_date": "2026-02-20"},
+             "sector": "食品饮料", "date": "2026-02-20"},
         ])
         loaded = db.load_index_constituents("000300")
         assert len(loaded) == 1
@@ -475,9 +475,9 @@ class TestIndexConstituents:
     def test_different_index_codes_isolated(self, db: Database) -> None:
         db.save_index_constituents([
             {"symbol": "600519", "name": "茅台", "index_code": "000300",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
             {"symbol": "600519", "name": "茅台", "index_code": "000905",
-             "sector": "白酒", "updated_date": "2026-02-20"},
+             "sector": "白酒", "date": "2026-02-20"},
         ])
         assert len(db.load_index_constituents("000300")) == 1
         assert len(db.load_index_constituents("000905")) == 1

@@ -140,10 +140,51 @@ def backfill() -> None:
     """Backfill historical data from BaoStock."""
 
 
+def _load_pool_yaml(path: str) -> list[str] | None:
+    """Load stock list from YAML file. Returns None on error."""
+    import yaml
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        pool = data.get("stocks", [])
+        if not pool:
+            click.echo(f"Warning: No stocks found in {path}", err=True)
+            return None
+        return [str(s) for s in pool]
+    except FileNotFoundError:
+        click.echo(f"Error: File not found: {path}", err=True)
+        return None
+    except yaml.YAMLError as e:
+        click.echo(f"Error: Invalid YAML in {path}: {e}", err=True)
+        return None
+
+
+@backfill.command("constituents")
+@click.option("--start", default="2019-01-01", help="Start date for semi-annual sampling")
+@click.option("--end", default=None, help="End date (default: today)")
+def backfill_constituents(start: str, end: str | None) -> None:
+    """Backfill historical index constituents (CSI300 + CSI500) semi-annually."""
+    from pangu.main import build_components, load_env
+    load_env()
+    c, _, _ = build_components()
+
+    count, all_symbols = c.stock_pool.sync_historical_constituents(start, end)
+    click.echo(f"\n✅ Saved {count} constituent records, {len(all_symbols)} unique stocks")
+
+    # Export unique symbols to YAML
+    yaml_path = "config/backfill_stock_pool.yaml"
+    with open(yaml_path, "w") as f:
+        f.write("stocks:\n")
+        for sym in sorted(all_symbols):
+            f.write(f'- "{sym}"\n')
+    click.echo(f"📄 Exported {len(all_symbols)} symbols to {yaml_path}")
+
+
 @backfill.command("bars")
 @click.option("--start", required=True, help="Start date (YYYY-MM-DD)")
 @click.option("--force", is_flag=True, help="Bypass cache, fetch full range from providers")
-def backfill_bars(start: str, force: bool) -> None:
+@click.option("--pool", "pool_file", default=None, help="YAML file with stock list (default: current constituents)")
+def backfill_bars(start: str, force: bool, pool_file: str | None) -> None:
     """Backfill daily OHLCV + PE/PB for all pool stocks."""
     from pangu.main import build_components, load_env
     load_env()
@@ -151,7 +192,13 @@ def backfill_bars(start: str, force: bool) -> None:
 
     from pangu.tz import today_str
 
-    pool = c.stock_pool.get_all_symbols()
+    if pool_file:
+        pool = _load_pool_yaml(pool_file)
+        if pool is None:
+            return
+        click.echo(f"Using pool from {pool_file}: {len(pool)} stocks")
+    else:
+        pool = c.stock_pool.get_all_symbols()
     today = today_str()
     total = len(pool)
     ok, fail = 0, 0
@@ -195,13 +242,20 @@ def backfill_index(start: str, symbol: str, force: bool) -> None:
 @backfill.command("fundamentals")
 @click.option("--start", required=True, help="Start date (YYYY-MM-DD, e.g. 2022-10-01)")
 @click.option("--force", is_flag=True, help="Bypass cache, re-fetch from providers")
-def backfill_fundamentals(start: str, force: bool) -> None:
+@click.option("--pool", "pool_file", default=None, help="YAML file with stock list")
+def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> None:
     """Backfill quarterly financial indicators."""
     from pangu.main import build_components, load_env
     load_env()
     c, _, _ = build_components()
 
-    pool = c.stock_pool.get_all_symbols()
+    if pool_file:
+        pool = _load_pool_yaml(pool_file)
+        if pool is None:
+            return
+        click.echo(f"Using pool from {pool_file}: {len(pool)} stocks")
+    else:
+        pool = c.stock_pool.get_all_symbols()
     total = len(pool)
     ok, fail = 0, 0
 
@@ -221,10 +275,6 @@ def backfill_fundamentals(start: str, force: bool) -> None:
 
     click.echo(f"\n✅ Backfill fundamentals done: {ok} ok, {fail} failed")
 
-
-# ---------------------------------------------------------------------------
-# status command
-# ---------------------------------------------------------------------------
 
 @main.command()
 def status() -> None:
