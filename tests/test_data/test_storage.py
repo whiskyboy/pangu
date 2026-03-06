@@ -421,6 +421,83 @@ class TestFundamentals:
         loaded = db.load_fundamentals("600519", "2026-01-02", "2026-01-02")
         assert loaded.iloc[0]["pe_ttm"] == pytest.approx(35.0)
 
+    def test_save_new_columns(self, db: Database) -> None:
+        """New fundamental columns (net_profit_margin etc.) can be saved and loaded."""
+        df = pd.DataFrame({
+            "date": ["2024-03-31"],
+            "roe_ttm": [0.15],
+            "net_profit_margin": [0.35],
+            "debt_ratio": [0.42],
+            "current_ratio": [1.8],
+        })
+        db.save_fundamentals("600519", df)
+        loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
+        assert loaded.iloc[0]["net_profit_margin"] == pytest.approx(0.35)
+        assert loaded.iloc[0]["debt_ratio"] == pytest.approx(0.42)
+        assert loaded.iloc[0]["current_ratio"] == pytest.approx(1.8)
+
+    def test_upsert_preserves_existing_columns(self, db: Database) -> None:
+        """Writing quarterly data (ROE) doesn't overwrite daily data (PE/PB)."""
+        # First: daily PE/PB
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-03-31"],
+            "pe_ttm": [25.0],
+            "pb": [3.0],
+        }))
+        # Second: quarterly ROE (pe_ttm=None should NOT overwrite 25.0)
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-03-31"],
+            "roe_ttm": [0.15],
+            "net_profit_margin": [0.30],
+        }))
+        loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
+        assert loaded.iloc[0]["pe_ttm"] == pytest.approx(25.0)  # preserved
+        assert loaded.iloc[0]["roe_ttm"] == pytest.approx(0.15)  # merged
+
+    def test_load_fundamentals_filled_basic(self, db: Database) -> None:
+        """Forward fill quarterly columns across daily rows."""
+        rows = pd.DataFrame({
+            "date": ["2024-01-02", "2024-01-03", "2024-03-31", "2024-04-01", "2024-04-02"],
+            "pe_ttm": [25.0, 25.5, 26.0, 26.5, 27.0],
+            "pb": [3.0, 3.1, 3.2, 3.3, 3.4],
+            "roe_ttm": [None, None, 0.15, None, None],
+            "profit_yoy": [None, None, 0.10, None, None],
+        })
+        db.save_fundamentals("600519", rows)
+        filled = db.load_fundamentals_filled("600519", "2024-01-02", "2024-04-02")
+        # Before Q1 report: ROE should still be None (no seed)
+        assert pd.isna(filled.iloc[0]["roe_ttm"])
+        # After Q1 report: ROE should be forward-filled
+        assert filled.iloc[3]["roe_ttm"] == pytest.approx(0.15)
+        assert filled.iloc[4]["roe_ttm"] == pytest.approx(0.15)
+        # PE/PB should remain unchanged (daily, not ffilled)
+        assert filled.iloc[0]["pe_ttm"] == pytest.approx(25.0)
+
+    def test_load_fundamentals_filled_seed(self, db: Database) -> None:
+        """Seed row from before start date fills first rows."""
+        # Q4 2023 report (before our query range)
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2023-12-31"],
+            "roe_ttm": [0.20],
+        }))
+        # Daily PE rows in Jan 2024 (no quarterly data)
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-01-02", "2024-01-03"],
+            "pe_ttm": [25.0, 25.5],
+        }))
+        filled = db.load_fundamentals_filled("600519", "2024-01-02", "2024-01-03")
+        # Should pick up 2023-12-31 ROE as seed
+        assert len(filled) == 2
+        assert filled.iloc[0]["roe_ttm"] == pytest.approx(0.20)
+        assert filled.iloc[1]["roe_ttm"] == pytest.approx(0.20)
+        # Seed row (2023-12-31) should NOT appear in output
+        assert filled.iloc[0]["date"] == "2024-01-02"
+
+    def test_load_fundamentals_filled_empty(self, db: Database) -> None:
+        """Empty table returns empty DataFrame."""
+        filled = db.load_fundamentals_filled("600519", "2024-01-01", "2024-12-31")
+        assert filled.empty
+
 
 # ------------------------------------------------------------------
 # close

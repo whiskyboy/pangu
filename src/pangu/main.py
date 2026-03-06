@@ -82,7 +82,7 @@ def build_components() -> tuple[Components, str, Settings]:
     news = AkShareNewsDataProvider(storage=db)
     baostock_fund = BaoStockFundamentalProvider()
     akshare_fund = AkShareFundamentalProvider()
-    fundamental = CompositeFundamentalProvider(storage=db, providers=[baostock_fund, akshare_fund])
+    fundamental = CompositeFundamentalProvider(storage=db, providers=[akshare_fund, baostock_fund])
 
     sys_cfg = settings.system
     pool_cfg = settings.stock_pool

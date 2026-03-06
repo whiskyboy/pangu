@@ -142,7 +142,10 @@ class BaoStockFundamentalProvider:
 
         rows: list[dict[str, Any]] = []
         profit_by_quarter: dict[str, dict] = {}
-        for year in range(start_year, current_year + 1):
+        # Query one extra year before start_year to provide YoY baseline for revenue_yoy.
+        # Only save rows from start_year onwards.
+        query_start = start_year - 1
+        for year in range(query_start, current_year + 1):
             for quarter in range(1, 5):
                 try:
                     rs_p = self._query_with_retry(
@@ -164,7 +167,7 @@ class BaoStockFundamentalProvider:
                         lambda y=year, q=quarter: self._bs.query_growth_data(bs_code, year=y, quarter=q),
                     )
                     df_g = self._query_to_df(rs_g)
-                    if not df_g.empty:
+                    if not df_g.empty and year >= start_year:
                         r = df_g.iloc[0]
                         stat_date = r.get("statDate", "")
                         roe = profit_by_quarter.get(f"{year}Q{quarter}", {}).get("roe")

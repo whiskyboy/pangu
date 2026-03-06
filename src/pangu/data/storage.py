@@ -98,14 +98,23 @@ CREATE TABLE IF NOT EXISTS backtest_results (
 );
 
 CREATE TABLE IF NOT EXISTS fundamentals (
-    symbol       TEXT NOT NULL,
-    date         TEXT NOT NULL,
-    pe_ttm       REAL,
-    pb           REAL,
-    roe_ttm      REAL,
-    revenue_yoy  REAL,
-    profit_yoy   REAL,
-    market_cap   REAL,
+    symbol              TEXT NOT NULL,
+    date                TEXT NOT NULL,
+    pe_ttm              REAL,
+    pb                  REAL,
+    roe_ttm             REAL,
+    revenue_yoy         REAL,
+    profit_yoy          REAL,
+    market_cap          REAL,
+    net_profit_margin   REAL,
+    gross_margin        REAL,
+    debt_ratio          REAL,
+    asset_turnover      REAL,
+    current_ratio       REAL,
+    equity_yoy          REAL,
+    asset_yoy           REAL,
+    cashflow_per_share  REAL,
+    cashflow_to_profit  REAL,
     PRIMARY KEY (symbol, date)
 );
 
@@ -264,6 +273,21 @@ class Database:
                 DROP TABLE index_constituents_old;
             """)
             self._conn.commit()
+
+        # Migrate fundamentals: add new columns if missing
+        fund_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(fundamentals)").fetchall()
+        }
+        new_fund_cols = [
+            "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
+            "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
+            "cashflow_to_profit",
+        ]
+        for col in new_fund_cols:
+            if col not in fund_cols:
+                self._conn.execute(f"ALTER TABLE fundamentals ADD COLUMN {col} REAL")
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # daily_bars
@@ -652,34 +676,30 @@ class Database:
     # fundamentals
     # ------------------------------------------------------------------
 
+    _FUND_COLS = [
+        "pe_ttm", "pb", "roe_ttm", "revenue_yoy", "profit_yoy", "market_cap",
+        "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
+        "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
+        "cashflow_to_profit",
+    ]
+
     def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:
         """Upsert fundamentals rows, merging non-NULL fields. Returns row count."""
         if df.empty:
             return 0
+        cols = self._FUND_COLS
         rows: list[tuple[Any, ...]] = []
         for _, r in df.iterrows():
-            rows.append((
-                symbol,
-                str(r["date"]),
-                r.get("pe_ttm"),
-                r.get("pb"),
-                r.get("roe_ttm"),
-                r.get("revenue_yoy"),
-                r.get("profit_yoy"),
-                r.get("market_cap"),
-            ))
+            rows.append(
+                (symbol, str(r["date"])) + tuple(r.get(c) for c in cols)
+            )
+        col_list = ", ".join(["symbol", "date"] + cols)
+        placeholders = ", ".join(["?"] * (2 + len(cols)))
+        upsert = ", ".join(f"{c} = COALESCE(excluded.{c}, {c})" for c in cols)
         with self._lock:
             self._conn.executemany(
-                "INSERT INTO fundamentals "
-                "(symbol, date, pe_ttm, pb, roe_ttm, revenue_yoy, profit_yoy, market_cap) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(symbol, date) DO UPDATE SET "
-                "pe_ttm = COALESCE(excluded.pe_ttm, pe_ttm), "
-                "pb = COALESCE(excluded.pb, pb), "
-                "roe_ttm = COALESCE(excluded.roe_ttm, roe_ttm), "
-                "revenue_yoy = COALESCE(excluded.revenue_yoy, revenue_yoy), "
-                "profit_yoy = COALESCE(excluded.profit_yoy, profit_yoy), "
-                "market_cap = COALESCE(excluded.market_cap, market_cap)",
+                f"INSERT INTO fundamentals ({col_list}) VALUES ({placeholders}) "
+                f"ON CONFLICT(symbol, date) DO UPDATE SET {upsert}",
                 rows,
             )
             self._conn.commit()
@@ -696,6 +716,52 @@ class Database:
                 self._conn,
                 params=(symbol, start, end),
             )
+
+    # Columns that are quarterly (need ffill) vs daily (already complete)
+    _QUARTERLY_COLS = [
+        "roe_ttm", "revenue_yoy", "profit_yoy",
+        "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
+        "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
+        "cashflow_to_profit",
+    ]
+
+    def load_fundamentals_filled(
+        self, symbol: str, start: str, end: str
+    ) -> pd.DataFrame:
+        """Load fundamentals with quarterly columns forward-filled.
+
+        PE/PB are daily (already complete). ROE, revenue_yoy, etc. are
+        quarterly — only present on quarter-end dates. This method fetches
+        the latest quarterly row before *start* as a seed for ffill, so
+        the first trading day always has values.
+        """
+        with self._lock:
+            # Find the latest quarterly row before start (seed for ffill)
+            quarterly_check = " OR ".join(f"{c} IS NOT NULL" for c in self._QUARTERLY_COLS)
+            seed_date = self._conn.execute(
+                f"SELECT MAX(date) FROM fundamentals "
+                f"WHERE symbol = ? AND date < ? AND ({quarterly_check})",
+                (symbol, start),
+            ).fetchone()[0]
+
+            query_start = seed_date if seed_date else start
+            df = pd.read_sql(
+                "SELECT * FROM fundamentals WHERE symbol = ? AND date >= ? AND date <= ? "
+                "ORDER BY date",
+                self._conn,
+                params=(symbol, query_start, end),
+            )
+
+        if df.empty:
+            return df
+        for col in self._QUARTERLY_COLS:
+            if col in df.columns:
+                df[col] = df[col].ffill()
+
+        # Trim back to requested range (remove the seed row)
+        if seed_date and seed_date < start:
+            df = df[df["date"] >= start].reset_index(drop=True)
+        return df
 
     def load_latest_fundamentals(self, symbols: list[str]) -> pd.DataFrame:
         """Load fundamentals with per-column latest non-NULL value for each symbol.

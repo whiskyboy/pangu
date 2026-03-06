@@ -66,6 +66,24 @@ class AkShareFundamentalProvider(ThrottleMixin):
 
     # -- Protocol methods --
 
+    # AkShare field name → DB column name (% fields are divided by 100)
+    _FIELD_MAP_PCT = {
+        "净资产收益率(%)": "roe_ttm",
+        "主营业务收入增长率(%)": "revenue_yoy",
+        "净利润增长率(%)": "profit_yoy",
+        "销售净利率(%)": "net_profit_margin",
+        "销售毛利率(%)": "gross_margin",
+        "资产负债率(%)": "debt_ratio",
+        "净资产增长率(%)": "equity_yoy",
+        "总资产增长率(%)": "asset_yoy",
+        "经营现金净流量与净利润的比率(%)": "cashflow_to_profit",
+    }
+    _FIELD_MAP_RAW = {
+        "总资产周转率(次)": "asset_turnover",
+        "流动比率": "current_ratio",
+        "每股经营性现金流(元)": "cashflow_per_share",
+    }
+
     def get_financial_indicator(
         self, symbol: str, start: str | None = None, end: str | None = None,
     ) -> pd.DataFrame:
@@ -82,27 +100,16 @@ class AkShareFundamentalProvider(ThrottleMixin):
                     "symbol": symbol,
                     "date": str(raw.get("日期", "")),
                 }
-                # ROE
-                roe = self._safe_float(raw.get("净资产收益率(%)"))
-                row["roe_ttm"] = roe / 100 if roe is not None else None
-
-                # Revenue YoY growth
-                rev_growth = self._safe_float(raw.get("主营业务收入增长率(%)"))
-                row["revenue_yoy"] = (
-                    rev_growth / 100 if rev_growth is not None else None
-                )
-
-                # Net profit YoY growth
-                profit_growth = self._safe_float(raw.get("净利润增长率(%)"))
-                row["profit_yoy"] = (
-                    profit_growth / 100 if profit_growth is not None else None
-                )
+                for cn_name, db_col in self._FIELD_MAP_PCT.items():
+                    val = self._safe_float(raw.get(cn_name))
+                    row[db_col] = val / 100 if val is not None else None
+                for cn_name, db_col in self._FIELD_MAP_RAW.items():
+                    row[db_col] = self._safe_float(raw.get(cn_name))
 
                 rows.append(row)
 
             result = pd.DataFrame(rows)
 
-            # Filter by date range if provided
             if end is not None and "date" in result.columns:
                 result = result[result["date"] <= end]
 

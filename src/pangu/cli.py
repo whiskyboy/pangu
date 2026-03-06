@@ -258,6 +258,7 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
         pool = c.stock_pool.get_all_symbols()
     total = len(pool)
     ok, fail = 0, 0
+    consecutive_fails = 0
 
     click.echo(f"Backfilling fundamentals for {total} stocks from {start}{'(FORCE)' if force else ''}...")
     for i, symbol in enumerate(pool, 1):
@@ -265,11 +266,22 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
             df = c.fundamental.get_financial_indicator(symbol, start=start, force=force)
             if df is not None and not df.empty:
                 ok += 1
+                consecutive_fails = 0
             else:
                 fail += 1
+                consecutive_fails += 1
         except Exception as e:  # noqa: BLE001
             fail += 1
+            consecutive_fails += 1
             click.echo(f"  ✗ {symbol}: {e}")
+
+        # Network recovery: pause on consecutive failures
+        if consecutive_fails >= 5:
+            import time
+            click.echo(f"  ⚠️ {consecutive_fails} consecutive failures, waiting 60s...")
+            time.sleep(60)
+            consecutive_fails = 0
+
         if i % 50 == 0 or i == total:
             click.echo(f"  [{i}/{total}] ok={ok} fail={fail}")
 

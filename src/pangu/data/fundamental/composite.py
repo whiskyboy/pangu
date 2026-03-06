@@ -115,6 +115,15 @@ class CompositeFundamentalProvider:
             "revenue_yoy": result.get("revenue_yoy"),
             "profit_yoy": result.get("profit_yoy"),
             "market_cap": None,
+            "net_profit_margin": result.get("net_profit_margin"),
+            "gross_margin": result.get("gross_margin"),
+            "debt_ratio": result.get("debt_ratio"),
+            "asset_turnover": result.get("asset_turnover"),
+            "current_ratio": result.get("current_ratio"),
+            "equity_yoy": result.get("equity_yoy"),
+            "asset_yoy": result.get("asset_yoy"),
+            "cashflow_per_share": result.get("cashflow_per_share"),
+            "cashflow_to_profit": result.get("cashflow_to_profit"),
         })
         try:
             self._storage.save_fundamentals(symbol, df)
