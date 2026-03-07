@@ -288,6 +288,108 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     click.echo(f"\n✅ Backfill fundamentals done: {ok} ok, {fail} failed")
 
 
+
+
+# ---------------------------------------------------------------------------
+# backtest command
+# ---------------------------------------------------------------------------
+
+@main.command("backtest")
+@click.option("--strategy", type=click.Choice(["baseline"]), default="baseline",
+              help="Strategy to backtest")
+@click.option("--start", default="2022-01-01", help="Start date")
+@click.option("--end", default="2025-06-30", help="End date")
+@click.option("--top-n", default=10, type=int, help="TopN stocks to hold")
+@click.option("--capital", default=1_000_000, type=float, help="Initial capital (CNY)")
+def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float) -> None:
+    """Run local backtest for a given strategy."""
+    from pangu.main import build_components, load_env
+    load_env()
+    c, _, _ = build_components()
+
+    import pandas as pd
+    from pangu.backtest.engine import BacktestEngine, make_universe_fn
+
+    storage = c.market._storage
+
+    # Use historical constituent union for data loading (survivorship-bias-free)
+    pool = storage.load_constituents_union(start, end)
+    if not pool:
+        click.echo("WARNING: No historical constituents found, falling back to current pool")
+        pool = c.stock_pool.get_all_symbols()
+
+    click.echo(f"Loading data for {len(pool)} stocks (historical union), {start} ~ {end}...")
+
+    # Load price data with 120-day warmup for factor computation
+    from datetime import datetime, timedelta
+    warmup_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=120)).strftime("%Y-%m-%d")
+
+    bars_list = []
+    for sym in pool:
+        df = storage.load_daily_bars(sym, warmup_start, end)
+        if df is not None and not df.empty:
+            df = df[["date", "open", "close", "high", "low", "volume", "adj_factor"]].copy()
+            df["symbol"] = sym
+            bars_list.append(df)
+
+    if not bars_list:
+        click.echo("ERROR: No data found")
+        return
+
+    all_bars = pd.concat(bars_list, ignore_index=True)
+    all_bars["date"] = pd.to_datetime(all_bars["date"])
+
+    # Separate warmup data (for factor computation) from backtest data (for prices)
+    all_bars_bt = all_bars[all_bars["date"] >= start].copy()
+    open_prices = all_bars_bt.pivot(index="date", columns="symbol", values="open")
+    close_prices = all_bars_bt.pivot(index="date", columns="symbol", values="close")
+    adj_factor = all_bars_bt.pivot(index="date", columns="symbol", values="adj_factor")
+    volume_wide = all_bars_bt.pivot(index="date", columns="symbol", values="volume")
+
+    # Load benchmark (CSI300)
+    bench_df = storage.load_daily_bars("000300", start, end)
+    if bench_df is None or bench_df.empty:
+        click.echo("ERROR: No benchmark data (000300)")
+        return
+    bench_close = bench_df.set_index("date")["close"]
+    bench_close.index = pd.to_datetime(bench_close.index)
+
+    click.echo(f"Data loaded: {close_prices.shape[0]} days × {close_prices.shape[1]} stocks")
+
+    # Compute scores based on strategy (uses full data including warmup)
+    if strategy == "baseline":
+        from pangu.backtest.scoring import compute_baseline_scores
+        scores = compute_baseline_scores(all_bars, storage, start, end)
+    else:
+        click.echo(f"Unknown strategy: {strategy}")
+        return
+
+    if scores is None or scores.empty:
+        click.echo("ERROR: No scores computed")
+        return
+
+    click.echo(f"Scores: {scores.shape}")
+
+    # Point-in-time constituent filter + suspended stock exclusion
+    universe_fn = make_universe_fn(storage, volume_wide)
+
+    # Run backtest with dynamic constituents
+    engine = BacktestEngine(top_n=top_n, initial_capital=capital)
+    result = engine.run(scores, open_prices, close_prices, adj_factor, bench_close,
+                        start, end, universe_fn=universe_fn)
+
+    # Print results
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Backtest Result: {strategy} ({start} ~ {end}, TopN={top_n})")
+    click.echo(f"{'='*60}")
+    for k, v in result.metrics.items():
+        if isinstance(v, float):
+            click.echo(f"  {k:20s}: {v:+.4f}" if abs(v) < 10 else f"  {k:20s}: {v:.1f}")
+        else:
+            click.echo(f"  {k:20s}: {v}")
+    click.echo(f"  {'rebalances':20s}: {len(result.rebalance_log)}")
+
+
 @main.command()
 def status() -> None:
     """Show database statistics and strategy returns."""

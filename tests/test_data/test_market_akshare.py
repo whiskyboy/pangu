@@ -458,9 +458,13 @@ def _fake_bs_result(fields: list[str], rows: list[list]) -> MagicMock:
 
 class TestBaoStockDailyBars:
     @patch("baostock.login")
+    @patch("baostock.query_adjust_factor")
     @patch("baostock.query_history_k_data_plus")
-    def test_fetches_and_cleans(self, mock_query: MagicMock, mock_login: MagicMock) -> None:
+    def test_fetches_and_cleans(self, mock_query: MagicMock, mock_adj: MagicMock, mock_login: MagicMock) -> None:
         mock_login.return_value = MagicMock(error_code="0")
+        mock_adj.return_value = _fake_bs_result(
+            ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
+        )
         fields = ["date", "code", "open", "high", "low", "close",
                    "preclose", "volume", "amount", "adjustflag", "pctChg",
                    "peTTM", "pbMRQ"]
@@ -484,10 +488,14 @@ class TestBaoStockDailyBars:
         provider.close()
 
     @patch("baostock.login")
+    @patch("baostock.query_adjust_factor")
     @patch("baostock.query_history_k_data_plus")
-    def test_no_storage_interaction(self, mock_query: MagicMock, mock_login: MagicMock) -> None:
+    def test_no_storage_interaction(self, mock_query: MagicMock, mock_adj: MagicMock, mock_login: MagicMock) -> None:
         """Pure BaoStock provider does not write to storage."""
         mock_login.return_value = MagicMock(error_code="0")
+        mock_adj.return_value = _fake_bs_result(
+            ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
+        )
         fields = ["date", "code", "open", "high", "low", "close",
                    "preclose", "volume", "amount", "adjustflag", "pctChg"]
         rows = [
@@ -586,13 +594,18 @@ class TestCompositeProviderChain:
 
     @patch("akshare.stock_zh_a_hist")
     @patch("baostock.login")
+    @patch("baostock.query_adjust_factor")
     @patch("baostock.query_history_k_data_plus")
     def test_caches_to_sqlite(
-        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
+        self, mock_bs_query: MagicMock, mock_bs_adj: MagicMock,
+        mock_bs_login: MagicMock,
         mock_ak_hist: MagicMock, db: Database,
     ) -> None:
         """Composite caches data and serves from cache on subsequent calls."""
         mock_bs_login.return_value = MagicMock(error_code="0")
+        mock_bs_adj.return_value = _fake_bs_result(
+            ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
+        )
         fields = ["date", "code", "open", "high", "low", "close",
                    "preclose", "volume", "amount", "adjustflag", "pctChg",
                    "peTTM", "pbMRQ"]
@@ -623,14 +636,19 @@ class TestCompositeProviderChain:
 
     @patch("akshare.stock_zh_a_hist")
     @patch("baostock.login")
+    @patch("baostock.query_adjust_factor")
     @patch("baostock.query_history_k_data_plus")
     def test_both_fail_returns_cached(
-        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
+        self, mock_bs_query: MagicMock, mock_bs_adj: MagicMock,
+        mock_bs_login: MagicMock,
         mock_ak_hist: MagicMock, db: Database,
     ) -> None:
         """When both providers fail, cached data should be returned."""
         # Seed cache via successful BaoStock call
         mock_bs_login.return_value = MagicMock(error_code="0")
+        mock_bs_adj.return_value = _fake_bs_result(
+            ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
+        )
         fields = ["date", "code", "open", "high", "low", "close",
                    "preclose", "volume", "amount", "adjustflag", "pctChg"]
         rows = [

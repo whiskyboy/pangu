@@ -150,6 +150,9 @@ class BaoStockMarketDataProvider:
         df["adj_factor"] = 1.0
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
 
+        # Fill adj_factor from adjustment events
+        self._fill_adj_factor(df, symbol, start, end)
+
         return df
 
     def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -179,3 +182,48 @@ class BaoStockMarketDataProvider:
     def get_global_snapshot(self) -> pd.DataFrame:
         """Not supported by BaoStock."""
         raise NotImplementedError("BaoStock does not support global market data")
+
+    # ------------------------------------------------------------------
+    # Adjustment factor
+    # ------------------------------------------------------------------
+
+    def fetch_adjust_factors(self, symbol: str) -> list[tuple[str, float]]:
+        """Fetch forward-adjustment factor events for a stock.
+
+        Returns list of ``(dividOperateDate, foreAdjustFactor)`` sorted by date.
+        Between two events, all trading days share the same factor (ffill).
+        The latest event has factor ≈ 1.0.
+        """
+        bs_code = _to_bs_code(symbol)
+        rs = self._query_with_retry(
+            lambda: self._bs.query_adjust_factor(
+                code=bs_code, start_date="2010-01-01", end_date="2099-12-31",
+            )
+        )
+        events: list[tuple[str, float]] = []
+        while rs.error_code == "0" and rs.next():
+            row = rs.get_row_data()
+            events.append((row[1], float(row[2])))  # (date, foreAdjFactor)
+        return events
+
+    def _fill_adj_factor(
+        self, df: pd.DataFrame, symbol: str, start: str, end: str,
+    ) -> None:
+        """Fill adj_factor column in-place using foreAdjustFactor events."""
+        import bisect
+
+        events = self.fetch_adjust_factors(symbol)
+        if not events:
+            return  # no adjustments, keep 1.0
+
+        event_dates = [e[0] for e in events]
+        event_factors = [e[1] for e in events]
+
+        factors = []
+        for d in df["date"]:
+            idx = bisect.bisect_right(event_dates, d) - 1
+            if idx >= 0:
+                factors.append(event_factors[idx])
+            else:
+                factors.append(event_factors[0])
+        df["adj_factor"] = factors
