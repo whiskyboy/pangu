@@ -209,9 +209,9 @@ class BacktestEngine:
                     prev_scores = prev_scores[prev_scores.index.isin(universe)]
 
                 if len(prev_scores) >= self._top_n:
-                    target = set(prev_scores.nlargest(self._top_n).index.tolist())
+                    target = prev_scores.nlargest(self._top_n).index.tolist()
                 else:
-                    target = set(prev_scores.index.tolist())
+                    target = prev_scores.sort_values(ascending=False).index.tolist()
 
                 today_open = open_prices.loc[date]
                 prev_close_prices = (close_prices.loc[prev_date]
@@ -226,7 +226,7 @@ class BacktestEngine:
             # Daily NAV + holdings record (single pass)
             today_close = close_prices.loc[date]
             port_value = cash
-            for stock, shares in holdings.items():
+            for stock, shares in sorted(holdings.items()):
                 price = today_close.get(stock, np.nan)
                 mv = shares * price if np.isfinite(price) else 0.0
                 port_value += mv
@@ -272,7 +272,7 @@ class BacktestEngine:
         date: pd.Timestamp,
         cash: float,
         holdings: dict[str, int],
-        target: set[str],
+        target: list[str],
         open_prices: pd.Series,
         prev_close: pd.Series,
     ) -> tuple[float, dict[str, int], dict | None]:
@@ -280,11 +280,12 @@ class BacktestEngine:
         sells: list[str] = []
         buys: list[str] = []
         turnover = 0.0
+        target_set = set(target)
 
         # --- Phase 1: Sell non-target holdings ---
         new_holdings: dict[str, int] = {}
-        for stock, shares in holdings.items():
-            if stock not in target:
+        for stock, shares in sorted(holdings.items()):
+            if stock not in target_set:
                 price = open_prices.get(stock, np.nan)
                 pc = prev_close.get(stock, np.nan)
                 if (np.isfinite(price) and price > 0
@@ -300,11 +301,12 @@ class BacktestEngine:
 
         # --- Phase 2: Calculate equal-weight allocation ---
         total_value = cash
-        for stock, shares in new_holdings.items():
+        for stock, shares in sorted(new_holdings.items()):
             price = open_prices.get(stock, np.nan)
             if np.isfinite(price):
                 total_value += shares * price
 
+        # Filter to tradeable targets (preserve score-descending order from target)
         tradeable = [
             s for s in target
             if np.isfinite(open_prices.get(s, np.nan))
