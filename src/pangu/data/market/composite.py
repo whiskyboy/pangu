@@ -89,6 +89,9 @@ class CompositeMarketDataProvider:
                 last_date=result["date"].max(),
             )
 
+        # 7. Refresh historical adj_factor if provider supports it
+        self._refresh_adj_factor(symbol)
+
         return self._storage.load_daily_bars(symbol, start, end)
 
     def get_index_daily_bars(self, symbol: str, start: str, end: str, *, force: bool = False) -> pd.DataFrame:
@@ -187,3 +190,45 @@ class CompositeMarketDataProvider:
                 self._storage.save_fundamentals(symbol, val_df)
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to persist valuation for %s", symbol)
+
+    def _refresh_adj_factor(self, symbol: str) -> None:
+        """Refresh adj_factor for all historical rows of a stock.
+
+        Called after new bars are saved. Fetches the latest adjustment events
+        from the primary provider and batch-updates any rows whose factor
+        has changed (e.g. after a new dividend event).
+        """
+        import bisect
+
+        # Only BaoStock provides adj factors
+        provider = None
+        for p in self._providers:
+            if hasattr(p, "fetch_adjust_factors"):
+                provider = p
+                break
+        if provider is None:
+            return
+
+        try:
+            events = provider.fetch_adjust_factors(symbol)
+        except Exception:
+            logger.debug("Failed to refresh adj_factor for %s", symbol)
+            return
+        if not events:
+            return
+
+        event_dates = [e[0] for e in events]
+        event_factors = [e[1] for e in events]
+
+        rows = self._storage.get_daily_bar_dates(symbol)
+
+        updates = []
+        for date, old_factor in rows:
+            idx = bisect.bisect_right(event_dates, date) - 1
+            new_factor = event_factors[idx] if idx >= 0 else event_factors[0]
+            if abs(new_factor - (old_factor or 1.0)) > 1e-8:
+                updates.append((new_factor, date))
+
+        if updates:
+            self._storage.update_adj_factors(symbol, updates)
+            logger.debug("Updated %d adj_factor rows for %s", len(updates), symbol)

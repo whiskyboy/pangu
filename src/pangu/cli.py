@@ -340,10 +340,10 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     all_bars["date"] = pd.to_datetime(all_bars["date"])
 
     # Separate warmup data (for factor computation) from backtest data (for prices)
+    # DB stores unadjusted prices; engine uses them directly for execution
     all_bars_bt = all_bars[all_bars["date"] >= start].copy()
     open_prices = all_bars_bt.pivot(index="date", columns="symbol", values="open")
     close_prices = all_bars_bt.pivot(index="date", columns="symbol", values="close")
-    adj_factor = all_bars_bt.pivot(index="date", columns="symbol", values="adj_factor")
     volume_wide = all_bars_bt.pivot(index="date", columns="symbol", values="volume")
 
     # Load benchmark (CSI300)
@@ -375,7 +375,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
 
     # Run backtest with dynamic constituents
     engine = BacktestEngine(top_n=top_n, initial_capital=capital)
-    result = engine.run(scores, open_prices, close_prices, adj_factor, bench_close,
+    result = engine.run(scores, open_prices, close_prices, bench_close,
                         start, end, universe_fn=universe_fn)
 
     # Print results

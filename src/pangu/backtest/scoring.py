@@ -32,10 +32,18 @@ def compute_technical_factors(
 ) -> dict[str, pd.DataFrame]:
     """Compute technical factors on (date × stock) wide tables.
 
+    Prices in all_bars are unadjusted (real market prices). This function
+    converts to forward-adjusted prices using adj_factor before computing
+    technical indicators, ensuring price continuity across ex-dividend dates.
+
     Returns dict mapping factor name → DataFrame(date × stock).
     """
-    close = all_bars.pivot(index="date", columns="symbol", values="close")
+    raw_close = all_bars.pivot(index="date", columns="symbol", values="close")
+    adj = all_bars.pivot(index="date", columns="symbol", values="adj_factor").ffill()
     volume = all_bars.pivot(index="date", columns="symbol", values="volume")
+
+    # Forward-adjusted close for continuous technical indicators
+    close = raw_close * adj
 
     # RSI(14)
     delta = close.diff()

@@ -132,7 +132,7 @@ class BaoStockMarketDataProvider:
             lambda: self._bs.query_history_k_data_plus(
                 bs_code, self._DAILY_FIELDS,
                 start_date=start, end_date=end,
-                frequency="d", adjustflag="2",
+                frequency="d", adjustflag="3",
             )
         )
 
@@ -149,9 +149,6 @@ class BaoStockMarketDataProvider:
 
         df["adj_factor"] = 1.0
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-
-        # Fill adj_factor from adjustment events
-        self._fill_adj_factor(df, symbol, start, end)
 
         return df
 
@@ -197,7 +194,7 @@ class BaoStockMarketDataProvider:
         bs_code = _to_bs_code(symbol)
         rs = self._query_with_retry(
             lambda: self._bs.query_adjust_factor(
-                code=bs_code, start_date="2010-01-01", end_date="2099-12-31",
+                code=bs_code, start_date="1990-01-01", end_date="2099-12-31",
             )
         )
         events: list[tuple[str, float]] = []
@@ -205,25 +202,3 @@ class BaoStockMarketDataProvider:
             row = rs.get_row_data()
             events.append((row[1], float(row[2])))  # (date, foreAdjFactor)
         return events
-
-    def _fill_adj_factor(
-        self, df: pd.DataFrame, symbol: str, start: str, end: str,
-    ) -> None:
-        """Fill adj_factor column in-place using foreAdjustFactor events."""
-        import bisect
-
-        events = self.fetch_adjust_factors(symbol)
-        if not events:
-            return  # no adjustments, keep 1.0
-
-        event_dates = [e[0] for e in events]
-        event_factors = [e[1] for e in events]
-
-        factors = []
-        for d in df["date"]:
-            idx = bisect.bisect_right(event_dates, d) - 1
-            if idx >= 0:
-                factors.append(event_factors[idx])
-            else:
-                factors.append(event_factors[0])
-        df["adj_factor"] = factors

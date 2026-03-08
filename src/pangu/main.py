@@ -75,14 +75,12 @@ def build_components() -> tuple[Components, str, Settings]:
     db.init_tables()
     logger.info("SQLite initialized: %s", db_path)
 
-    # Data providers — BaoStock primary, AkShare fallback
+    # Data providers — single primary, no fallback
     baostock_market = BaoStockMarketDataProvider()
-    akshare_market = AkShareMarketDataProvider(storage=db)
-    market = CompositeMarketDataProvider(storage=db, providers=[baostock_market, akshare_market])
+    market = CompositeMarketDataProvider(storage=db, providers=[baostock_market])
     news = AkShareNewsDataProvider(storage=db)
-    baostock_fund = BaoStockFundamentalProvider()
     akshare_fund = AkShareFundamentalProvider()
-    fundamental = CompositeFundamentalProvider(storage=db, providers=[akshare_fund, baostock_fund])
+    fundamental = CompositeFundamentalProvider(storage=db, providers=[akshare_fund])
 
     sys_cfg = settings.system
     pool_cfg = settings.stock_pool

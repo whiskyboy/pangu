@@ -1038,6 +1038,42 @@ class Database:
         return [r[0] for r in rows]
 
     # ------------------------------------------------------------------
+    # Adjustment factors
+    # ------------------------------------------------------------------
+
+    def get_daily_bar_dates(self, symbol: str) -> list[tuple[str, float]]:
+        """Return all (date, adj_factor) pairs for a stock's daily bars."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT date, adj_factor FROM daily_bars "
+                "WHERE symbol = ? ORDER BY date",
+                (symbol,),
+            ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def update_adj_factors(
+        self, symbol: str, updates: list[tuple[float, str]],
+    ) -> None:
+        """Batch update adj_factor for a stock's daily bars.
+
+        Parameters
+        ----------
+        symbol : str
+            Stock symbol.
+        updates : list of (new_factor, date)
+            Each tuple is (adj_factor_value, date_string).
+        """
+        if not updates:
+            return
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE daily_bars SET adj_factor = ? "
+                "WHERE symbol = ? AND date = ?",
+                [(factor, symbol, date) for factor, date in updates],
+            )
+            self._conn.commit()
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

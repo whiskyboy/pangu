@@ -23,7 +23,6 @@ def sample_data():
     open_ = close.shift(1).bfill()
 
     # adj_factor = 1.0 (no adjustments in test data)
-    adj_factor = pd.DataFrame(1.0, index=dates, columns=stocks)
 
     scores = pd.DataFrame(
         {s: np.linspace(5 - i, 5 - i + 0.1, 30) for i, s in enumerate(stocks)},
@@ -32,13 +31,13 @@ def sample_data():
 
     benchmark = close.mean(axis=1)
 
-    return scores, open_, close, adj_factor, benchmark
+    return scores, open_, close, benchmark
 
 
 def test_backtest_basic(sample_data):
-    scores, open_, close, adj_factor, benchmark = sample_data
+    scores, open_, close, benchmark = sample_data
     engine = BacktestEngine(top_n=2)
-    result = engine.run(scores, open_, close, adj_factor, benchmark)
+    result = engine.run(scores, open_, close, benchmark)
 
     assert isinstance(result, BacktestResult)
     assert len(result.nav) == 30
@@ -50,7 +49,7 @@ def test_backtest_basic(sample_data):
 
 
 def test_backtest_rebalance_happens(sample_data):
-    scores, open_, close, adj_factor, benchmark = sample_data
+    scores, open_, close, benchmark = sample_data
     # Randomize scores so TopN changes each week → triggers rebalances
     np.random.seed(99)
     scores = pd.DataFrame(
@@ -58,24 +57,24 @@ def test_backtest_rebalance_happens(sample_data):
         index=scores.index, columns=scores.columns,
     )
     engine = BacktestEngine(top_n=2)
-    result = engine.run(scores, open_, close, adj_factor, benchmark)
+    result = engine.run(scores, open_, close, benchmark)
 
     assert len(result.rebalance_log) >= 3
 
 
 def test_backtest_top_n_respected(sample_data):
-    scores, open_, close, adj_factor, benchmark = sample_data
+    scores, open_, close, benchmark = sample_data
     engine = BacktestEngine(top_n=3)
-    result = engine.run(scores, open_, close, adj_factor, benchmark)
+    result = engine.run(scores, open_, close, benchmark)
 
     for entry in result.rebalance_log:
         assert entry["n_holdings"] <= 3
 
 
 def test_backtest_date_range(sample_data):
-    scores, open_, close, adj_factor, benchmark = sample_data
+    scores, open_, close, benchmark = sample_data
     engine = BacktestEngine(top_n=2)
-    result = engine.run(scores, open_, close, adj_factor, benchmark,
+    result = engine.run(scores, open_, close, benchmark,
                         start="2024-01-15", end="2024-01-25")
 
     assert len(result.nav) < 30
@@ -84,8 +83,8 @@ def test_backtest_date_range(sample_data):
 
 
 def test_backtest_benchmark_nav(sample_data):
-    scores, open_, close, adj_factor, benchmark = sample_data
+    scores, open_, close, benchmark = sample_data
     engine = BacktestEngine(top_n=2)
-    result = engine.run(scores, open_, close, adj_factor, benchmark)
+    result = engine.run(scores, open_, close, benchmark)
 
     assert result.benchmark_nav.iloc[0] == pytest.approx(1_000_000, rel=0.01)

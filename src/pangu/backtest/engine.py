@@ -88,7 +88,6 @@ class BacktestEngine:
         scores: pd.DataFrame,
         open_prices: pd.DataFrame,
         close_prices: pd.DataFrame,
-        adj_factor: pd.DataFrame,
         benchmark_close: pd.Series,
         start: str | None = None,
         end: str | None = None,
@@ -102,14 +101,11 @@ class BacktestEngine:
             (date × stock) factor scores. Higher = better.
             The score on date T is used for rebalancing on the *next* trading day.
         open_prices : DataFrame
-            (date × stock) **forward-adjusted** open prices (前复权).
+            (date × stock) **unadjusted** (real market) open prices.
         close_prices : DataFrame
-            (date × stock) **forward-adjusted** close prices (前复权).
-        adj_factor : DataFrame
-            (date × stock) adjustment factors. The engine converts to
-            unadjusted prices internally: ``raw = adjusted / adj_factor``.
+            (date × stock) **unadjusted** (real market) close prices.
         benchmark_close : Series
-            Benchmark (e.g. CSI300) close prices (unadjusted).
+            Benchmark (e.g. CSI300) close prices.
         start, end : str, optional
             Backtest date range (inclusive). Defaults to scores range.
         universe_fn : callable, optional
@@ -130,16 +126,11 @@ class BacktestEngine:
         # Align all inputs to common dates and stocks
         common_stocks = scores.columns.intersection(
             close_prices.columns
-        ).intersection(open_prices.columns).intersection(adj_factor.columns)
+        ).intersection(open_prices.columns)
         scores = scores.reindex(index=dates, columns=common_stocks)
         open_prices = open_prices.reindex(index=dates, columns=common_stocks)
         close_prices = close_prices.reindex(index=dates, columns=common_stocks)
-        adj_factor = adj_factor.reindex(index=dates, columns=common_stocks).ffill()
         benchmark_close = benchmark_close.reindex(dates)
-
-        # Convert to unadjusted (real market) prices for execution
-        raw_open = open_prices / adj_factor
-        raw_close = close_prices / adj_factor
 
         logger.info(
             "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d",
@@ -148,11 +139,11 @@ class BacktestEngine:
         )
 
         # Forward-fill close prices so suspended stocks retain last-known value
-        raw_close = raw_close.ffill()
+        close_prices = close_prices.ffill()
 
-        # Run simulation using real (unadjusted) prices
+        # Run simulation
         nav_values, rebal_log, holdings_records = self._simulate(
-            dates, scores, raw_open, raw_close, universe_fn,
+            dates, scores, open_prices, close_prices, universe_fn,
         )
 
         # Build results
