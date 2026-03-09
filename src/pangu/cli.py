@@ -141,14 +141,14 @@ def backfill() -> None:
 
 
 def _load_pool_yaml(path: str) -> list[str] | None:
-    """Load stock list from YAML file. Returns None on error."""
+    """Load stock list from YAML file (key: ``symbols``). Returns None on error."""
     import yaml
     try:
         with open(path) as f:
             data = yaml.safe_load(f) or {}
-        pool = data.get("stocks", [])
+        pool = data.get("symbols") or []
         if not pool:
-            click.echo(f"Warning: No stocks found in {path}", err=True)
+            click.echo(f"Warning: No symbols found in {path}", err=True)
             return None
         return [str(s) for s in pool]
     except FileNotFoundError:
@@ -174,7 +174,7 @@ def backfill_constituents(start: str, end: str | None) -> None:
     # Export unique symbols to YAML
     yaml_path = "config/backfill_stock_pool.yaml"
     with open(yaml_path, "w") as f:
-        f.write("stocks:\n")
+        f.write("symbols:\n")
         for sym in sorted(all_symbols):
             f.write(f'- "{sym}"\n')
     click.echo(f"📄 Exported {len(all_symbols)} symbols to {yaml_path}")
@@ -301,7 +301,8 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 @click.option("--end", default="2025-06-30", help="End date")
 @click.option("--top-n", default=10, type=int, help="TopN stocks to hold")
 @click.option("--capital", default=1_000_000, type=float, help="Initial capital (CNY)")
-def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float) -> None:
+@click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
+def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float, pool_file: str | None) -> None:
     """Run local backtest for a given strategy."""
     from pangu.main import build_components, load_env
     load_env()
@@ -312,13 +313,18 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
 
     storage = c.market._storage
 
-    # Use historical constituent union for data loading (survivorship-bias-free)
-    pool = storage.load_constituents_union(start, end)
-    if not pool:
-        click.echo("WARNING: No historical constituents found, falling back to current pool")
-        pool = c.stock_pool.get_all_symbols()
-
-    click.echo(f"Loading data for {len(pool)} stocks (historical union), {start} ~ {end}...")
+    # Pool: explicit YAML override → constituents union (default)
+    if pool_file:
+        pool = _load_pool_yaml(pool_file)
+        if pool is None:
+            return
+        click.echo(f"Using pool from {pool_file}: {len(pool)} stocks")
+    else:
+        pool = storage.load_constituents_union(start, end)
+        if not pool:
+            click.echo("ERROR: No historical constituents found. Run 'pangu backfill constituents' first.")
+            return
+        click.echo(f"Pool from constituents union: {len(pool)} stocks")
 
     # Load price data with 120-day warmup for factor computation
     from datetime import datetime, timedelta
@@ -388,6 +394,84 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
         else:
             click.echo(f"  {k:20s}: {v}")
     click.echo(f"  {'rebalances':20s}: {len(result.rebalance_log)}")
+
+
+@main.command("compute-factors")
+@click.option("--start", default="2019-01-01", help="Start date (include warmup)")
+@click.option("--end", default="2025-12-31", help="End date")
+@click.option("--output", default="data/factors.parquet", help="Output parquet path")
+@click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
+def compute_factors_cmd(start: str, end: str, output: str, pool_file: str | None) -> None:
+    """Compute Alpha158 + fundamental factors for all stocks."""
+    import time
+    from pathlib import Path
+
+    import pandas as pd
+
+    from pangu.factor.alpha158 import Alpha158Engine
+    from pangu.main import build_components, load_env
+
+    load_env()
+    c, _, _ = build_components()
+    storage = c.market._storage
+
+    # Determine stock pool: explicit YAML override → constituents union (default)
+    if pool_file:
+        pool = _load_pool_yaml(pool_file)
+        if pool is None:
+            return
+        click.echo(f"Pool from {pool_file}: {len(pool)} stocks")
+    else:
+        pool = storage.load_constituents_union(start, end)
+        if not pool:
+            click.echo("ERROR: No historical constituents found. Run 'pangu backfill constituents' first.")
+            return
+        click.echo(f"Pool from constituents union: {len(pool)} stocks")
+
+    # Load bars
+    t0 = time.time()
+    bar_frames = []
+    for sym in pool:
+        df = storage.load_daily_bars(sym, start, end)
+        if df is not None and not df.empty:
+            bar_frames.append(df)
+
+    if not bar_frames:
+        click.echo("ERROR: No bar data found")
+        return
+
+    all_bars = pd.concat(bar_frames, ignore_index=True)
+    click.echo(f"  Loaded {len(all_bars):,} bar rows ({len(bar_frames)} stocks) in {time.time()-t0:.1f}s")
+
+    # Load fundamentals
+    t1 = time.time()
+    fund_frames = []
+    for sym in pool:
+        df = storage.load_fundamentals_filled(sym, start, end)
+        if df is not None and not df.empty:
+            fund_frames.append(df)
+
+    fundamentals = pd.concat(fund_frames, ignore_index=True) if fund_frames else pd.DataFrame()
+    click.echo(f"  Loaded {len(fundamentals):,} fundamental rows in {time.time()-t1:.1f}s")
+
+    # Compute
+    t2 = time.time()
+    engine = Alpha158Engine()
+    panel = engine.compute(all_bars, fundamentals)
+    click.echo(f"  Computed {panel.shape[1]} factors × {panel.shape[0]:,} rows in {time.time()-t2:.1f}s")
+
+    # Save
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    panel.to_parquet(output)
+    file_mb = Path(output).stat().st_size / 1024 / 1024
+    click.echo(f"  Saved to {output} ({file_mb:.1f} MB)")
+
+    # Coverage stats
+    total = panel.shape[0]
+    non_nan = panel.notna().sum()
+    coverage = (non_nan / total * 100).describe()
+    click.echo(f"\n  Factor coverage (% non-NaN):")
+    click.echo(f"    min: {coverage['min']:.1f}%, mean: {coverage['mean']:.1f}%, max: {coverage['max']:.1f}%")
 
 
 @main.command()
