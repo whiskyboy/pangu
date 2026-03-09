@@ -148,6 +148,7 @@ def compute_labels(
     start: str,
     end: str,
     horizon: int = 5,
+    winsorize: float | None = 0.2,
 ) -> pd.Series:
     """Compute forward N-day excess return labels.
 
@@ -163,6 +164,9 @@ def compute_labels(
         Date range. Note: last ``horizon`` trading days will have NaN labels.
     horizon : int
         Forward return horizon in trading days (default 5).
+    winsorize : float or None
+        If set, clip labels to [-winsorize, +winsorize] to reduce
+        the impact of extreme returns on MSE/MAE loss (default 0.2).
 
     Returns
     -------
@@ -202,6 +206,11 @@ def compute_labels(
     label = excess.stack(future_stack=True)
     label.index.names = ["date", "symbol"]
     label.name = "label"
+
+    # Winsorize to reduce impact of extreme returns
+    if winsorize is not None:
+        label = label.clip(-winsorize, winsorize)
+
     return label
 
 

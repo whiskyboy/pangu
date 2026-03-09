@@ -17,11 +17,10 @@ from pangu.ml.model import DEFAULT_PARAMS, LGBModel, _compute_ic
 def synthetic_data():
     """Generate synthetic regression data with known signal."""
     rng = np.random.default_rng(42)
-    n_samples = 500
     n_features = 10
 
-    dates = pd.bdate_range("2024-01-01", periods=50)
-    symbols = [f"S{i:03d}" for i in range(n_samples // 50)]
+    dates = pd.bdate_range("2024-01-01", periods=100)
+    symbols = [f"S{i:03d}" for i in range(20)]
 
     idx = pd.MultiIndex.from_product([dates, symbols], names=["date", "symbol"])
     X = pd.DataFrame(
@@ -29,14 +28,22 @@ def synthetic_data():
         index=idx,
         columns=[f"F{i}" for i in range(n_features)],
     )
-    # y = linear combination + noise
-    true_weights = rng.standard_normal(n_features)
+    # y = linear combination + noise (strong signal for test reliability)
+    true_weights = rng.standard_normal(n_features) * 2
     y = pd.Series(
-        X.values @ true_weights + rng.normal(0, 0.5, len(idx)),
+        X.values @ true_weights + rng.normal(0, 0.3, len(idx)),
         index=idx,
         name="label",
     )
     return X, y
+
+
+# Light params for unit tests (small dataset)
+_TEST_PARAMS = {
+    "num_leaves": 15,
+    "learning_rate": 0.05,
+    "min_child_samples": 20,
+}
 
 
 @pytest.fixture
@@ -59,7 +66,7 @@ def train_val_split(synthetic_data):
 class TestLGBModel:
     def test_fit_returns_metrics(self, train_val_split):
         X_train, y_train, X_val, y_val = train_val_split
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         info = model.fit(X_train, y_train, X_val, y_val)
         assert "best_iteration" in info
         assert "val_mse" in info
@@ -68,7 +75,7 @@ class TestLGBModel:
 
     def test_predict_shape(self, train_val_split):
         X_train, y_train, X_val, y_val = train_val_split
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         model.fit(X_train, y_train, X_val, y_val)
         preds = model.predict(X_val)
         assert len(preds) == len(X_val)
@@ -77,14 +84,14 @@ class TestLGBModel:
     def test_predict_not_constant(self, train_val_split):
         """Predictions should vary (model learned something)."""
         X_train, y_train, X_val, y_val = train_val_split
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         model.fit(X_train, y_train, X_val, y_val)
         preds = model.predict(X_val)
         assert preds.std() > 0.01
 
     def test_save_load_roundtrip(self, train_val_split, tmp_path):
         X_train, y_train, X_val, y_val = train_val_split
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         model.fit(X_train, y_train, X_val, y_val)
         preds_before = model.predict(X_val)
 
@@ -98,14 +105,14 @@ class TestLGBModel:
 
     def test_feature_importance(self, train_val_split):
         X_train, y_train, X_val, y_val = train_val_split
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         model.fit(X_train, y_train, X_val, y_val)
         imp = model.feature_importance()
         assert len(imp) == X_train.shape[1]
         assert imp.sum() > 0
 
     def test_predict_before_fit_raises(self):
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         with pytest.raises(RuntimeError, match="not trained"):
             model.predict(pd.DataFrame({"a": [1]}))
 
@@ -123,7 +130,7 @@ class TestLGBModel:
         # Inject NaN
         X_train_nan = X_train.copy()
         X_train_nan.iloc[:50, 0] = np.nan
-        model = LGBModel()
+        model = LGBModel(_TEST_PARAMS)
         info = model.fit(X_train_nan, y_train, X_val, y_val)
         assert info["val_mse"] >= 0
         preds = model.predict(X_val)

@@ -29,18 +29,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_PARAMS: dict = {
-    "objective": "regression",
-    "metric": "mse",
-    "num_leaves": 31,
-    "learning_rate": 0.05,
-    "n_estimators": 500,
+    "objective": "mae",
+    "metric": "mae",
+    "num_leaves": 15,
+    "learning_rate": 0.01,
+    "n_estimators": 2000,
     "subsample": 0.8,
     "colsample_bytree": 0.8,
-    "min_child_samples": 50,
+    "min_child_samples": 200,
     "random_state": 42,
     "verbosity": -1,
 }
-EARLY_STOPPING_ROUNDS = 50
+EARLY_STOPPING_ROUNDS = 100
 
 
 class LGBModel:
