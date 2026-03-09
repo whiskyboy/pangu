@@ -41,3 +41,5 @@ docs/PRD.md
 uv.lock
 *.db-shm
 *.db-wal
+models/
+data/*.parquet

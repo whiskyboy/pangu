@@ -12,8 +12,10 @@ dependencies = [
     "pandas-ta>=0.3",
     "pandas>=2.0",
     "numpy>=1.24",
-    # Layer 3: Strategy
+    # Layer 3: Strategy & ML
     "litellm>=1.0",
+    "lightgbm>=4.0",
+    "scipy>=1.10",
     # Layer 4: Infrastructure
     "apscheduler>=3.10",
     "loguru>=0.7",
