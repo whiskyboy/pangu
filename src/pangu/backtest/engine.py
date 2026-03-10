@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
 import pandas as pd
@@ -23,23 +24,35 @@ logger = logging.getLogger(__name__)
 _CASH_USAGE_LIMIT = 0.99
 
 
+def _is_star_market(symbol: str) -> bool:
+    """Check if a stock is on the STAR Market (科创板)."""
+    return symbol.startswith("688") or symbol.startswith("689")
+
+
 def _lot_size(symbol: str) -> int:
     """Return minimum trading lot size for a stock."""
-    # 科创板 (688/689): 200 shares
-    if symbol.startswith("688") or symbol.startswith("689"):
+    if _is_star_market(symbol):
         return 200
-    # 主板 + 创业板: 100 shares
     return 100
 
 
 def _price_limit_ratio(symbol: str) -> float:
     """Return price limit ratio (涨跌停幅度) for a stock."""
-    # 科创板 (688/689) and 创业板 (300/301): ±20%
-    if (symbol.startswith("688") or symbol.startswith("689")
+    if (_is_star_market(symbol)
             or symbol.startswith("300") or symbol.startswith("301")):
         return 0.20
-    # 主板: ±10%
     return 0.10
+
+
+def _round_price(value: float) -> float:
+    """Round price to 2 decimal places using 四舍五入 (standard rounding).
+
+    Python's built-in ``round()`` uses banker's rounding which can differ
+    from the exchange rule (e.g. ``round(5.885, 2) == 5.88`` instead of
+    ``5.89``).  Use ``Decimal`` with ``ROUND_HALF_UP`` to match A-share
+    exchange limit-price calculation.
+    """
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 @dataclass
@@ -111,6 +124,8 @@ class BacktestEngine:
         end: str | None = None,
         universe_fn: callable | None = None,
         volume: pd.DataFrame | None = None,
+        adj_factor: pd.DataFrame | None = None,
+        exclude_prefixes: tuple[str, ...] = ("688", "689"),
     ) -> BacktestResult:
         """Run backtest.
 
@@ -131,6 +146,13 @@ class BacktestEngine:
             Function(date_str) → set[str] returning tradeable stock symbols
             for a given date. Used for point-in-time constituent filtering.
             If None, all stocks in scores are eligible.
+        adj_factor : DataFrame, optional
+            (date × stock) adjustment factors for dividend detection.
+            When provided, dividend cash is credited to the portfolio.
+        exclude_prefixes : tuple[str, ...], optional
+            Stock code prefixes to exclude from selection (default: 688/689
+            STAR market stocks which cannot be traded on most platforms).
+            Set to () to disable.
         """
         # Align date range
         dates = close_prices.index.sort_values()
@@ -146,11 +168,19 @@ class BacktestEngine:
         common_stocks = scores.columns.intersection(
             close_prices.columns
         ).intersection(open_prices.columns)
+        # Exclude structurally untradeable stocks (e.g. STAR market 688/689)
+        if exclude_prefixes:
+            common_stocks = pd.Index([
+                s for s in common_stocks
+                if not any(s.startswith(p) for p in exclude_prefixes)
+            ])
         scores = scores.reindex(index=dates, columns=common_stocks)
         open_prices = open_prices.reindex(index=dates, columns=common_stocks)
         close_prices = close_prices.reindex(index=dates, columns=common_stocks)
         if volume is not None:
             volume = volume.reindex(index=dates, columns=common_stocks)
+        if adj_factor is not None:
+            adj_factor = adj_factor.reindex(index=dates, columns=common_stocks).ffill()
         benchmark_close = benchmark_close.sort_index()  # keep pre-start dates for base
 
         logger.info(
@@ -165,6 +195,7 @@ class BacktestEngine:
         # Run simulation
         nav_values, rebal_log, holdings_records = self._simulate(
             dates, scores, open_prices, close_prices, universe_fn, volume,
+            adj_factor,
         )
 
         # Build results
@@ -204,6 +235,7 @@ class BacktestEngine:
         close_prices: pd.DataFrame,
         universe_fn: callable | None = None,
         volume: pd.DataFrame | None = None,
+        adj_factor: pd.DataFrame | None = None,
     ) -> tuple[list[float], list[dict], list[dict]]:
         """Day-by-day simulation loop."""
         cash = self._capital
@@ -215,6 +247,24 @@ class BacktestEngine:
         prev_date = None
 
         for i, date in enumerate(dates):
+            # --- Dividend processing ---
+            # Detect ex-dividend events via adj_factor changes and credit
+            # cash for held stocks. Uses 20% tax rate (holding < 1 month).
+            if (adj_factor is not None and prev_date is not None
+                    and holdings):
+                prev_adj = adj_factor.loc[prev_date]
+                curr_adj = adj_factor.loc[date]
+                prev_cls = close_prices.loc[prev_date]
+                for stock, shares in holdings.items():
+                    old_af = prev_adj.get(stock, np.nan)
+                    new_af = curr_adj.get(stock, np.nan)
+                    pc = prev_cls.get(stock, np.nan)
+                    if (np.isfinite(old_af) and np.isfinite(new_af)
+                            and np.isfinite(pc) and old_af > 0
+                            and new_af > old_af):
+                        div_per_share = pc * (1 - old_af / new_af)
+                        cash += shares * div_per_share * 0.80
+
             # Rebalance on first trading day of each new ISO week,
             # plus the very first trading day of the backtest.
             is_first_day = (prev_date is None and i == 0)
@@ -294,8 +344,8 @@ class BacktestEngine:
             return False
         ratio = _price_limit_ratio(symbol)
         if direction == "up":
-            return open_price >= round(prev_close * (1 + ratio), 2)
-        return open_price <= round(prev_close * (1 - ratio), 2)
+            return open_price >= _round_price(prev_close * (1 + ratio))
+        return open_price <= _round_price(prev_close * (1 - ratio))
 
     def _rebalance(
         self,

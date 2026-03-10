@@ -153,7 +153,8 @@ def compute_labels(
     """Compute forward N-day excess return labels.
 
     label = stock_return_Nd - benchmark_return_Nd
-    Uses unadjusted close prices (consistent with backtest engine).
+    Uses forward-adjusted close prices (close × adj_factor) so that
+    ex-dividend/split price gaps do not bias the return calculation.
 
     Parameters
     ----------
@@ -172,12 +173,12 @@ def compute_labels(
     -------
     Series with MultiIndex(date, symbol), name="label".
     """
-    # Load stock close prices (unadjusted)
+    # Load stock close prices and adj_factor for forward-adjusted returns
     bar_frames = []
     for sym in pool:
         bars = storage.load_daily_bars(sym, start, end)
         if bars is not None and not bars.empty:
-            bar_frames.append(bars[["date", "symbol", "close"]])
+            bar_frames.append(bars[["date", "symbol", "close", "adj_factor"]])
 
     if not bar_frames:
         return pd.Series(dtype="float64", name="label")
@@ -185,9 +186,13 @@ def compute_labels(
     all_bars = pd.concat(bar_frames, ignore_index=True)
     all_bars["date"] = pd.to_datetime(all_bars["date"])
     close_wide = all_bars.pivot(index="date", columns="symbol", values="close")
+    adj_wide = all_bars.pivot(index="date", columns="symbol", values="adj_factor")
 
-    # Stock forward return
-    stock_ret = close_wide.shift(-horizon) / close_wide - 1
+    # Forward-adjusted close: eliminates ex-dividend/split price gaps
+    fwd_adj_close = close_wide * adj_wide.ffill()
+
+    # Stock forward return (using forward-adjusted prices)
+    stock_ret = fwd_adj_close.shift(-horizon) / fwd_adj_close - 1
 
     # Benchmark (CSI300) forward return
     bench_df = storage.load_daily_bars("000300", start, end)
