@@ -21,7 +21,25 @@ logger = logging.getLogger(__name__)
 
 # Leave 1% cash buffer to avoid floating-point precision causing negative cash
 _CASH_USAGE_LIMIT = 0.99
-_LOT_SIZE = 100
+
+
+def _lot_size(symbol: str) -> int:
+    """Return minimum trading lot size for a stock."""
+    # 科创板 (688/689): 200 shares
+    if symbol.startswith("688") or symbol.startswith("689"):
+        return 200
+    # 主板 + 创业板: 100 shares
+    return 100
+
+
+def _price_limit_ratio(symbol: str) -> float:
+    """Return price limit ratio (涨跌停幅度) for a stock."""
+    # 科创板 (688/689) and 创业板 (300/301): ±20%
+    if (symbol.startswith("688") or symbol.startswith("689")
+            or symbol.startswith("300") or symbol.startswith("301")):
+        return 0.20
+    # 主板: ±10%
+    return 0.10
 
 
 @dataclass
@@ -92,6 +110,7 @@ class BacktestEngine:
         start: str | None = None,
         end: str | None = None,
         universe_fn: callable | None = None,
+        volume: pd.DataFrame | None = None,
     ) -> BacktestResult:
         """Run backtest.
 
@@ -130,7 +149,9 @@ class BacktestEngine:
         scores = scores.reindex(index=dates, columns=common_stocks)
         open_prices = open_prices.reindex(index=dates, columns=common_stocks)
         close_prices = close_prices.reindex(index=dates, columns=common_stocks)
-        benchmark_close = benchmark_close.reindex(dates)
+        if volume is not None:
+            volume = volume.reindex(index=dates, columns=common_stocks)
+        benchmark_close = benchmark_close.sort_index()  # keep pre-start dates for base
 
         logger.info(
             "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d",
@@ -143,12 +164,22 @@ class BacktestEngine:
 
         # Run simulation
         nav_values, rebal_log, holdings_records = self._simulate(
-            dates, scores, open_prices, close_prices, universe_fn,
+            dates, scores, open_prices, close_prices, universe_fn, volume,
         )
 
         # Build results
         nav = pd.Series(nav_values, index=dates, name="nav")
-        bench_nav = benchmark_close / benchmark_close.iloc[0] * self._capital
+
+        # Benchmark NAV: use the close before backtest start as base
+        # (matches JoinQuant: benchmark return includes first-day movement)
+        pre_start_bench = benchmark_close[benchmark_close.index < dates[0]]
+        if len(pre_start_bench) > 0:
+            bench_base = pre_start_bench.iloc[-1]
+        else:
+            bench_base = benchmark_close.iloc[0]
+        if not np.isfinite(bench_base) or bench_base <= 0:
+            raise ValueError("Invalid benchmark base price")
+        bench_nav = (benchmark_close / bench_base * self._capital).reindex(dates)
         bench_nav.name = "benchmark"
 
         metrics = self._compute_metrics(nav, bench_nav, rebal_log)
@@ -172,6 +203,7 @@ class BacktestEngine:
         open_prices: pd.DataFrame,
         close_prices: pd.DataFrame,
         universe_fn: callable | None = None,
+        volume: pd.DataFrame | None = None,
     ) -> tuple[list[float], list[dict], list[dict]]:
         """Day-by-day simulation loop."""
         cash = self._capital
@@ -208,8 +240,10 @@ class BacktestEngine:
                 prev_close_prices = (close_prices.loc[prev_date]
                                      if prev_date is not None
                                      else today_open)
+                today_volume = volume.loc[date] if volume is not None and date in volume.index else None
                 cash, holdings, log_entry = self._rebalance(
                     date, cash, holdings, target, today_open, prev_close_prices,
+                    today_volume,
                 )
                 if log_entry:
                     rebal_log.append(log_entry)
@@ -246,17 +280,22 @@ class BacktestEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _is_at_limit(open_price: float, prev_close: float, direction: str) -> bool:
+    def _is_at_limit(
+        open_price: float, prev_close: float, direction: str, symbol: str = "",
+    ) -> bool:
         """Check if stock is at price limit.
 
         direction='up':   涨停 → can't buy
         direction='down': 跌停 → can't sell
+
+        Uses ±20% for 科创板 (688/689) and 创业板 (300/301), ±10% for others.
         """
         if not (np.isfinite(prev_close) and np.isfinite(open_price) and prev_close > 0):
             return False
+        ratio = _price_limit_ratio(symbol)
         if direction == "up":
-            return open_price >= round(prev_close * 1.10, 2)
-        return open_price <= round(prev_close * 0.90, 2)
+            return open_price >= round(prev_close * (1 + ratio), 2)
+        return open_price <= round(prev_close * (1 - ratio), 2)
 
     def _rebalance(
         self,
@@ -266,12 +305,20 @@ class BacktestEngine:
         target: list[str],
         open_prices: pd.Series,
         prev_close: pd.Series,
+        volume: pd.Series | None = None,
     ) -> tuple[float, dict[str, int], dict | None]:
         """Execute rebalance: sell non-target, buy target at open prices."""
         sells: list[str] = []
         buys: list[str] = []
         turnover = 0.0
         target_set = set(target)
+
+        def _is_suspended(stock: str) -> bool:
+            """Check if stock is suspended (volume=0 or NaN)."""
+            if volume is None:
+                return False
+            v = volume.get(stock, np.nan)
+            return not (np.isfinite(v) and v > 0)
 
         # --- Phase 1: Sell non-target holdings ---
         new_holdings: dict[str, int] = {}
@@ -280,7 +327,8 @@ class BacktestEngine:
                 price = open_prices.get(stock, np.nan)
                 pc = prev_close.get(stock, np.nan)
                 if (np.isfinite(price) and price > 0
-                        and not self._is_at_limit(price, pc, "down")):
+                        and not _is_suspended(stock)
+                        and not self._is_at_limit(price, pc, "down", stock)):
                     sell_value = shares * price
                     cash += sell_value - self._sell_cost(sell_value)
                     turnover += sell_value
@@ -302,11 +350,14 @@ class BacktestEngine:
             s for s in target
             if np.isfinite(open_prices.get(s, np.nan))
             and open_prices.get(s, np.nan) > 0
+            and not _is_suspended(s)
             and not self._is_at_limit(
-                open_prices.get(s, np.nan), prev_close.get(s, np.nan), "up"
+                open_prices.get(s, np.nan), prev_close.get(s, np.nan), "up", s
             )
         ]
-        target_value = total_value / max(len(tradeable), 1)
+        # Reserve cash before equal-weight split (matches JQ's cash_reserve logic)
+        available_value = total_value * _CASH_USAGE_LIMIT
+        target_value = available_value / max(len(tradeable), 1)
 
         # --- Phase 3: Buy / rebalance each target stock ---
         for stock in tradeable:
@@ -314,14 +365,17 @@ class BacktestEngine:
             current_shares = new_holdings.get(stock, 0)
             current_value = current_shares * price
             diff = target_value - current_value
+            lot = _lot_size(stock)
 
             if diff > 0:
-                # Buy: cap by available cash, round to lot size
-                budget = min(diff, cash * _CASH_USAGE_LIMIT)
+                # Buy: cap by available cash
+                budget = min(diff, cash)
                 if budget <= 0:
                     new_holdings.setdefault(stock, current_shares)
                     continue
-                buy_shares = int(budget / price / _LOT_SIZE) * _LOT_SIZE
+                # Use open price directly for share calculation
+                # (slippage only affects cost deduction, not share count)
+                buy_shares = int(budget / price / lot) * lot
                 if buy_shares > 0:
                     cost_basis = buy_shares * price
                     cash -= cost_basis + self._buy_cost(cost_basis)
@@ -332,12 +386,12 @@ class BacktestEngine:
                 else:
                     new_holdings.setdefault(stock, current_shares)
 
-            elif diff < -price * _LOT_SIZE:
+            elif diff < -price * lot:
                 # Sell excess, check limit down
                 pc = prev_close.get(stock, np.nan)
-                if self._is_at_limit(price, pc, "down"):
+                if self._is_at_limit(price, pc, "down", stock):
                     continue
-                sell_shares = int(-diff / price / _LOT_SIZE) * _LOT_SIZE
+                sell_shares = int(-diff / price / lot) * lot
                 sell_shares = min(sell_shares, current_shares)
                 if sell_shares > 0:
                     sell_value = sell_shares * price
@@ -362,9 +416,8 @@ class BacktestEngine:
     # Metrics
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _compute_metrics(
-        nav: pd.Series, benchmark_nav: pd.Series, rebal_log: list[dict],
+        self, nav: pd.Series, benchmark_nav: pd.Series, rebal_log: list[dict],
     ) -> dict:
         """Compute standard backtest metrics."""
         ret = nav.pct_change().dropna()
@@ -372,8 +425,10 @@ class BacktestEngine:
         n_days = len(ret)
         n_years = n_days / 252.0
 
-        total_return = nav.iloc[-1] / nav.iloc[0] - 1
-        bench_total = benchmark_nav.iloc[-1] / benchmark_nav.iloc[0] - 1
+        # Strategy return based on initial capital (not first-day NAV)
+        total_return = nav.iloc[-1] / self._capital - 1
+        # Benchmark return: bench_nav already based on pre-start close
+        bench_total = benchmark_nav.iloc[-1] / self._capital - 1
         annual_return = (1 + total_return) ** (1 / n_years) - 1 if n_years > 0 else 0
 
         sharpe = (ret.mean() / ret.std() * np.sqrt(252)) if ret.std() > 0 else 0
