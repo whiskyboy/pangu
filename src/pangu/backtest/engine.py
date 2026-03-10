@@ -360,44 +360,47 @@ class BacktestEngine:
         target_value = available_value / max(len(tradeable), 1)
 
         # --- Phase 3: Buy / rebalance each target stock ---
+        # Like JQ's order_target: compute target shares directly, then adjust
         for stock in tradeable:
             price = open_prices.get(stock, np.nan)
             current_shares = new_holdings.get(stock, 0)
-            current_value = current_shares * price
-            diff = target_value - current_value
             lot = _lot_size(stock)
 
-            if diff > 0:
-                # Buy: cap by available cash
-                budget = min(diff, cash)
-                if budget <= 0:
-                    new_holdings.setdefault(stock, current_shares)
-                    continue
-                # Use open price directly for share calculation
-                # (slippage only affects cost deduction, not share count)
-                buy_shares = int(budget / price / lot) * lot
-                if buy_shares > 0:
-                    cost_basis = buy_shares * price
-                    cash -= cost_basis + self._buy_cost(cost_basis)
-                    new_holdings[stock] = current_shares + buy_shares
-                    turnover += cost_basis
-                    if current_shares == 0:
-                        buys.append(stock)
-                else:
-                    new_holdings.setdefault(stock, current_shares)
+            # Target shares = int(target_value / price / lot) * lot
+            desired_shares = int(target_value / price / lot) * lot
+            share_diff = desired_shares - current_shares
 
-            elif diff < -price * lot:
-                # Sell excess, check limit down
+            if share_diff > 0:
+                # Buy
+                cost_basis = share_diff * price
+                if cost_basis > cash:
+                    # Not enough cash — buy what we can
+                    share_diff = int(cash / price / lot) * lot
+                    if share_diff <= 0:
+                        new_holdings.setdefault(stock, current_shares)
+                        continue
+                    cost_basis = share_diff * price
+                cash -= cost_basis + self._buy_cost(cost_basis)
+                new_holdings[stock] = current_shares + share_diff
+                turnover += cost_basis
+                if current_shares == 0:
+                    buys.append(stock)
+
+            elif share_diff < 0:
+                # Sell excess, check suspension and limit down
                 pc = prev_close.get(stock, np.nan)
-                if self._is_at_limit(price, pc, "down", stock):
+                if _is_suspended(stock) or self._is_at_limit(price, pc, "down", stock):
+                    new_holdings.setdefault(stock, current_shares)
                     continue
-                sell_shares = int(-diff / price / lot) * lot
-                sell_shares = min(sell_shares, current_shares)
+                sell_shares = min(-share_diff, current_shares)
                 if sell_shares > 0:
                     sell_value = sell_shares * price
                     cash += sell_value - self._sell_cost(sell_value)
                     new_holdings[stock] = current_shares - sell_shares
                     turnover += sell_value
+
+            else:
+                new_holdings.setdefault(stock, current_shares)
 
         log_entry = None
         if sells or buys:
