@@ -396,6 +396,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     open_prices = all_bars_bt.pivot(index="date", columns="symbol", values="open")
     close_prices = all_bars_bt.pivot(index="date", columns="symbol", values="close")
     volume_wide = all_bars_bt.pivot(index="date", columns="symbol", values="volume")
+    adj_factor_wide = all_bars_bt.pivot(index="date", columns="symbol", values="adj_factor")
 
     # Load benchmark (CSI300) — include days before start for pre-start close
     bench_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=15)).strftime("%Y-%m-%d")
@@ -437,7 +438,8 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     # Run backtest with dynamic constituents
     engine = BacktestEngine(top_n=top_n, initial_capital=capital)
     result = engine.run(scores, open_prices, close_prices, bench_close,
-                        start, end, universe_fn=universe_fn, volume=volume_wide)
+                        start, end, universe_fn=universe_fn, volume=volume_wide,
+                        adj_factor=adj_factor_wide)
 
     # Print results
     click.echo(f"\n{'='*60}")

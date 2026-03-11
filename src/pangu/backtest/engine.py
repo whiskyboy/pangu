@@ -261,7 +261,7 @@ class BacktestEngine:
                     pc = prev_cls.get(stock, np.nan)
                     if (np.isfinite(old_af) and np.isfinite(new_af)
                             and np.isfinite(pc) and old_af > 0
-                            and new_af > old_af):
+                            and new_af > old_af > 0):
                         div_per_share = pc * (1 - old_af / new_af)
                         cash += shares * div_per_share * 0.80
 
@@ -359,78 +359,114 @@ class BacktestEngine:
         prev_close: pd.Series,
         volume: pd.Series | None = None,
     ) -> tuple[float, dict[str, int], dict | None]:
-        """Execute rebalance: sell non-target, buy target at open prices."""
+        """Execute rebalance using 5-step allocation strategy.
+
+        Steps:
+          0. Classify stocks into NeedToSell / NeedToAdjust / NeedToBuy.
+          1. Sell NeedToSell (skip suspended, limit-down, no-price → "stuck").
+          2. Build AdjustablePool (NeedToAdjust minus suspended/no-price),
+             CanBuy (NeedToBuy minus suspended/limit-up/no-price),
+             TargetSet = CanBuy ∪ AdjustablePool (score-descending).
+          3. Allocatable = cash + AdjustablePool market value (excludes stuck).
+          4. Equal-weight iterate TargetSet: buy/sell with directional limit
+             checks; partial-fill on cash shortage.
+        """
         sells: list[str] = []
         buys: list[str] = []
         turnover = 0.0
         target_set = set(target)
+        holdings_set = set(holdings.keys())
 
         def _is_suspended(stock: str) -> bool:
-            """Check if stock is suspended (volume=0 or NaN)."""
             if volume is None:
                 return False
             v = volume.get(stock, np.nan)
             return not (np.isfinite(v) and v > 0)
 
-        # --- Phase 1: Sell non-target holdings ---
+        def _has_valid_price(stock: str) -> bool:
+            p = open_prices.get(stock, np.nan)
+            return np.isfinite(p) and p > 0
+
+        # --- Step 0: Classify ---
+        need_to_sell = [s for s in sorted(holdings) if s not in target_set]
+        need_to_adjust = [s for s in target if s in holdings_set]
+        need_to_buy = [s for s in target if s not in holdings_set]
+
+        # --- Step 1: Sell NeedToSell ---
         new_holdings: dict[str, int] = {}
-        for stock, shares in sorted(holdings.items()):
-            if stock not in target_set:
-                price = open_prices.get(stock, np.nan)
-                pc = prev_close.get(stock, np.nan)
-                if (np.isfinite(price) and price > 0
-                        and not _is_suspended(stock)
-                        and not self._is_at_limit(price, pc, "down", stock)):
-                    sell_value = shares * price
-                    cash += sell_value - self._sell_cost(sell_value)
-                    turnover += sell_value
-                    sells.append(stock)
-                else:
-                    new_holdings[stock] = shares
+        for stock in need_to_sell:
+            shares = holdings[stock]
+            price = open_prices.get(stock, np.nan)
+            pc = prev_close.get(stock, np.nan)
+            if (_has_valid_price(stock)
+                    and not _is_suspended(stock)
+                    and not self._is_at_limit(price, pc, "down", stock)):
+                sell_value = shares * price
+                cash += sell_value - self._sell_cost(sell_value)
+                turnover += sell_value
+                sells.append(stock)
             else:
+                # Stuck: can't sell — remains in holdings but excluded from allocation
                 new_holdings[stock] = shares
 
-        # --- Phase 2: Calculate equal-weight allocation ---
-        total_value = cash
-        for stock, shares in sorted(new_holdings.items()):
-            price = open_prices.get(stock, np.nan)
-            if np.isfinite(price):
-                total_value += shares * price
+        # Carry over NeedToAdjust holdings
+        for stock in need_to_adjust:
+            new_holdings[stock] = holdings[stock]
 
-        # Filter to tradeable targets (preserve score-descending order from target)
-        tradeable = [
-            s for s in target
-            if np.isfinite(open_prices.get(s, np.nan))
-            and open_prices.get(s, np.nan) > 0
+        # --- Step 2: Build allocation pools ---
+        adjustable_pool = [
+            s for s in need_to_adjust
+            if _has_valid_price(s) and not _is_suspended(s)
+        ]
+        can_buy = [
+            s for s in need_to_buy
+            if _has_valid_price(s)
             and not _is_suspended(s)
             and not self._is_at_limit(
-                open_prices.get(s, np.nan), prev_close.get(s, np.nan), "up", s
+                open_prices.get(s, np.nan),
+                prev_close.get(s, np.nan), "up", s,
             )
         ]
-        available_value = total_value * _CASH_USAGE_LIMIT
-        target_value = available_value / max(len(tradeable), 1)
+        # TargetSet preserves score-descending order from `target`
+        adjustable_set = set(adjustable_pool)
+        can_buy_set = set(can_buy)
+        target_alloc = [s for s in target if s in adjustable_set or s in can_buy_set]
 
-        # --- Phase 3: Buy / rebalance each target stock ---
-        # Like JQ's order_target: compute target shares directly, then adjust
-        for stock in tradeable:
+        # --- Step 3: Compute allocatable total (≠ actual NAV) ---
+        allocatable = cash
+        for stock in adjustable_pool:
             price = open_prices.get(stock, np.nan)
+            allocatable += holdings[stock] * price
+
+        if not target_alloc:
+            return cash, new_holdings, None
+
+        available = allocatable * _CASH_USAGE_LIMIT
+        per_stock = available / len(target_alloc)
+
+        # --- Step 4: Iterate TargetSet in score order ---
+        for stock in target_alloc:
+            price = open_prices.get(stock, np.nan)
+            pc = prev_close.get(stock, np.nan)
             current_shares = new_holdings.get(stock, 0)
             lot = _lot_size(stock)
 
-            # Target shares = int(target_value / price / lot) * lot
-            desired_shares = int(target_value / price / lot) * lot
+            desired_shares = int(per_stock / price / lot) * lot
             share_diff = desired_shares - current_shares
 
             if share_diff > 0:
-                # Buy
-                cost_basis = share_diff * price
-                if cost_basis > cash:
-                    # Not enough cash — skip order (match JQ's order_target behavior)
-                    # share_diff = int(cash / price / lot) * lot
-                    # if share_diff <= 0:
+                # Buy more
+                if self._is_at_limit(price, pc, "up", stock):
                     new_holdings.setdefault(stock, current_shares)
                     continue
-                    # cost_basis = share_diff * price
+                cost_basis = share_diff * price
+                if cost_basis > cash:
+                    # Partial fill: buy what we can afford
+                    share_diff = int(cash / price / lot) * lot
+                    if share_diff <= 0:
+                        new_holdings.setdefault(stock, current_shares)
+                        continue
+                    cost_basis = share_diff * price
                 cash -= cost_basis + self._buy_cost(cost_basis)
                 new_holdings[stock] = current_shares + share_diff
                 turnover += cost_basis
@@ -438,20 +474,24 @@ class BacktestEngine:
                     buys.append(stock)
 
             elif share_diff < 0:
-                # Sell excess, check suspension and limit down
-                pc = prev_close.get(stock, np.nan)
-                if _is_suspended(stock) or self._is_at_limit(price, pc, "down", stock):
+                # Sell excess
+                if self._is_at_limit(price, pc, "down", stock):
                     new_holdings.setdefault(stock, current_shares)
                     continue
                 sell_shares = min(-share_diff, current_shares)
                 if sell_shares > 0:
                     sell_value = sell_shares * price
                     cash += sell_value - self._sell_cost(sell_value)
-                    new_holdings[stock] = current_shares - sell_shares
+                    remaining = current_shares - sell_shares
+                    if remaining > 0:
+                        new_holdings[stock] = remaining
+                    else:
+                        new_holdings.pop(stock, None)
                     turnover += sell_value
 
             else:
-                new_holdings.setdefault(stock, current_shares)
+                if current_shares > 0:
+                    new_holdings.setdefault(stock, current_shares)
 
         log_entry = None
         if sells or buys:
@@ -461,7 +501,7 @@ class BacktestEngine:
                 "buys": buys,
                 "n_holdings": len(new_holdings),
                 "turnover": turnover,
-                "cash_pct": cash / total_value if total_value > 0 else 0,
+                "cash_pct": cash / allocatable if allocatable > 0 else 0,
             }
 
         return cash, new_holdings, log_entry
