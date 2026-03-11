@@ -17,8 +17,9 @@ venv/
 *.swo
 
 # Data
-data/*.db
 data/logs/
+data/*.db
+data/*.parquet
 
 # Config secrets
 .env
@@ -42,9 +43,3 @@ uv.lock
 *.db-shm
 *.db-wal
 models/
-data/*.parquet
-data/debug-diff/
-data/*.csv
-data/*.png
-data/jq_*.py
-data/jd_*.csv

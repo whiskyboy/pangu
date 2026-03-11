@@ -161,13 +161,18 @@ def train_walk_forward(
     output_path: str = "data/score_matrix.parquet",
     params: dict | None = None,
     label_horizon: int = 5,
+    train_months: int = 18,
+    val_months: int = 3,
+    test_months: int = 3,
+    first_train_start: str = "2020-01-01",
+    n_windows: int = 17,
 ) -> pd.DataFrame:
-    """Execute full Walk-Forward training across 17 windows.
+    """Execute full Walk-Forward training.
 
     Steps:
     1. Load/compute factor panel (166 cols) for full date range
-    2. Compute 5-day excess return labels
-    3. For each of 17 windows:
+    2. Compute N-day excess return labels
+    3. For each window:
        a. Build train/val/test datasets (constituent-filtered)
        b. Train LGBModel with early stopping
        c. Predict test scores
@@ -180,9 +185,20 @@ def train_walk_forward(
     -------
     score_matrix : DataFrame (date × symbol), values = predicted scores.
     """
-    windows = generate_walk_forward_windows()
+    windows = generate_walk_forward_windows(
+        train_months=train_months,
+        val_months=val_months,
+        test_months=test_months,
+        first_train_start=first_train_start,
+        n_windows=n_windows,
+    )
     global_start = windows[0].train_start
     global_end = windows[-1].test_end
+
+    logger.info(
+        "Walk-Forward: %d windows, train=%dmo, test covers %s ~ %s",
+        len(windows), train_months, windows[0].test_start, global_end,
+    )
 
     # Determine pool: all historical constituents across entire range
     pool = storage.load_constituents_union(global_start, global_end)
@@ -193,6 +209,16 @@ def train_walk_forward(
     panel = load_factor_panel(storage, pool, global_start, global_end, factors_path)
     if panel.empty:
         raise ValueError("Empty factor panel. Check data availability.")
+
+    # Validate factor coverage vs first training window
+    panel_dates = panel.index.get_level_values("date")
+    panel_start = panel_dates.min().strftime("%Y-%m-%d")
+    if panel_start > windows[0].train_start:
+        logger.warning(
+            "Factor data starts at %s, but first train window starts at %s. "
+            "Early training samples will be reduced.",
+            panel_start, windows[0].train_start,
+        )
     logger.info("Factor panel: %s rows × %d cols", f"{panel.shape[0]:,}", panel.shape[1])
 
     # 2. Compute labels

@@ -146,9 +146,25 @@ def train() -> None:
 @click.option("--model-dir", default="models", help="Directory to save trained models")
 @click.option("--output", default="data/score_matrix.parquet", help="Score matrix output path")
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
+@click.option("--label-horizon", default=5, type=int,
+              help="Forward return horizon in trading days (default: 5)")
+@click.option("--train-months", default=18, type=int,
+              help="Training window length in months (default: 18)")
+@click.option("--first-train-start", default="2020-01-01",
+              help="First window training start date (default: 2020-01-01)")
+@click.option("--n-windows", default=17, type=int,
+              help="Number of Walk-Forward windows (default: 17)")
+@click.option("--params-file", default=None, type=click.Path(exists=True),
+              help="LightGBM params JSON file (overrides defaults). "
+              "Default params when not set: objective=mae, num_leaves=15, "
+              "learning_rate=0.01, n_estimators=2000, subsample=0.8, "
+              "colsample_bytree=0.8, min_child_samples=200, early_stopping=100")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
-                          pool_file: str | None) -> None:
-    """Run Walk-Forward LightGBM training (17 windows)."""
+                          pool_file: str | None, label_horizon: int,
+                          train_months: int, first_train_start: str,
+                          n_windows: int, params_file: str | None) -> None:
+    """Run Walk-Forward LightGBM training."""
+    import json
     import logging
 
     from pangu.main import build_components, load_env
@@ -160,11 +176,23 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
     c, _, _ = build_components()
     storage = c.market._storage
 
+    # Load custom LightGBM params from JSON file
+    params = None
+    if params_file:
+        with open(params_file) as f:
+            params = json.load(f)
+        click.echo(f"Loaded custom params from {params_file}: {params}")
+
     score_matrix = train_walk_forward(
         storage=storage,
         factors_path=factors_path,
         model_dir=model_dir,
         output_path=output,
+        params=params,
+        label_horizon=label_horizon,
+        train_months=train_months,
+        first_train_start=first_train_start,
+        n_windows=n_windows,
     )
 
     click.echo(f"\n✅ Walk-Forward training complete")
@@ -343,10 +371,20 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 @click.option("--end", default="2025-06-30", help="End date")
 @click.option("--top-n", default=10, type=int, help="TopN stocks to hold")
 @click.option("--capital", default=1_000_000, type=float, help="Initial capital (CNY)")
+@click.option("--stamp-tax", default=0.001, type=float,
+              help="Sell stamp tax rate (default: 0.001)")
+@click.option("--commission", default=0.0003, type=float,
+              help="Broker commission rate (default: 0.0003)")
+@click.option("--slippage", default=0.001, type=float,
+              help="Slippage rate (default: 0.001)")
+@click.option("--exclude-prefixes", default="688,689",
+              help="Comma-separated stock code prefixes to exclude (default: 688,689 STAR market)")
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
 @click.option("--scores", "scores_path", default=None,
               help="Parquet file with pre-computed scores (for lgb strategy)")
 def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float,
+                 stamp_tax: float, commission: float, slippage: float,
+                 exclude_prefixes: str,
                  pool_file: str | None, scores_path: str | None) -> None:
     """Run local backtest for a given strategy."""
     from pangu.main import build_components, load_env
@@ -419,6 +457,17 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
             return
         scores = pd.read_parquet(scores_path)
         scores.index = pd.to_datetime(scores.index)
+        # Validate score coverage vs backtest range
+        score_start = scores.index.min().strftime("%Y-%m-%d")
+        score_end = scores.index.max().strftime("%Y-%m-%d")
+        if scores.index.min() > pd.Timestamp(start):
+            click.echo(f"WARNING: Score matrix starts at {score_start}, "
+                       f"but backtest starts at {start}. "
+                       f"Days before {score_start} will have no signals.")
+        if scores.index.max() < pd.Timestamp(end):
+            click.echo(f"WARNING: Score matrix ends at {score_end}, "
+                       f"but backtest ends at {end}. "
+                       f"Days after {score_end} will have no signals.")
         # Filter to backtest date range
         scores = scores[(scores.index >= start) & (scores.index <= end)]
         click.echo(f"Loaded scores from {scores_path}: {scores.shape}")
@@ -435,11 +484,20 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     # Point-in-time constituent filter (suspension handled at execution time)
     universe_fn = make_universe_fn(storage)
 
+    # Parse exclude_prefixes
+    prefixes = tuple(
+        p.strip() for p in exclude_prefixes.split(",") if p.strip()
+    ) if exclude_prefixes else ()
+
     # Run backtest with dynamic constituents
-    engine = BacktestEngine(top_n=top_n, initial_capital=capital)
+    engine = BacktestEngine(
+        top_n=top_n, initial_capital=capital,
+        stamp_tax=stamp_tax, commission=commission, slippage=slippage,
+    )
     result = engine.run(scores, open_prices, close_prices, bench_close,
                         start, end, universe_fn=universe_fn, volume=volume_wide,
-                        adj_factor=adj_factor_wide)
+                        adj_factor=adj_factor_wide,
+                        exclude_prefixes=prefixes)
 
     # Print results
     click.echo(f"\n{'='*60}")
