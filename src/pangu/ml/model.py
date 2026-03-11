@@ -165,7 +165,7 @@ def train_walk_forward(
     val_months: int = 3,
     test_months: int = 3,
     first_train_start: str = "2020-01-01",
-    n_windows: int = 17,
+    last_test_end: str = "2025-12-31",
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
@@ -190,7 +190,7 @@ def train_walk_forward(
         val_months=val_months,
         test_months=test_months,
         first_train_start=first_train_start,
-        n_windows=n_windows,
+        last_test_end=last_test_end,
     )
     global_start = windows[0].train_start
     global_end = windows[-1].test_end

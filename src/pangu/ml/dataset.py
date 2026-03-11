@@ -43,20 +43,21 @@ def generate_walk_forward_windows(
     val_months: int = 3,
     test_months: int = 3,
     first_train_start: str = "2020-01-01",
-    n_windows: int = 17,
+    last_test_end: str = "2025-12-31",
 ) -> list[WindowSplit]:
     """Generate Walk-Forward window date ranges.
 
     Each window slides forward by ``test_months`` months.
-    Returns list of ``n_windows`` WindowSplit objects.
+    Generates all windows whose test_end ≤ ``last_test_end``.
     """
     from dateutil.relativedelta import relativedelta
 
     start = datetime.strptime(first_train_start, "%Y-%m-%d")
-    step = relativedelta(months=test_months)
+    cutoff = datetime.strptime(last_test_end, "%Y-%m-%d")
     windows: list[WindowSplit] = []
 
-    for i in range(n_windows):
+    i = 0
+    while True:
         offset = relativedelta(months=test_months * i)
         t_start = start + offset
         t_end = t_start + relativedelta(months=train_months) - relativedelta(days=1)
@@ -64,6 +65,9 @@ def generate_walk_forward_windows(
         v_end = v_start + relativedelta(months=val_months) - relativedelta(days=1)
         te_start = v_end + relativedelta(days=1)
         te_end = te_start + relativedelta(months=test_months) - relativedelta(days=1)
+
+        if te_end > cutoff:
+            break
 
         windows.append(WindowSplit(
             window_id=i + 1,
@@ -74,6 +78,14 @@ def generate_walk_forward_windows(
             test_start=te_start.strftime("%Y-%m-%d"),
             test_end=te_end.strftime("%Y-%m-%d"),
         ))
+        i += 1
+
+    if not windows:
+        raise ValueError(
+            f"No windows fit: first_train_start={first_train_start}, "
+            f"last_test_end={last_test_end}, "
+            f"window size={train_months}+{val_months}+{test_months} months"
+        )
 
     return windows
 

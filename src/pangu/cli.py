@@ -152,8 +152,9 @@ def train() -> None:
               help="Training window length in months (default: 18)")
 @click.option("--first-train-start", default="2020-01-01",
               help="First window training start date (default: 2020-01-01)")
-@click.option("--n-windows", default=17, type=int,
-              help="Number of Walk-Forward windows (default: 17)")
+@click.option("--last-test-end", default="2025-12-31",
+              help="Last window test end date; windows are generated until test_end ≤ this date "
+              "(default: 2025-12-31)")
 @click.option("--params-file", default=None, type=click.Path(exists=True),
               help="LightGBM params JSON file (overrides defaults). "
               "Default params when not set: objective=mae, num_leaves=15, "
@@ -162,7 +163,7 @@ def train() -> None:
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: int,
                           train_months: int, first_train_start: str,
-                          n_windows: int, params_file: str | None) -> None:
+                          last_test_end: str, params_file: str | None) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -192,7 +193,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         label_horizon=label_horizon,
         train_months=train_months,
         first_train_start=first_train_start,
-        n_windows=n_windows,
+        last_test_end=last_test_end,
     )
 
     click.echo(f"\n✅ Walk-Forward training complete")

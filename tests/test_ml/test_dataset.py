@@ -57,7 +57,7 @@ class TestWalkForwardWindows:
     def test_custom_params(self):
         windows = generate_walk_forward_windows(
             train_months=12, val_months=2, test_months=2,
-            first_train_start="2021-01-01", n_windows=3,
+            first_train_start="2021-01-01", last_test_end="2022-08-31",
         )
         assert len(windows) == 3
         assert windows[0].train_start == "2021-01-01"
