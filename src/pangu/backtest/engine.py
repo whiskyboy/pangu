@@ -278,7 +278,9 @@ class BacktestEngine:
                 prev_scores = scores.loc[score_date].dropna()
 
                 if universe_fn is not None:
-                    universe = universe_fn(date.strftime("%Y-%m-%d"))
+                    # Use score_date constituents (not rebalance date) to avoid
+                    # future information when T crosses a constituent change.
+                    universe = universe_fn(score_date.strftime("%Y-%m-%d"))
                     prev_scores = prev_scores[prev_scores.index.isin(universe)]
 
                 if len(prev_scores) >= self._top_n:
@@ -405,7 +407,6 @@ class BacktestEngine:
                 open_prices.get(s, np.nan), prev_close.get(s, np.nan), "up", s
             )
         ]
-        # Reserve cash before equal-weight split (matches JQ's cash_reserve logic)
         available_value = total_value * _CASH_USAGE_LIMIT
         target_value = available_value / max(len(tradeable), 1)
 
@@ -424,12 +425,12 @@ class BacktestEngine:
                 # Buy
                 cost_basis = share_diff * price
                 if cost_basis > cash:
-                    # Not enough cash — buy what we can
-                    share_diff = int(cash / price / lot) * lot
-                    if share_diff <= 0:
-                        new_holdings.setdefault(stock, current_shares)
-                        continue
-                    cost_basis = share_diff * price
+                    # Not enough cash — skip order (match JQ's order_target behavior)
+                    # share_diff = int(cash / price / lot) * lot
+                    # if share_diff <= 0:
+                    new_holdings.setdefault(stock, current_shares)
+                    continue
+                    # cost_basis = share_diff * price
                 cash -= cost_basis + self._buy_cost(cost_basis)
                 new_holdings[stock] = current_shares + share_diff
                 turnover += cost_basis
@@ -520,22 +521,21 @@ class BacktestEngine:
 # ------------------------------------------------------------------
 
 
-def make_universe_fn(storage: object, volume_wide: pd.DataFrame) -> callable:
-    """Create point-in-time constituent filter with suspended stock exclusion.
+def make_universe_fn(storage: object) -> callable:
+    """Create point-in-time constituent filter.
 
     Returns a function ``fn(date_str) -> set[str]`` suitable for passing
     as *universe_fn* to :meth:`BacktestEngine.run`.
+
+    Note: Suspended stocks are NOT filtered here. T-day suspension status
+    is future information at selection time (T-1 scores). Suspension is
+    handled at execution time in the rebalance logic.
     """
     cache: dict[str, set[str]] = {}
 
     def fn(date_str: str) -> set[str]:
         if date_str not in cache:
-            constituents = set(storage.load_constituents_for_date(date_str))
-            ts = pd.Timestamp(date_str)
-            if ts in volume_wide.index:
-                vol = volume_wide.loc[ts]
-                constituents -= set(vol[(vol == 0) | vol.isna()].index)
-            cache[date_str] = constituents
+            cache[date_str] = set(storage.load_constituents_for_date(date_str))
         return cache[date_str]
 
     return fn

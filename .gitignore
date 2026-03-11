@@ -43,3 +43,8 @@ uv.lock
 *.db-wal
 models/
 data/*.parquet
+data/debug-diff/
+data/*.csv
+data/*.png
+data/jq_*.py
+data/jd_*.csv

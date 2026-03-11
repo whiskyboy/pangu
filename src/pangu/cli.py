@@ -431,8 +431,8 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
 
     click.echo(f"Scores: {scores.shape}")
 
-    # Point-in-time constituent filter + suspended stock exclusion
-    universe_fn = make_universe_fn(storage, volume_wide)
+    # Point-in-time constituent filter (suspension handled at execution time)
+    universe_fn = make_universe_fn(storage)
 
     # Run backtest with dynamic constituents
     engine = BacktestEngine(top_n=top_n, initial_capital=capital)
