@@ -383,10 +383,15 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
 @click.option("--scores", "scores_path", default=None,
               help="Parquet file with pre-computed scores (for lgb strategy)")
+@click.option("--plot/--no-plot", default=True,
+              help="Generate equity curve chart (default: --plot)")
+@click.option("--plot-output", default=None,
+              help="Chart output path (default: data/backtest_{strategy}_{date}.png)")
 def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float,
                  stamp_tax: float, commission: float, slippage: float,
                  exclude_prefixes: str,
-                 pool_file: str | None, scores_path: str | None) -> None:
+                 pool_file: str | None, scores_path: str | None,
+                 plot: bool, plot_output: str | None) -> None:
     """Run local backtest for a given strategy."""
     from pangu.main import build_components, load_env
     load_env()
@@ -510,6 +515,16 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
         else:
             click.echo(f"  {k:20s}: {v}")
     click.echo(f"  {'rebalances':20s}: {len(result.rebalance_log)}")
+
+    # Plot equity curve
+    if plot:
+        from datetime import datetime
+        from pangu.backtest.plot import plot_equity_curve
+        if plot_output is None:
+            plot_output = f"data/backtest_{strategy}_{datetime.now().strftime('%Y%m%d')}.png"
+        path = plot_equity_curve(result.nav, result.benchmark_nav, strategy, plot_output,
+                                initial_capital=capital)
+        click.echo(f"\n📈 Chart saved: {path}")
 
 
 @main.command("compute-factors")
