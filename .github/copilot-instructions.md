@@ -61,6 +61,13 @@ This is the most critical domain convention and a frequent source of bugs:
 - **Label computation** uses forward-adjusted prices: `(close * adj_factor)[t+5] / (close * adj_factor)[t] - 1`. This captures dividend returns.
 - **Never mix adjusted and unadjusted prices** in the same calculation.
 
+## Return Calculation Convention
+
+- **All return metrics (annual return, total return, etc.) use `initial_capital` as the denominator**, not the first day's NAV.
+  - ✅ `total_return = (final_nav - initial_capital) / initial_capital`
+  - ❌ `total_return = (final_nav - nav[0]) / nav[0]`
+- This is because `initial_capital` is the known starting amount, while `nav[0]` may already reflect Day 1 trading costs and price changes.
+
 ## Conventions
 
 **Protocol-driven architecture:** All layers use `typing.Protocol` for interfaces (not ABC). Data providers, strategies, LLM engine, notification — all define Protocol in `protocol.py` and implementations alongside. New implementations must satisfy the Protocol, not inherit from a base class.
