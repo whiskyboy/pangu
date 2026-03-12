@@ -44,7 +44,7 @@ PanGu runs 6 scheduled tasks each trading day, forming a complete pipeline: data
 
 - **T1 Global Market Sync** (08:00): Fetches overnight data for US indices (S&P 500, Dow Jones, NASDAQ), Hong Kong HSI/HSTECH, VHSI volatility, and commodities (gold, oil, copper, etc.)
 - **T2 News Polling** (hourly): Scrapes real-time financial headlines, deduplicates and stores, auto-cleans expired news
-- **T3 Domestic Market Sync** (15:30 post-close): Incrementally pulls daily K-lines and fundamentals (PE, PB, ROE, etc.) for the full stock pool, with AkShare → BaoStock automatic fallback
+- **T3 Domestic Market Sync** (18:00 post-close): Incrementally pulls daily K-lines and fundamentals (PE, PB, ROE, etc.) for the full stock pool, with AkShare → BaoStock automatic fallback
 - **T5 Reference Data Sync** (monthly): Updates A-share trading calendar and stock pool constituents
 
 ### Multi-Factor Ranking
@@ -189,7 +189,7 @@ All tasks are scheduled according to the A-share trading calendar (skipped on no
 |------|------|-----------|-------------|
 | T1 Global Market | 08:00 | Daily | US/HK/commodity overnight snapshot → macro factors |
 | T2 News Polling | 07:00–20:00 | Hourly | Financial headlines → deduplicated storage |
-| T3 Domestic Market | 15:30 | Daily | Stock pool K-lines + fundamentals (incremental) |
+| T3 Domestic Market | 18:00 | Daily | Stock pool K-lines + fundamentals (incremental) |
 | T4 Signal Generation | 08:15 | Daily | Factor ranking → Top-N → evidence → LLM judge → Feishu push |
 | T5 Reference Data | 1st of month | Monthly | Trading calendar + stock pool constituents |
 | T6 Signal Verification | 16:00 | Daily | 1/3/5-day actual returns → performance report |
