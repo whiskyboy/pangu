@@ -51,24 +51,33 @@ Offline (on-demand, sync):
 - `src/pangu/config.py` — TOML settings loader with `$ENV_VAR` substitution, thread-safe singleton.
 - `src/pangu/models.py` — Shared dataclasses (TradeSignal, NewsItem, Action enum, etc.).
 
-## Price Data Convention
+## Conventions
 
-This is the most critical domain convention and a frequent source of bugs:
+### Data & Storage
 
-- **DB stores unadjusted (real market) prices.** The `adj_factor` column enables forward-adjustment when needed.
+**Price data:** DB stores unadjusted (real market) prices. The `adj_factor` column enables forward-adjustment when needed. This is the most critical domain convention and a frequent source of bugs:
 - **Factor computation** uses forward-adjusted prices: `close * adj_factor`. This ensures price continuity across ex-dividend dates.
 - **Backtest execution** uses unadjusted prices directly — these are real trading prices for limit-up/down checks, order fills, and NAV calculation.
 - **Label computation** uses forward-adjusted prices: `(close * adj_factor)[t+5] / (close * adj_factor)[t] - 1`. This captures dividend returns.
 - **Never mix adjusted and unadjusted prices** in the same calculation.
 
-## Return Calculation Convention
+**Fundamental data:** DB stores fundamentals **sparsely** — PE/PB are daily rows; ROE, revenue_yoy, profit_yoy, gross_margin etc. are quarterly (only on quarter-end dates). Two layers of forward-fill produce daily-frequency output:
+1. `Database.load_fundamentals_filled()` fetches a seed row before the query range and ffills quarterly columns.
+2. `Alpha158Engine._compute_fundamentals()` does a second ffill via `reindex(amount.index, method='ffill')` to align to trading dates.
+- **Never judge data completeness by raw DB row counts.** Always check factor-level output (`factors.parquet`) or call `load_fundamentals_filled()`.
 
-- **All return metrics (annual return, total return, etc.) use `initial_capital` as the denominator**, not the first day's NAV.
-  - ✅ `total_return = (final_nav - initial_capital) / initial_capital`
-  - ❌ `total_return = (final_nav - nav[0]) / nav[0]`
-- This is because `initial_capital` is the known starting amount, while `nav[0]` may already reflect Day 1 trading costs and price changes.
+**Data pipeline layers:** When diagnosing data issues, check the right layer — DB sparsity ≠ factor sparsity:
+```
+DB (sparse quarterly) → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) → factors.parquet (dense daily)
+```
 
-## Conventions
+**Return calculation:** All return metrics use `initial_capital` as the denominator, not the first day's NAV. This is because `initial_capital` is the known starting amount, while `nav[0]` may already reflect Day 1 trading costs and price changes.
+
+**Financial rounding:** Use `Decimal` with `ROUND_HALF_UP` for price limit calculations (Chinese exchange 四舍五入), not Python's built-in `round()` (banker's rounding).
+
+**Determinism:** All set/dict iterations in backtest code must use `sorted()` to ensure reproducible results regardless of PYTHONHASHSEED.
+
+### Code Style & Architecture
 
 **Protocol-driven architecture:** All layers use `typing.Protocol` for interfaces (not ABC). Data providers, strategies, LLM engine, notification — all define Protocol in `protocol.py` and implementations alongside. New implementations must satisfy the Protocol, not inherit from a base class.
 
@@ -76,13 +85,9 @@ This is the most critical domain convention and a frequent source of bugs:
 
 **Components dependency injection:** All runtime dependencies are assembled into a `Components` dataclass in `main.py` and injected into `TradingScheduler` and tasks. Tests use fake implementations (`tests/fakes.py`). No global singletons for services.
 
-**LLM degradation guarantee:** `LLMJudgeEngineImpl.judge_stock()` always returns a `TradeSignal`, never None. Three-level JSON parsing fallback (direct → fenced block → brace-counting). If LLM completely fails, rule-based keyword scoring takes over.
-
 **Async throughout production pipeline:** Tasks (T1-T6), LLM calls, and Feishu notifications are all `async`. The scheduler uses `AsyncIOScheduler`. Factor engines and backtest are synchronous (pure computation).
 
-**Error handling:** Let exceptions propagate in core logic. Use explicit `raise ValueError`/`RuntimeError` for precondition failures. Broad `except` with logging is only acceptable in I/O boundaries (data providers, API calls). No defensive try/except in business logic — the user considers this "画蛇添足" (over-engineering). Data providers use `CircuitBreaker` (5 failures → 5min cooldown) and exponential backoff retry.
-
-**Testing:** Use deterministic fakes (`tests/fakes.py`), not mocks/patches. Tests are integration-style with real data structures. Use `pytest.approx()` for float comparisons. Call `reset_settings()` in tests to clear config singleton cache.
+**LLM degradation guarantee:** `LLMJudgeEngineImpl.judge_stock()` always returns a `TradeSignal`, never None. Three-level JSON parsing fallback (direct → fenced block → brace-counting). If LLM completely fails, rule-based keyword scoring takes over.
 
 **Type hints:** Modern PEP 585+ syntax throughout — `list[str]`, `dict[str, float]`, `X | Y`. All public methods must have type annotations. Use `TYPE_CHECKING` blocks for circular dependency avoidance.
 
@@ -92,9 +97,13 @@ This is the most critical domain convention and a frequent source of bugs:
 
 **Code style:** Ruff with line-length=120. Minimal comments — only where clarification is needed. No over-engineering: keep code paths simple, avoid backward-compat shims, don't add parameters "just in case."
 
-**Determinism:** All set/dict iterations in backtest code must use `sorted()` to ensure reproducible results regardless of PYTHONHASHSEED.
+### Error Handling
 
-**Financial rounding:** Use `Decimal` with `ROUND_HALF_UP` for price limit calculations (Chinese exchange 四舍五入), not Python's built-in `round()` (banker's rounding).
+Let exceptions propagate in core logic. Use explicit `raise ValueError`/`RuntimeError` for precondition failures. Broad `except` with logging is only acceptable in I/O boundaries (data providers, API calls). No defensive try/except in business logic — the user considers this "画蛇添足" (over-engineering). Data providers use `CircuitBreaker` (5 failures → 5min cooldown) and exponential backoff retry.
+
+### Testing
+
+Use deterministic fakes (`tests/fakes.py`), not mocks/patches. Tests are integration-style with real data structures. Use `pytest.approx()` for float comparisons. Call `reset_settings()` in tests to clear config singleton cache.
 
 ## Configuration
 
