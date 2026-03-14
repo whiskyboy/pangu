@@ -285,7 +285,7 @@ def backfill_bars(start: str, force: bool, pool_file: str | None) -> None:
         except Exception as e:  # noqa: BLE001
             fail += 1
             click.echo(f"  ✗ {symbol}: {e}")
-        if i % 50 == 0 or i == total:
+        if i % 10 == 0 or i == total:
             click.echo(f"  [{i}/{total}] ok={ok} fail={fail}")
 
     click.echo(f"\n✅ Backfill bars done: {ok} ok, {fail} failed")
@@ -352,7 +352,7 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
             time.sleep(60)
             consecutive_fails = 0
 
-        if i % 50 == 0 or i == total:
+        if i % 10 == 0 or i == total:
             click.echo(f"  [{i}/{total}] ok={ok} fail={fail}")
 
     click.echo(f"\n✅ Backfill fundamentals done: {ok} ok, {fail} failed")
