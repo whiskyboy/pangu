@@ -4,7 +4,7 @@
 
 ```bash
 uv sync --extra dev          # Install dependencies
-uv run pytest                # Run all tests (~480 tests)
+uv run pytest                # Run all tests (~510 tests)
 uv run pytest tests/test_backtest/test_engine.py -k "test_rebalance"  # Single test
 uv run ruff check src/ tests/       # Lint
 uv run ruff format src/ tests/      # Format
@@ -23,7 +23,7 @@ Production (daily, async):
       → T6: verify 1/3/5d returns
 
 Offline (on-demand, sync):
-  BaoStock/AkShare → SQLite DB (unadjusted prices + adj_factor)
+  BaoStock/AkShare → SQLite DB (unadjusted prices + adj_factor + turn/tradestatus/is_st/valuation)
       → Alpha158Engine (166 factors) → LightGBM Walk-Forward (17 windows)
       → score_matrix.parquet → BacktestEngine (5-step rebalance)
 ```
@@ -43,6 +43,8 @@ Offline (on-demand, sync):
    - `src/pangu/factor/alpha158.py` — 166-factor engine (158 technical + 8 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 166 columns, float32.
    - `src/pangu/ml/dataset.py` — Walk-Forward window splitting, label computation (5-day excess return using forward-adjusted prices).
    - `src/pangu/ml/model.py` — LightGBM wrapper with fit/predict/save/load.
+   - `src/pangu/ml/score_evaluator.py` — Score matrix quality diagnostics (discrimination, stability, rank stability).
+   - `src/pangu/ml/model_evaluator.py` — Model quality diagnostics (feature importance, per-window summary, feature drift).
    - `src/pangu/backtest/engine.py` — 5-step rebalance: classify → sell → build pool → allocate → settle. Deterministic (all iterations sorted).
 
 **Shared infrastructure:**
@@ -61,14 +63,21 @@ Offline (on-demand, sync):
 - **Label computation** uses forward-adjusted prices: `(close * adj_factor)[t+5] / (close * adj_factor)[t] - 1`. This captures dividend returns.
 - **Never mix adjusted and unadjusted prices** in the same calculation.
 
-**Fundamental data:** DB stores fundamentals **sparsely** — PE/PB are daily rows; ROE, revenue_yoy, profit_yoy, gross_margin etc. are quarterly (only on quarter-end dates). Two layers of forward-fill produce daily-frequency output:
+**Fundamental data:** DB stores fundamentals **sparsely** — PE/PB/market_cap are daily rows (extracted from daily bars by `composite._persist_valuation()`); ROE, revenue_yoy, profit_yoy, gross_margin etc. are quarterly (only on quarter-end dates). Two layers of forward-fill produce daily-frequency output:
 1. `Database.load_fundamentals_filled()` fetches a seed row before the query range and ffills quarterly columns.
 2. `Alpha158Engine._compute_fundamentals()` does a second ffill via `reindex(amount.index, method='ffill')` to align to trading dates.
 - **Never judge data completeness by raw DB row counts.** Always check factor-level output (`factors.parquet`) or call `load_fundamentals_filled()`.
 
+**Circulating market cap:** The system uses **circulating (float) market cap**, not total market cap. This is the A-share industry standard (Barra CNE5, Qlib Alpha158 all use float_mv). The derivation formula is a mathematical tautology from the exchange definition of turnover rate:
+- `circ_shares = volume / (turn / 100)`, then `circ_mv = close × circ_shares`
+- Computed in `composite._persist_valuation()`, stored in `fundamentals.market_cap`
+- When `volume=0` or `turn=0` (suspended/no-trade days), `market_cap = NULL` — ffill carries forward the last known value
+- **Never mix circulating and total market cap.** For SOE stocks, circ_mv can be 25-35% less than total_mv; this is correct behavior, not a bug.
+
 **Data pipeline layers:** When diagnosing data issues, check the right layer — DB sparsity ≠ factor sparsity:
 ```
-DB (sparse quarterly) → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) → factors.parquet (dense daily)
+daily_bars (turn+close+volume) → composite._persist_valuation → fundamentals (PE/PB/market_cap daily + quarterly sparse)
+fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) → factors.parquet (dense daily)
 ```
 
 **Return calculation:** All return metrics use `initial_capital` as the denominator, not the first day's NAV. This is because `initial_capital` is the known starting amount, while `nav[0]` may already reflect Day 1 trading costs and price changes.
