@@ -570,6 +570,40 @@ def evaluate_scores_cmd(scores_path: str, top_n_str: str, output_json: bool) -> 
         click.echo(format_report(results))
 
 
+# ---------------------------------------------------------------------------
+# evaluate-models command
+# ---------------------------------------------------------------------------
+
+@main.command("evaluate-models")
+@click.option("--model-dir", default="models", help="Directory with wf_window_*.txt files")
+@click.option("--top-n", default=20, type=int, help="Number of top features to show")
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
+def evaluate_models_cmd(model_dir: str, top_n: int, output_json: bool) -> None:
+    """Diagnose walk-forward model quality (importance, drift, underfitting)."""
+    import json
+    from pathlib import Path
+
+    from pangu.ml.model_evaluator import evaluate_models, format_model_report
+
+    path = Path(model_dir)
+    if not path.is_dir():
+        click.echo(f"ERROR: Model directory not found: {model_dir}", err=True)
+        return
+
+    model_files = list(path.glob("wf_window_*.txt"))
+    if not model_files:
+        click.echo(f"ERROR: No wf_window_*.txt files in {model_dir}", err=True)
+        return
+
+    click.echo(f"Loading {len(model_files)} window models from {model_dir}/")
+    results = evaluate_models(model_dir, top_n=top_n)
+
+    if output_json:
+        click.echo(json.dumps(results, indent=2, default=str))
+    else:
+        click.echo(format_model_report(results))
+
+
 
 @main.command("compute-factors")
 @click.option("--start", default="2019-01-01", help="Start date (include warmup)")
