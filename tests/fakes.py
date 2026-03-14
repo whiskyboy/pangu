@@ -20,7 +20,6 @@ from pangu.models import (
 )
 from pangu.tz import now as _tz_now
 
-
 # ---------------------------------------------------------------------------
 # FakeMarketDataProvider  (was in pangu.data.market)
 # ---------------------------------------------------------------------------

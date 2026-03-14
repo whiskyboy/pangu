@@ -255,7 +255,6 @@ class TestFilterStocks:
 
     @patch("akshare.stock_individual_info_em")
     def test_new_ipo_excluded(self, mock_info: MagicMock, tmp_yaml: Path, db: Database) -> None:
-        from datetime import datetime, timedelta
         recent = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
         mock_info.return_value = _info_df("新股科技", recent)
         m, n, f = _mock_providers()
@@ -276,14 +275,19 @@ class TestFilterStocks:
         mock_info.side_effect = ConnectionError("network error")
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
-        with patch("pangu.utils.CircuitBreaker", return_value=MagicMock(allow_request=MagicMock(return_value=True), record_success=MagicMock(), record_failure=MagicMock())):
+        with patch(
+            "pangu.utils.CircuitBreaker",
+            return_value=MagicMock(
+                allow_request=MagicMock(return_value=True),
+                record_success=MagicMock(), record_failure=MagicMock(),
+            ),
+        ):
             result = pool._filter_stocks(["601899"])
         assert result == ["601899"]
 
     @patch("akshare.stock_individual_info_em")
     def test_mixed_filtering(self, mock_info: MagicMock, tmp_yaml: Path, db: Database) -> None:
         """Multiple stocks: one normal, one ST, one new IPO."""
-        from datetime import datetime, timedelta
         recent = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 
         def side_effect(symbol: str) -> pd.DataFrame:

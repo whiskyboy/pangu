@@ -342,8 +342,8 @@ class StockPoolManager:
         """
         import akshare as ak
 
-        from pangu.utils import CircuitBreaker, retry_call
         from pangu.tz import today_str
+        from pangu.utils import CircuitBreaker, retry_call
 
         circuit = CircuitBreaker()
         today = today_str()
@@ -404,8 +404,8 @@ class StockPoolManager:
         import baostock as bs
         import pandas as pd
 
-        from pangu.utils import CircuitBreaker, retry_call
         from pangu.tz import today_str
+        from pangu.utils import CircuitBreaker, retry_call
 
         end = end or today_str()
         lg = bs.login()

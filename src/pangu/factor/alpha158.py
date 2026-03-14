@@ -110,7 +110,7 @@ def _prepare_wide_tables(
     amount = _pivot(bars, "amount").astype("float64")
     adj = _pivot(bars, "adj_factor").ffill()
 
-    O = raw_open * adj
+    O = raw_open * adj  # noqa: E741
     H = raw_high * adj
     L = raw_low * adj
     C = raw_close * adj
@@ -127,7 +127,7 @@ def _prepare_wide_tables(
 # ---------------------------------------------------------------------------
 
 def _compute_kbar(
-    O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame, C: pd.DataFrame,
+    O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame, C: pd.DataFrame,  # noqa: E741
 ) -> dict[str, pd.DataFrame]:
     oc_max = pd.DataFrame(
         np.maximum(O.values, C.values), index=O.index, columns=O.columns,
@@ -156,7 +156,7 @@ def _compute_kbar(
 # ---------------------------------------------------------------------------
 
 def _compute_price(
-    O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame,
+    O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame,  # noqa: E741
     C: pd.DataFrame, VWAP: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
     c_safe = C + _EPS  # protect against C=0 (data errors)
@@ -204,12 +204,7 @@ def _rolling_slope_rsqr_resi(
     # Pre-computed constants for x = [0, 1, ..., d-1]
     sum_x = d * (d - 1) / 2.0
     sum_x2 = d * (d - 1) * (2 * d - 1) / 6.0
-    mean_x = sum_x / d
     denom = d * sum_x2 - sum_x ** 2
-
-    # Rolling sums of y
-    sum_y = s.rolling(d, min_periods=d).sum()
-    mean_y = sum_y / d
 
     # Rolling sum of x*y:
     # sum_xy = sum_{i=0}^{d-1} i * y_{t-d+1+i}
@@ -482,7 +477,7 @@ class Alpha158Engine:
         """
         # Pivot to wide format + forward-adjust prices
         wide = _prepare_wide_tables(all_bars)
-        O, H, L, C = wide["O"], wide["H"], wide["L"], wide["C"]
+        O, H, L, C = wide["O"], wide["H"], wide["L"], wide["C"]  # noqa: E741
         V, amount, VWAP = wide["V"], wide["amount"], wide["VWAP"]
 
         # 1. KBar (9)
@@ -528,7 +523,6 @@ class Alpha158Engine:
         -------
         DataFrame (index=symbol, columns=166 factors).
         """
-        from pangu.data.storage import DataStorage  # noqa: F811
 
         target_dt = pd.Timestamp(target_date)
         lookback_start = (target_dt - timedelta(days=90)).strftime("%Y-%m-%d")

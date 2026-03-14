@@ -6,8 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pangu.ml.model import DEFAULT_PARAMS, LGBModel, _compute_ic
-
+from pangu.ml.model import LGBModel, _compute_ic
 
 # ---------------------------------------------------------------------------
 # Fixtures

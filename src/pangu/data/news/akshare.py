@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from pangu.tz import now as _now
 from pangu.models import NewsCategory, NewsItem, Region
+from pangu.tz import now as _now
 from pangu.utils import CircuitBreaker, ThrottleMixin, retry_call
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,6 @@ class AkShareNewsDataProvider(ThrottleMixin):
 
     def _parse_telegraph(self, row) -> NewsItem:
         """Convert a row from stock_info_global_cls DataFrame to NewsItem."""
-        from datetime import datetime
 
         title = str(row.get("标题", ""))
         content = str(row.get("内容", ""))
@@ -107,7 +106,6 @@ class AkShareNewsDataProvider(ThrottleMixin):
 
     def get_stock_news(self, symbol: str, limit: int = 20) -> list[NewsItem]:
         """Fetch news for a specific stock via stock_news_em."""
-        from datetime import datetime
 
         try:
             self._throttle()

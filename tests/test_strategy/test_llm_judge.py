@@ -18,11 +18,10 @@ def _no_sleep():
         yield
 
 
-from pangu.models import Action, NewsCategory, NewsItem, Region, SignalStatus
-from tests.fakes import FakeLLMJudgeEngine
-from pangu.strategy.llm.client import LLMClient
-from pangu.strategy.llm.judge import LLMJudgeEngineImpl, _KNOWN_FACTORS
-
+from pangu.models import Action, NewsItem, Region, SignalStatus  # noqa: E402
+from pangu.strategy.llm.client import LLMClient  # noqa: E402
+from pangu.strategy.llm.judge import LLMJudgeEngineImpl  # noqa: E402
+from tests.fakes import FakeLLMJudgeEngine  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pandas as pd
 import pytest
 
 from pangu.scheduler import Components, TradingScheduler
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

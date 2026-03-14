@@ -29,10 +29,10 @@ from pangu.notification import NotificationManager
 from pangu.strategy.factor import MultiFactorStrategy
 from pangu.strategy.llm import LLMJudgeEngineImpl
 from pangu.tasks import (
-    sync_global_market,
+    generate_signals,
     poll_news,
     sync_domestic_market,
-    generate_signals,
+    sync_global_market,
     sync_reference_data,
     verify_signals,
 )

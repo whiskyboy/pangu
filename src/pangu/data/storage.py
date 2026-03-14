@@ -11,7 +11,7 @@ import hashlib
 import json
 import sqlite3
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd

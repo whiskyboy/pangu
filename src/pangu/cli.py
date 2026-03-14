@@ -7,7 +7,6 @@ import sys
 
 import click
 
-
 # ---------------------------------------------------------------------------
 # Root group
 # ---------------------------------------------------------------------------
@@ -196,7 +195,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         last_test_end=last_test_end,
     )
 
-    click.echo(f"\n✅ Walk-Forward training complete")
+    click.echo("\n✅ Walk-Forward training complete")
     click.echo(f"  Score matrix: {score_matrix.shape[0]} days × {score_matrix.shape[1]} stocks")
     click.echo(f"  Output: {output}")
     click.echo(f"  Models: {model_dir}/wf_window_*.txt")
@@ -398,6 +397,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     c, _, _ = build_components()
 
     import pandas as pd
+
     from pangu.backtest.engine import BacktestEngine, make_universe_fn
 
     storage = c.market._storage
@@ -520,6 +520,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     # Plot equity curve
     if plot:
         from datetime import datetime
+
         from pangu.backtest.plot import plot_equity_curve
         if plot_output is None:
             plot_output = f"data/backtest_{strategy}_{datetime.now().strftime('%Y%m%d')}.png"
@@ -680,7 +681,7 @@ def compute_factors_cmd(start: str, end: str, output: str, pool_file: str | None
     total = panel.shape[0]
     non_nan = panel.notna().sum()
     coverage = (non_nan / total * 100).describe()
-    click.echo(f"\n  Factor coverage (% non-NaN):")
+    click.echo("\n  Factor coverage (% non-NaN):")
     click.echo(f"    min: {coverage['min']:.1f}%, mean: {coverage['mean']:.1f}%, max: {coverage['max']:.1f}%")
 
 

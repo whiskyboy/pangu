@@ -15,6 +15,8 @@ dependencies = [
     # Layer 3: Strategy & ML
     "litellm>=1.0",
     "lightgbm>=4.0",
+    "scikit-learn>=1.3",
+    "pyarrow>=14.0",
     "scipy>=1.10",
     # Layer 4: Infrastructure
     "apscheduler>=3.10",

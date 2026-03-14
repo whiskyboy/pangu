@@ -17,6 +17,7 @@ from pathlib import Path
 
 import yaml
 
+
 # Load .env if present (before config reads $ENV_VAR placeholders)
 def load_env() -> None:
     """Load .env file into environment variables."""
@@ -33,21 +34,20 @@ def load_env() -> None:
 
 load_env()
 
-from pangu.config import Settings, load_settings
-from pangu.data.fundamental import AkShareFundamentalProvider, BaoStockFundamentalProvider, CompositeFundamentalProvider
-from pangu.data.market import AkShareMarketDataProvider, BaoStockMarketDataProvider, CompositeMarketDataProvider
-from pangu.data.news import AkShareNewsDataProvider
-from pangu.data.stock_pool import StockPoolManager
-from pangu.data.storage import Database
-from pangu.factor.fundamental import FundamentalFactorEngine
-from pangu.factor.macro import MacroFactorEngine
-from pangu.factor.technical import PandasTAFactorEngine
-from pangu.notification import NotificationManager
-from pangu.notification.feishu import FeishuNotifier
-from pangu.scheduler import Components, TradingScheduler
-from pangu.strategy.factor import MultiFactorStrategy
-from pangu.strategy.llm import LLMClient
-from pangu.strategy.llm import LLMJudgeEngineImpl
+from pangu.config import Settings, load_settings  # noqa: E402
+from pangu.data.fundamental import AkShareFundamentalProvider, CompositeFundamentalProvider  # noqa: E402
+from pangu.data.market import BaoStockMarketDataProvider, CompositeMarketDataProvider  # noqa: E402
+from pangu.data.news import AkShareNewsDataProvider  # noqa: E402
+from pangu.data.stock_pool import StockPoolManager  # noqa: E402
+from pangu.data.storage import Database  # noqa: E402
+from pangu.factor.fundamental import FundamentalFactorEngine  # noqa: E402
+from pangu.factor.macro import MacroFactorEngine  # noqa: E402
+from pangu.factor.technical import PandasTAFactorEngine  # noqa: E402
+from pangu.notification import NotificationManager  # noqa: E402
+from pangu.notification.feishu import FeishuNotifier  # noqa: E402
+from pangu.scheduler import Components, TradingScheduler  # noqa: E402
+from pangu.strategy.factor import MultiFactorStrategy  # noqa: E402
+from pangu.strategy.llm import LLMClient, LLMJudgeEngineImpl  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

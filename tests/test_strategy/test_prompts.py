@@ -9,14 +9,13 @@ import pytest
 
 from pangu.models import NewsCategory, NewsItem, Region
 from pangu.strategy.llm.prompts import (
-    LLM_OUTPUT_SCHEMA,
-    TRADING_JUDGE_SYSTEM_PROMPT,
     _MAX_ANNOUNCEMENTS,
     _MAX_STOCK_NEWS,
     _MAX_TELEGRAPH,
+    LLM_OUTPUT_SCHEMA,
+    TRADING_JUDGE_SYSTEM_PROMPT,
     build_stock_prompt,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -159,7 +158,7 @@ class TestBuildStockPrompt:
         assert "市场快讯" in prompt
         # Each empty section shows "无"
         lines = prompt.split("\n")
-        news_idx = next(i for i, l in enumerate(lines) if "个股新闻" in l)
+        news_idx = next(i for i, line in enumerate(lines) if "个股新闻" in line)
         assert lines[news_idx + 1] == "无"
 
     def test_empty_global_market(self, factor_details):
@@ -177,7 +176,7 @@ class TestBuildStockPrompt:
 
         assert "全球市场" in prompt
         lines = prompt.split("\n")
-        global_idx = next(i for i, l in enumerate(lines) if "全球市场" in l)
+        global_idx = next(i for i, line in enumerate(lines) if "全球市场" in line)
         assert lines[global_idx + 1] == "无"
 
     def test_none_global_market(self, factor_details):

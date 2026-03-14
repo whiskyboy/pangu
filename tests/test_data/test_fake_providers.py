@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from pangu.models import NewsItem, Region
 from tests.fakes import (
     FakeFundamentalDataProvider,
     FakeMarketDataProvider,
     FakeNewsDataProvider,
     FakeStockPool,
 )
-from pangu.models import NewsItem, Region
 
 # ---------------------------------------------------------------------------
 # FakeMarketDataProvider

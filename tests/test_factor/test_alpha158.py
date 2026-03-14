@@ -20,7 +20,6 @@ from pangu.factor.alpha158 import (
     _rolling_rank,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -178,7 +177,7 @@ class TestKBar:
         """Test with a single known candlestick."""
         idx = pd.to_datetime(["2024-01-01"])
         cols = ["A"]
-        O = pd.DataFrame([[10.0]], index=idx, columns=cols)
+        O = pd.DataFrame([[10.0]], index=idx, columns=cols)  # noqa: E741
         H = pd.DataFrame([[12.0]], index=idx, columns=cols)
         L = pd.DataFrame([[8.0]], index=idx, columns=cols)
         C = pd.DataFrame([[11.0]], index=idx, columns=cols)

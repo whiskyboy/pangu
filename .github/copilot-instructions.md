@@ -4,7 +4,7 @@
 
 ```bash
 uv sync --extra dev          # Install dependencies
-uv run pytest                # Run all tests (~510 tests)
+uv run pytest                # Run all tests (~526 tests)
 uv run pytest tests/test_backtest/test_engine.py -k "test_rebalance"  # Single test
 uv run ruff check src/ tests/       # Lint
 uv run ruff format src/ tests/      # Format
