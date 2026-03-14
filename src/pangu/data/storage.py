@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     volume      INTEGER,
     amount      REAL,
     adj_factor  REAL DEFAULT 1.0,
+    turn        REAL,               -- turnover rate (%)
+    preclose    REAL,               -- previous close
+    tradestatus TEXT,               -- 1=normal, 0=suspended
+    is_st       INTEGER,            -- 1=ST, 0=normal
+    ps_ttm      REAL,               -- P/S TTM
+    pcf_ttm     REAL,               -- P/CF TTM
     PRIMARY KEY (symbol, date)
 );
 
@@ -289,6 +295,24 @@ class Database:
                 self._conn.execute(f"ALTER TABLE fundamentals ADD COLUMN {col} REAL")
         self._conn.commit()
 
+        # Migrate daily_bars: add new columns if missing
+        bar_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(daily_bars)").fetchall()
+        }
+        new_bar_cols = [
+            ("turn", "REAL"),
+            ("preclose", "REAL"),
+            ("tradestatus", "TEXT"),
+            ("is_st", "INTEGER"),
+            ("ps_ttm", "REAL"),
+            ("pcf_ttm", "REAL"),
+        ]
+        for col, col_type in new_bar_cols:
+            if col not in bar_cols:
+                self._conn.execute(f"ALTER TABLE daily_bars ADD COLUMN {col} {col_type}")
+        self._conn.commit()
+
     # ------------------------------------------------------------------
     # daily_bars
     # ------------------------------------------------------------------
@@ -297,7 +321,8 @@ class Database:
         """INSERT OR REPLACE daily bars from *df*.
 
         *df* must contain columns: date, open, high, low, close, volume.
-        Optional: amount, adj_factor.  Returns row count inserted.
+        Optional: amount, adj_factor, turn, preclose, tradestatus, is_st,
+        ps_ttm, pcf_ttm.  Returns row count inserted.
         """
         if df.empty:
             return 0
@@ -314,12 +339,19 @@ class Database:
                 r.get("volume"),
                 r.get("amount"),
                 r.get("adj_factor", 1.0),
+                r.get("turn"),
+                r.get("preclose"),
+                r.get("tradestatus"),
+                r.get("is_st"),
+                r.get("ps_ttm"),
+                r.get("pcf_ttm"),
             ))
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO daily_bars "
-                "(symbol, date, open, high, low, close, volume, amount, adj_factor) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(symbol, date, open, high, low, close, volume, amount, adj_factor,"
+                " turn, preclose, tradestatus, is_st, ps_ttm, pcf_ttm) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
             self._conn.commit()

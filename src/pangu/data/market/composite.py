@@ -9,7 +9,17 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_STD_COLS = ["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
+_STD_COLS = [
+    "date", "open", "high", "low", "close", "volume", "amount", "adj_factor",
+    "turn", "preclose", "tradestatus", "is_st", "ps_ttm", "pcf_ttm",
+]
+
+# Column rename: BaoStock field names → daily_bars DB column names
+_COL_RENAME = {
+    "isST": "is_st",
+    "psTTM": "ps_ttm",
+    "pcfNcfTTM": "pcf_ttm",
+}
 
 
 class CompositeMarketDataProvider:
@@ -77,10 +87,11 @@ class CompositeMarketDataProvider:
         if df is None or df.empty:
             return self._storage.load_daily_bars(symbol, start, end)
 
-        # 5. Extract PE/PB before trimming columns
+        # 5. Extract PE/PB + market_cap before trimming columns
         self._persist_valuation(symbol, df)
 
-        # 6. Trim to standard columns + persist
+        # 6. Rename BaoStock columns to DB column names, trim to standard + persist
+        df = df.rename(columns=_COL_RENAME)
         result = df[[c for c in _STD_COLS if c in df.columns]].copy()
         if not result.empty:
             self._storage.save_daily_bars(symbol, result)
@@ -162,17 +173,33 @@ class CompositeMarketDataProvider:
     # ------------------------------------------------------------------
 
     def _persist_valuation(self, symbol: str, df: pd.DataFrame) -> None:
-        """Extract peTTM/pbMRQ from daily bars and save to fundamentals table."""
+        """Extract peTTM/pbMRQ/market_cap from daily bars and save to fundamentals table.
+
+        Market cap is derived from turn (turnover rate):
+        circ_shares = volume / (turn / 100), circ_market_cap = close * circ_shares.
+        This gives circulating market cap — the A-share industry standard for size factor.
+        """
         pe_col = df.get("peTTM")
         pb_col = df.get("pbMRQ")
-        if pe_col is None and pb_col is None:
+        turn_col = df.get("turn")
+        if pe_col is None and pb_col is None and turn_col is None:
             return
 
         rows = []
         for _, row in df.iterrows():
             pe = pd.to_numeric(row.get("peTTM", ""), errors="coerce")
             pb = pd.to_numeric(row.get("pbMRQ", ""), errors="coerce")
-            if pd.isna(pe) and pd.isna(pb):
+            turn = pd.to_numeric(row.get("turn", ""), errors="coerce")
+            close = pd.to_numeric(row.get("close", ""), errors="coerce")
+            volume = pd.to_numeric(row.get("volume", ""), errors="coerce")
+
+            # Compute circulating market cap from turnover rate
+            mktcap = None
+            if not pd.isna(turn) and turn > 0 and not pd.isna(close) and not pd.isna(volume) and volume > 0:
+                circ_shares = volume / (turn / 100)
+                mktcap = round(float(close * circ_shares), 2)
+
+            if pd.isna(pe) and pd.isna(pb) and mktcap is None:
                 continue
             rows.append({
                 "symbol": symbol,
@@ -182,7 +209,7 @@ class CompositeMarketDataProvider:
                 "roe_ttm": None,
                 "revenue_yoy": None,
                 "profit_yoy": None,
-                "market_cap": None,
+                "market_cap": mktcap,
             })
         if rows:
             val_df = pd.DataFrame(rows)

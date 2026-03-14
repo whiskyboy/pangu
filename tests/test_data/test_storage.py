@@ -121,6 +121,33 @@ class TestDailyBars:
         loaded = db.load_daily_bars("600519", "2026-01-01", "2026-01-31")
         assert loaded.iloc[0]["adj_factor"] == pytest.approx(1.0)
 
+    def test_extended_columns_save_and_load(self, db: Database) -> None:
+        """New columns (turn, preclose, tradestatus, is_st, ps_ttm, pcf_ttm) round-trip."""
+        df = pd.DataFrame({
+            "date": ["2026-01-02"],
+            "open": [10.0], "high": [11.0], "low": [9.5], "close": [10.8],
+            "volume": [100000], "amount": [1_080_000], "adj_factor": [1.0],
+            "turn": [0.5], "preclose": [10.5], "tradestatus": ["1"],
+            "is_st": [0], "ps_ttm": [3.14], "pcf_ttm": [5.67],
+        })
+        db.save_daily_bars("600519", df)
+        loaded = db.load_daily_bars("600519", "2026-01-01", "2026-01-31")
+        row = loaded.iloc[0]
+        assert row["turn"] == pytest.approx(0.5)
+        assert row["preclose"] == pytest.approx(10.5)
+        assert row["tradestatus"] == "1"
+        assert row["is_st"] == 0
+        assert row["ps_ttm"] == pytest.approx(3.14)
+        assert row["pcf_ttm"] == pytest.approx(5.67)
+
+    def test_extended_columns_default_none(self, db: Database) -> None:
+        """Extended columns default to None when not provided."""
+        df = self._sample_df()
+        db.save_daily_bars("600519", df)
+        loaded = db.load_daily_bars("600519", "2026-01-01", "2026-01-31")
+        assert loaded.iloc[0]["turn"] is None
+        assert loaded.iloc[0]["is_st"] is None
+
 
 # ------------------------------------------------------------------
 # data_sync_log

@@ -106,7 +106,7 @@ class BaoStockMarketDataProvider:
 
     _DAILY_FIELDS = (
         "date,code,open,high,low,close,preclose,volume,amount,"
-        "adjustflag,pctChg,peTTM,pbMRQ"
+        "adjustflag,turn,tradestatus,pctChg,peTTM,pbMRQ,psTTM,pcfNcfTTM,isST"
     )
 
     def _query_with_retry(self, query_fn):
@@ -143,9 +143,14 @@ class BaoStockMarketDataProvider:
             )
 
         # Cast numeric columns (BaoStock returns strings)
-        for col in ("open", "high", "low", "close", "volume", "amount", "peTTM", "pbMRQ"):
+        for col in ("open", "high", "low", "close", "preclose", "volume", "amount",
+                     "turn", "peTTM", "pbMRQ", "psTTM", "pcfNcfTTM"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Cast integer/boolean columns
+        if "isST" in df.columns:
+            df["isST"] = pd.to_numeric(df["isST"], errors="coerce").fillna(0).astype(int)
 
         df["adj_factor"] = 1.0
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")

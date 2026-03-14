@@ -466,24 +466,31 @@ class TestBaoStockDailyBars:
             ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
         )
         fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "pctChg",
-                   "peTTM", "pbMRQ"]
+                   "preclose", "volume", "amount", "adjustflag", "turn",
+                   "tradestatus", "pctChg", "peTTM", "pbMRQ", "psTTM",
+                   "pcfNcfTTM", "isST"]
         rows = [
             ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "8.00", "25.3", "8.1"],
+             "10.0", "100000", "1080000", "2", "0.5000", "1", "8.00",
+             "25.3", "8.1", "3.14", "5.67", "0"],
             ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
-             "10.8", "120000", "1344000", "2", "3.70", "26.0", "8.3"],
+             "10.8", "120000", "1344000", "2", "0.6000", "1", "3.70",
+             "26.0", "8.3", "3.20", "5.80", "0"],
         ]
         mock_query.return_value = _fake_bs_result(fields, rows)
 
         provider = BaoStockMarketDataProvider()
         df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
 
-        # Raw provider returns all columns including peTTM/pbMRQ
+        # Raw provider returns all columns including peTTM/pbMRQ + new fields
         assert "peTTM" in df.columns
         assert "pbMRQ" in df.columns
+        assert "turn" in df.columns
+        assert "isST" in df.columns
         assert len(df) == 2
         assert df.iloc[0]["close"] == pytest.approx(10.8)
+        assert df.iloc[0]["turn"] == pytest.approx(0.5)
+        assert df.iloc[0]["isST"] == 0
         mock_query.assert_called_once()
         provider.close()
 
@@ -607,13 +614,16 @@ class TestCompositeProviderChain:
             ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
         )
         fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "pctChg",
-                   "peTTM", "pbMRQ"]
+                   "preclose", "volume", "amount", "adjustflag", "turn",
+                   "tradestatus", "pctChg", "peTTM", "pbMRQ", "psTTM",
+                   "pcfNcfTTM", "isST"]
         rows = [
             ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "8.00", "25.3", "8.1"],
+             "10.0", "100000", "1080000", "2", "0.5000", "1", "8.00",
+             "25.3", "8.1", "3.14", "5.67", "0"],
             ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
-             "10.8", "120000", "1344000", "2", "3.70", "26.0", "8.3"],
+             "10.8", "120000", "1344000", "2", "0.6000", "1", "3.70",
+             "26.0", "8.3", "3.20", "5.80", "0"],
         ]
         mock_bs_query.return_value = _fake_bs_result(fields, rows)
 
@@ -624,8 +634,18 @@ class TestCompositeProviderChain:
         df = composite.get_daily_bars("600519", "2026-01-02", "2026-01-03")
         assert len(df) == 2
 
+        # Extended columns should be persisted
+        assert "turn" in df.columns
+
         # Sync log should be updated
         assert db.get_last_sync_date("600519", "daily_bars") == "2026-01-03"
+
+        # Market cap should be persisted to fundamentals
+        fund = db.load_fundamentals("600519", "2026-01-02", "2026-01-03")
+        assert not fund.empty
+        mktcap = fund[fund["date"] == "2026-01-02"].iloc[0]["market_cap"]
+        # circ_mv = close * volume / (turn/100) = 10.8 * 100000 / 0.005 = 216,000,000
+        assert mktcap == pytest.approx(10.8 * 100000 / (0.5 / 100), rel=1e-4)
 
         # Second call — cache hit (no API call)
         mock_bs_query.reset_mock()
