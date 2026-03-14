@@ -423,7 +423,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     for sym in pool:
         df = storage.load_daily_bars(sym, warmup_start, end)
         if df is not None and not df.empty:
-            df = df[["date", "open", "close", "high", "low", "volume", "adj_factor"]].copy()
+            df = df[["date", "open", "close", "high", "low", "volume", "adj_factor", "is_st"]].copy()
             df["symbol"] = sym
             bars_list.append(df)
 
@@ -441,6 +441,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     close_prices = all_bars_bt.pivot(index="date", columns="symbol", values="close")
     volume_wide = all_bars_bt.pivot(index="date", columns="symbol", values="volume")
     adj_factor_wide = all_bars_bt.pivot(index="date", columns="symbol", values="adj_factor")
+    is_st_wide = all_bars_bt.pivot(index="date", columns="symbol", values="is_st")
 
     # Load benchmark (CSI300) — include days before start for pre-start close
     bench_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=15)).strftime("%Y-%m-%d")
@@ -502,7 +503,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
     )
     result = engine.run(scores, open_prices, close_prices, bench_close,
                         start, end, universe_fn=universe_fn, volume=volume_wide,
-                        adj_factor=adj_factor_wide,
+                        adj_factor=adj_factor_wide, is_st=is_st_wide,
                         exclude_prefixes=prefixes)
 
     # Print results

@@ -36,11 +36,17 @@ def _lot_size(symbol: str) -> int:
     return 100
 
 
-def _price_limit_ratio(symbol: str) -> float:
-    """Return price limit ratio (涨跌停幅度) for a stock."""
+def _price_limit_ratio(symbol: str, is_st: bool = False) -> float:
+    """Return price limit ratio (涨跌停幅度) for a stock.
+
+    STAR (688/689) and GEM (300/301) always use ±20% (even for ST on GEM).
+    Main-board ST stocks use ±5%; all other main-board stocks use ±10%.
+    """
     if (_is_star_market(symbol)
             or symbol.startswith("300") or symbol.startswith("301")):
         return 0.20
+    if is_st:
+        return 0.05
     return 0.10
 
 
@@ -125,6 +131,7 @@ class BacktestEngine:
         universe_fn: callable | None = None,
         volume: pd.DataFrame | None = None,
         adj_factor: pd.DataFrame | None = None,
+        is_st: pd.DataFrame | None = None,
         exclude_prefixes: tuple[str, ...] = ("688", "689"),
     ) -> BacktestResult:
         """Run backtest.
@@ -149,6 +156,10 @@ class BacktestEngine:
         adj_factor : DataFrame, optional
             (date × stock) adjustment factors for dividend detection.
             When provided, dividend cash is credited to the portfolio.
+        is_st : DataFrame, optional
+            (date × stock) ST status flags (1 = ST, 0 = normal).
+            When provided, ST stocks are excluded from buying and
+            held-ST stocks are force-sold. Main-board ST uses ±5% limits.
         exclude_prefixes : tuple[str, ...], optional
             Stock code prefixes to exclude from selection (default: 688/689
             STAR market stocks which cannot be traded on most platforms).
@@ -181,6 +192,8 @@ class BacktestEngine:
             volume = volume.reindex(index=dates, columns=common_stocks)
         if adj_factor is not None:
             adj_factor = adj_factor.reindex(index=dates, columns=common_stocks).ffill()
+        if is_st is not None:
+            is_st = is_st.reindex(index=dates, columns=common_stocks).fillna(0)
         benchmark_close = benchmark_close.sort_index()  # keep pre-start dates for base
 
         logger.info(
@@ -195,7 +208,7 @@ class BacktestEngine:
         # Run simulation
         nav_values, rebal_log, holdings_records = self._simulate(
             dates, scores, open_prices, close_prices, universe_fn, volume,
-            adj_factor,
+            adj_factor, is_st,
         )
 
         # Build results
@@ -236,6 +249,7 @@ class BacktestEngine:
         universe_fn: callable | None = None,
         volume: pd.DataFrame | None = None,
         adj_factor: pd.DataFrame | None = None,
+        is_st: pd.DataFrame | None = None,
     ) -> tuple[list[float], list[dict], list[dict]]:
         """Day-by-day simulation loop."""
         cash = self._capital
@@ -293,9 +307,10 @@ class BacktestEngine:
                                      if prev_date is not None
                                      else today_open)
                 today_volume = volume.loc[date] if volume is not None and date in volume.index else None
+                today_st = is_st.loc[date] if is_st is not None and date in is_st.index else None
                 cash, holdings, log_entry = self._rebalance(
                     date, cash, holdings, target, today_open, prev_close_prices,
-                    today_volume,
+                    today_volume, today_st,
                 )
                 if log_entry:
                     rebal_log.append(log_entry)
@@ -333,18 +348,20 @@ class BacktestEngine:
 
     @staticmethod
     def _is_at_limit(
-        open_price: float, prev_close: float, direction: str, symbol: str = "",
+        open_price: float, prev_close: float, direction: str,
+        symbol: str = "", is_st: bool = False,
     ) -> bool:
         """Check if stock is at price limit.
 
         direction='up':   涨停 → can't buy
         direction='down': 跌停 → can't sell
 
-        Uses ±20% for 科创板 (688/689) and 创业板 (300/301), ±10% for others.
+        Uses ±20% for 科创板 (688/689) and 创业板 (300/301),
+        ±5% for main-board ST, ±10% for other main-board stocks.
         """
         if not (np.isfinite(prev_close) and np.isfinite(open_price) and prev_close > 0):
             return False
-        ratio = _price_limit_ratio(symbol)
+        ratio = _price_limit_ratio(symbol, is_st=is_st)
         if direction == "up":
             return open_price >= _round_price(prev_close * (1 + ratio))
         return open_price <= _round_price(prev_close * (1 - ratio))
@@ -358,14 +375,16 @@ class BacktestEngine:
         open_prices: pd.Series,
         prev_close: pd.Series,
         volume: pd.Series | None = None,
+        is_st: pd.Series | None = None,
     ) -> tuple[float, dict[str, int], dict | None]:
         """Execute rebalance using 5-step allocation strategy.
 
         Steps:
           0. Classify stocks into NeedToSell / NeedToAdjust / NeedToBuy.
+             Held ST stocks are force-classified as NeedToSell.
           1. Sell NeedToSell (skip suspended, limit-down, no-price → "stuck").
           2. Build AdjustablePool (NeedToAdjust minus suspended/no-price),
-             CanBuy (NeedToBuy minus suspended/limit-up/no-price),
+             CanBuy (NeedToBuy minus suspended/limit-up/no-price/ST),
              TargetSet = CanBuy ∪ AdjustablePool (score-descending).
           3. Allocatable = cash + AdjustablePool market value (excludes stuck).
           4. Equal-weight iterate TargetSet: buy/sell with directional limit
@@ -387,10 +406,20 @@ class BacktestEngine:
             p = open_prices.get(stock, np.nan)
             return np.isfinite(p) and p > 0
 
+        def _stock_is_st(stock: str) -> bool:
+            if is_st is None:
+                return False
+            v = is_st.get(stock, 0)
+            return bool(v == 1)
+
         # --- Step 0: Classify ---
-        need_to_sell = [s for s in sorted(holdings) if s not in target_set]
-        need_to_adjust = [s for s in target if s in holdings_set]
-        need_to_buy = [s for s in target if s not in holdings_set]
+        # Held ST stocks are force-sold regardless of target membership
+        need_to_sell = [s for s in sorted(holdings)
+                        if s not in target_set or _stock_is_st(s)]
+        need_to_adjust = [s for s in target
+                          if s in holdings_set and not _stock_is_st(s)]
+        need_to_buy = [s for s in target
+                       if s not in holdings_set and not _stock_is_st(s)]
 
         # --- Step 1: Sell NeedToSell ---
         new_holdings: dict[str, int] = {}
@@ -400,7 +429,8 @@ class BacktestEngine:
             pc = prev_close.get(stock, np.nan)
             if (_has_valid_price(stock)
                     and not _is_suspended(stock)
-                    and not self._is_at_limit(price, pc, "down", stock)):
+                    and not self._is_at_limit(price, pc, "down", stock,
+                                              is_st=_stock_is_st(stock))):
                 sell_value = shares * price
                 cash += sell_value - self._sell_cost(sell_value)
                 turnover += sell_value
@@ -425,6 +455,7 @@ class BacktestEngine:
             and not self._is_at_limit(
                 open_prices.get(s, np.nan),
                 prev_close.get(s, np.nan), "up", s,
+                is_st=_stock_is_st(s),
             )
         ]
         # TargetSet preserves score-descending order from `target`
@@ -456,7 +487,8 @@ class BacktestEngine:
 
             if share_diff > 0:
                 # Buy more
-                if self._is_at_limit(price, pc, "up", stock):
+                if self._is_at_limit(price, pc, "up", stock,
+                                     is_st=_stock_is_st(stock)):
                     new_holdings.setdefault(stock, current_shares)
                     continue
                 cost_basis = share_diff * price
@@ -475,7 +507,8 @@ class BacktestEngine:
 
             elif share_diff < 0:
                 # Sell excess
-                if self._is_at_limit(price, pc, "down", stock):
+                if self._is_at_limit(price, pc, "down", stock,
+                                     is_st=_stock_is_st(stock)):
                     new_holdings.setdefault(stock, current_shares)
                     continue
                 sell_shares = min(-share_diff, current_shares)

@@ -290,3 +290,86 @@ class TestRebalanceEdgeCases:
         # X at limit-up, not in target → should be sold
         assert "X" not in new_h
         assert log is not None and "X" in log["sells"]
+
+
+class TestSTStockHandling:
+    """Tests for ST stock price limits, buy filtering, and force-sell."""
+
+    @staticmethod
+    def _make_engine(**kw):
+        return BacktestEngine(top_n=kw.pop("top_n", 3), **kw)
+
+    def test_st_price_limit_5pct(self):
+        """Main-board ST stock uses ±5% limit instead of ±10%."""
+        engine = self._make_engine()
+        # Stock at 5% above prev_close → limit-up for ST, not for normal
+        assert engine._is_at_limit(10.50, 10.0, "up", "600000", is_st=True)
+        assert not engine._is_at_limit(10.50, 10.0, "up", "600000", is_st=False)
+
+    def test_st_limit_down_5pct(self):
+        """Main-board ST stock at -5% is limit-down."""
+        engine = self._make_engine()
+        assert engine._is_at_limit(9.50, 10.0, "down", "600000", is_st=True)
+        assert not engine._is_at_limit(9.50, 10.0, "down", "600000", is_st=False)
+
+    def test_gem_st_still_20pct(self):
+        """GEM (300xxx) ST stock still uses ±20% limit."""
+        engine = self._make_engine()
+        # 10% above prev_close → NOT limit-up for GEM (needs 20%)
+        assert not engine._is_at_limit(11.0, 10.0, "up", "300001", is_st=True)
+        # 20% above → limit-up
+        assert engine._is_at_limit(12.0, 10.0, "up", "300001", is_st=True)
+
+    def test_st_excluded_from_buy(self):
+        """ST stocks in NeedToBuy are excluded from the buy pool."""
+        engine = self._make_engine(top_n=3)
+        open_prices = pd.Series({"A": 10.0, "B": 10.0, "C": 10.0})
+        prev_close = pd.Series({"A": 10.0, "B": 10.0, "C": 10.0})
+        volume = pd.Series({"A": 1e6, "B": 1e6, "C": 1e6})
+        is_st = pd.Series({"A": 0, "B": 1, "C": 0})
+        holdings = {}
+        target = ["A", "B", "C"]
+        cash = 300_000.0
+
+        _, new_h, _ = engine._rebalance(
+            pd.Timestamp("2024-01-08"), cash, holdings, target,
+            open_prices, prev_close, volume, is_st,
+        )
+        assert "B" not in new_h, "ST stock should not be bought"
+        assert new_h.get("A", 0) > 0
+        assert new_h.get("C", 0) > 0
+
+    def test_held_st_force_sold(self):
+        """Held stock that becomes ST is force-classified as NeedToSell."""
+        engine = self._make_engine(top_n=3)
+        open_prices = pd.Series({"A": 10.0, "B": 10.0, "C": 10.0})
+        prev_close = pd.Series({"A": 10.0, "B": 10.0, "C": 10.0})
+        volume = pd.Series({"A": 1e6, "B": 1e6, "C": 1e6})
+        is_st = pd.Series({"A": 0, "B": 1, "C": 0})
+        holdings = {"B": 1000}  # B is held but now ST
+        target = ["A", "B", "C"]  # B still in target by score
+        cash = 200_000.0
+
+        _, new_h, log = engine._rebalance(
+            pd.Timestamp("2024-01-08"), cash, holdings, target,
+            open_prices, prev_close, volume, is_st,
+        )
+        assert "B" not in new_h, "ST stock should be force-sold"
+        assert log is not None and "B" in log["sells"]
+
+    def test_no_is_st_backward_compat(self):
+        """Without is_st data, behavior is unchanged (no filtering)."""
+        engine = self._make_engine(top_n=2)
+        open_prices = pd.Series({"A": 10.0, "B": 10.0})
+        prev_close = pd.Series({"A": 10.0, "B": 10.0})
+        volume = pd.Series({"A": 1e6, "B": 1e6})
+        holdings = {}
+        target = ["A", "B"]
+        cash = 200_000.0
+
+        _, new_h, _ = engine._rebalance(
+            pd.Timestamp("2024-01-08"), cash, holdings, target,
+            open_prices, prev_close, volume,
+        )
+        assert new_h.get("A", 0) > 0
+        assert new_h.get("B", 0) > 0
