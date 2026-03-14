@@ -125,6 +125,22 @@ Use deterministic fakes (`tests/fakes.py`), not mocks/patches. Tests are integra
 - `.env` — Environment variables (copy from `.env.example`): `AZURE_API_BASE`, `AZURE_API_KEY`, `AZURE_API_VERSION`, `AZURE_DEPLOYMENT` (LLM), `FEISHU_APP_ID`, `FEISHU_APP_SECRET` (notification).
 - Stock pool indices are configurable: `[stock_pool].indices = ["000300", "000905"]` (CSI300 + CSI500).
 
+## CLI Operations
+
+Common commands and expected runtimes (800-stock pool, full date range from 2019):
+
+| Command | Purpose | Runtime |
+|---------|---------|---------|
+| `pangu backfill bars --start 2019-01-01 --force` | Re-fetch all daily bars with extended fields | ~4h (~18s/stock) |
+| `pangu backfill fundamentals --start 2019-01-01` | Backfill quarterly fundamentals from AkShare | ~2h |
+| `pangu compute-factors` | Compute 166 Alpha158 factors → `data/factors.parquet` | ~10min |
+| `pangu train walkforward` | Walk-Forward LightGBM training → `data/score_matrix.parquet` | ~30min |
+| `pangu backtest --strategy lgb --scores data/score_matrix.parquet` | Run backtest on score matrix | <1min |
+| `pangu evaluate-scores --scores data/score_matrix.parquet` | Score quality diagnostics | <10s |
+| `pangu evaluate-models --model-dir models` | Model quality diagnostics | <5s |
+
+**Important:** Backfill commands are slow due to BaoStock API rate limiting. Progress is logged every 10 stocks. Do NOT kill a backfill process just because there is no output for a few minutes — each stock takes ~18s for full-range queries. BaoStock uses a TCP long-connection; killing mid-run can leave orphaned sessions that cause subsequent login failures.
+
 ## Deployment
 
 Docker deployment with `docker-compose.yml`. The container runs `pangu run start` (scheduler daemon mode).
