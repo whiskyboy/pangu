@@ -105,6 +105,10 @@ Let exceptions propagate in core logic. Use explicit `raise ValueError`/`Runtime
 
 Use deterministic fakes (`tests/fakes.py`), not mocks/patches. Tests are integration-style with real data structures. Use `pytest.approx()` for float comparisons. Call `reset_settings()` in tests to clear config singleton cache.
 
+### Git Workflow
+
+**Do NOT commit directly.** After making code changes, leave them staged/unstaged for the user to review before committing. Never run `git commit` unless the user explicitly asks to commit.
+
 ## Configuration
 
 - `config/settings.toml` — Main config (DB path, stock pool indices, strategy params, scheduler times). Supports `$ENV_VAR` substitution.

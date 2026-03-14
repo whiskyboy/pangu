@@ -369,7 +369,7 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 @click.option("--strategy", type=click.Choice(["baseline", "lgb"]), default="baseline",
               help="Strategy to backtest")
 @click.option("--start", default="2022-01-01", help="Start date")
-@click.option("--end", default="2025-06-30", help="End date")
+@click.option("--end", default="2025-12-31", help="End date")
 @click.option("--top-n", default=10, type=int, help="TopN stocks to hold")
 @click.option("--capital", default=1_000_000, type=float, help="Initial capital (CNY)")
 @click.option("--stamp-tax", default=0.001, type=float,
@@ -525,6 +525,50 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
         path = plot_equity_curve(result.nav, result.benchmark_nav, strategy, plot_output,
                                 initial_capital=capital)
         click.echo(f"\n📈 Chart saved: {path}")
+
+
+# ---------------------------------------------------------------------------
+# evaluate-scores command
+# ---------------------------------------------------------------------------
+
+@main.command("evaluate-scores")
+@click.option("--scores", "scores_path", default="data/score_matrix.parquet",
+              help="Path to score matrix parquet (default: data/score_matrix.parquet)")
+@click.option("--top-n", "top_n_str", default="10,30,50",
+              help="Comma-separated Top-N values to evaluate (default: 10,30,50)")
+@click.option("--json", "output_json", is_flag=True, default=False,
+              help="Output results as JSON instead of table")
+def evaluate_scores_cmd(scores_path: str, top_n_str: str, output_json: bool) -> None:
+    """Diagnose score matrix quality (discrimination, stability, rank stability)."""
+    import json
+    from pathlib import Path
+
+    import pandas as pd
+
+    from pangu.ml.score_evaluator import evaluate_scores, format_report
+
+    path = Path(scores_path)
+    if not path.exists():
+        click.echo(f"ERROR: Score file not found: {scores_path}")
+        return
+
+    scores = pd.read_parquet(path)
+    scores.index = pd.to_datetime(scores.index)
+    click.echo(f"Loaded scores: {scores.shape[0]} days × {scores.shape[1]} stocks "
+               f"({scores.index.min().date()} ~ {scores.index.max().date()})")
+
+    try:
+        top_ns = [int(x.strip()) for x in top_n_str.split(",")]
+    except ValueError:
+        click.echo("ERROR: Invalid --top-n value. Expected comma-separated integers.", err=True)
+        return
+    results = evaluate_scores(scores, top_ns=top_ns)
+
+    if output_json:
+        click.echo(json.dumps(results, indent=2, default=str))
+    else:
+        click.echo(format_report(results))
+
 
 
 @main.command("compute-factors")
