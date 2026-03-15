@@ -141,6 +141,8 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 
 **Important:** Backfill commands are slow due to BaoStock API rate limiting. Progress is logged every 10 stocks. Do NOT kill a backfill process just because there is no output for a few minutes — each stock takes ~18s for full-range queries. BaoStock uses a TCP long-connection; killing mid-run can leave orphaned sessions that cause subsequent login failures.
 
+**Stock pool for backfill:** The default backfill uses current index constituents (~800 stocks), but ML training needs data for ALL historical constituents across the train+val+test period. Use `--pool config/backfill_stock_pool.yaml` (1311 stocks, pre-exported) to ensure full coverage. Without this, ~500 stocks that left the index will have missing data.
+
 ## Deployment
 
 Docker deployment with `docker-compose.yml`. The container runs `pangu run start` (scheduler daemon mode).
