@@ -207,7 +207,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
 
 @main.group()
 def backfill() -> None:
-    """Backfill historical data from BaoStock."""
+    """Backfill historical data from upstream providers."""
 
 
 def _load_pool_yaml(path: str) -> list[str] | None:
@@ -232,7 +232,8 @@ def _load_pool_yaml(path: str) -> list[str] | None:
 @backfill.command("constituents")
 @click.option("--start", default="2019-01-01", help="Start date for semi-annual sampling")
 @click.option("--end", default=None, help="End date (default: today)")
-def backfill_constituents(start: str, end: str | None) -> None:
+@click.option("--output", "-o", default="config/backfill_stock_pool.yaml", help="Output YAML path for stock pool")
+def backfill_constituents(start: str, end: str | None, output: str) -> None:
     """Backfill historical index constituents (CSI300 + CSI500) semi-annually."""
     from pangu.main import build_components, load_env
     load_env()
@@ -242,12 +243,11 @@ def backfill_constituents(start: str, end: str | None) -> None:
     click.echo(f"\n✅ Saved {count} constituent records, {len(all_symbols)} unique stocks")
 
     # Export unique symbols to YAML
-    yaml_path = "config/backfill_stock_pool.yaml"
-    with open(yaml_path, "w") as f:
+    with open(output, "w") as f:
         f.write("symbols:\n")
         for sym in sorted(all_symbols):
             f.write(f'- "{sym}"\n')
-    click.echo(f"📄 Exported {len(all_symbols)} symbols to {yaml_path}")
+    click.echo(f"📄 Exported {len(all_symbols)} symbols to {output}")
 
 
 @backfill.command("bars")

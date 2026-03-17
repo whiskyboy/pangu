@@ -44,3 +44,4 @@ uv.lock
 *.db-shm
 *.db-wal
 models/
+data/backfill_bars.log
