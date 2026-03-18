@@ -141,11 +141,7 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 | `pangu evaluate-scores --scores data/score_matrix.parquet` | Score quality diagnostics | <10s |
 | `pangu evaluate-models --model-dir models` | Model quality diagnostics | <5s |
 
-**Important:** Backfill commands are slow due to upstream API rate limiting. All backfill subcommands log progress every 10 stocks. Do NOT kill a backfill process just because there is no output for a few minutes. Bars backfill uses BaoStock (~18s/stock, TCP long-connection — killing mid-run can leave orphaned sessions causing subsequent login failures). Fundamentals backfill uses AkShare.
-
-**Long-running backfill:** Full-pool backfill (bars, fundamentals, etc.) can take hours. Use `screen -dmS backfill bash -c '... > /tmp/backfill.log 2>&1'` to survive session timeouts. Do NOT use Copilot's `detach: true` mode — upstream TCP connections (e.g. BaoStock) silently break in fully detached processes. Monitor with `tail -5 /tmp/backfill.log` and `screen -ls`.
-
-**Stock pool for backfill:** The default backfill uses current index constituents (~800 stocks), but ML training needs data for ALL historical constituents across the train+val+test period. Run `pangu backfill constituents --start 2019-01-01` first — it syncs historical constituents to DB and auto-exports `config/backfill_stock_pool.yaml` (1311 stocks). Then use `--pool config/backfill_stock_pool.yaml` for bars/fundamentals backfill to ensure full coverage.
+**Backfill operations:** Backfill is slow (bars ~4-7h, fundamentals ~2h) due to upstream API rate limiting. Use the `@backfill-manager` agent for planning, execution, monitoring, and verification. Key rules: use `screen` sessions (not Copilot `detach: true`), never kill mid-run (BaoStock TCP issues), run `constituents` first to get the full historical pool YAML.
 
 ## Deployment
 
