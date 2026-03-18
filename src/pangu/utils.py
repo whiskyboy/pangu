@@ -109,3 +109,24 @@ def date_str(days_ago: int = 0) -> str:
     from pangu.tz import now
 
     return (now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+
+
+def quarter_dates(start: str, end: str) -> list[str]:
+    """Generate quarter-end dates between *start* and *end* as ``YYYYMMDD`` strings.
+
+    >>> quarter_dates("2024-01-01", "2024-12-31")
+    ['20240331', '20240630', '20240930', '20241231']
+    """
+    from datetime import date as _date
+
+    quarter_ends = [(3, 31), (6, 30), (9, 30), (12, 31)]
+    start_d = _date.fromisoformat(start)
+    end_d = _date.fromisoformat(end)
+
+    result: list[str] = []
+    for year in range(start_d.year, end_d.year + 1):
+        for month, day in quarter_ends:
+            d = _date(year, month, day)
+            if start_d <= d <= end_d:
+                result.append(d.strftime("%Y%m%d"))
+    return result

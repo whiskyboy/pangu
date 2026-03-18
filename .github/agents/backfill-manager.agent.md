@@ -159,7 +159,7 @@ ps aux | grep "pangu backfill" | grep -v grep
 | `login failed` | Orphaned TCP session | Wait 5 min, then retry. Or restart the Python process |
 | `fail=N` at end of bars backfill | Specific stocks failed | Identify failed stocks, retry individually |
 | All stocks have `adj_factor=1.0` | `_refresh_adj_factor()` silently failed | Re-run with `--force` for affected stocks |
-| `gross_margin` all NULL | AkShare API field changed | Check AkShare API docs for field name updates |
+| `gross_margin` all NULL | AkShare `stock_financial_analysis_indicator` stopped providing it after 2019-Q2 | Run `pangu backfill fundamentals --start 2019-01-01` (gross_margin is backfilled automatically) |
 
 ### Identifying failed stocks
 

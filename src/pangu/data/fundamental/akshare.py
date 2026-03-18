@@ -84,6 +84,34 @@ class AkShareFundamentalProvider(ThrottleMixin):
         "每股经营性现金流(元)": "cashflow_per_share",
     }
 
+    def fetch_gross_margin_batch(self, quarter_date: str) -> dict[str, float]:
+        """Fetch gross margin for all stocks for a given quarter via ``stock_yjbb_em``.
+
+        Parameters
+        ----------
+        quarter_date : str
+            Quarter end date in ``YYYYMMDD`` format (e.g. ``"20240331"``).
+
+        Returns
+        -------
+        dict[str, float]
+            Mapping of symbol → gross_margin (as decimal ratio, already /100).
+        """
+        self._throttle()
+        df = retry_call(
+            lambda: self._ak.stock_yjbb_em(date=quarter_date),
+            circuit=self._circuit,
+        )
+        if df is None or df.empty:
+            return {}
+        result: dict[str, float] = {}
+        for _, row in df.iterrows():
+            sym = str(row.get("股票代码", ""))
+            val = self._safe_float(row.get("销售毛利率"))
+            if sym and val is not None:
+                result[sym] = val / 100
+        return result
+
     def get_financial_indicator(
         self, symbol: str, start: str | None = None, end: str | None = None,
     ) -> pd.DataFrame:

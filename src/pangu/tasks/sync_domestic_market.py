@@ -74,4 +74,12 @@ async def _sync_domestic_market_impl(c: Components) -> None:
             logger.warning("[T3] %s: financial indicator failed", symbol, exc_info=True)
     logger.info("[T3] Financial indicators: %d synced, %d failed", fi_ok, fi_fail)
 
+    # Gross margin — incremental (last 2 quarters) via stock_yjbb_em
+    try:
+        gm_ok, gm_fail = c.fundamental.backfill_gross_margin(start, today, incremental=True)
+        if gm_ok > 0:
+            logger.info("[T3] Gross margin: %d quarters updated", gm_ok)
+    except Exception:  # noqa: BLE001
+        logger.warning("[T3] Gross margin sync failed", exc_info=True)
+
     logger.info("[T3] Done")

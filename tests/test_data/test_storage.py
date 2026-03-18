@@ -523,6 +523,32 @@ class TestFundamentals:
         filled = db.load_fundamentals_filled("600519", "2024-01-01", "2024-12-31")
         assert filled.empty
 
+    def test_update_gross_margin_batch(self, db: Database) -> None:
+        """Batch gross_margin update creates sparse rows."""
+        data = {"600519": 0.9187, "000001": 0.2977}
+        n = db.update_gross_margin_batch("2024-03-31", data)
+        assert n == 2
+        loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
+        assert len(loaded) == 1
+        assert loaded.iloc[0]["gross_margin"] == pytest.approx(0.9187)
+
+    def test_update_gross_margin_batch_preserves_existing(self, db: Database) -> None:
+        """Batch gross_margin update does not overwrite existing columns."""
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-03-31"],
+            "pe_ttm": [25.0],
+            "roe_ttm": [0.15],
+        }))
+        db.update_gross_margin_batch("2024-03-31", {"600519": 0.92})
+        loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
+        assert loaded.iloc[0]["pe_ttm"] == pytest.approx(25.0)  # preserved
+        assert loaded.iloc[0]["roe_ttm"] == pytest.approx(0.15)  # preserved
+        assert loaded.iloc[0]["gross_margin"] == pytest.approx(0.92)  # updated
+
+    def test_update_gross_margin_batch_empty(self, db: Database) -> None:
+        """Empty data dict is a no-op."""
+        assert db.update_gross_margin_batch("2024-03-31", {}) == 0
+
 
 # ------------------------------------------------------------------
 # close

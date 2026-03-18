@@ -30,7 +30,7 @@ Quarterly columns (roe_ttm, revenue_yoy, profit_yoy, gross_margin) are stored **
 2. Use `load_fundamentals_filled()` on sample stocks to verify ffill produces dense output
 3. Check factor-level output in `data/factors.parquet` for actual coverage after ffill
 
-**Wrong approach:** Counting raw rows and concluding "gross_margin only has 2,292 rows = data missing"
+**Wrong approach:** Counting raw rows and concluding "roe_ttm only has N rows = data missing"
 
 ## Domain rules — Data pipeline layers
 
@@ -53,7 +53,7 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 - Row count, date range, unique stocks
 - Compare stock count against pool YAML (`config/backfill_stock_pool.yaml`) — identify missing stocks
 - NULL rates for ALL 13 columns (not just OHLCV)
-- **adj_factor anomaly detection**: Find stocks where `MIN(adj_factor) = 1.0 AND MAX(adj_factor) = 1.0` across the full date range. Stocks active for 2+ years almost certainly had dividends — constant adj_factor=1.0 indicates a silent refresh failure.
+- **adj_factor anomaly detection**: Find stocks where `MIN(adj_factor) = 1.0 AND MAX(adj_factor) = 1.0` across the full date range, then **cross-verify against BaoStock API** before flagging. Many stocks legitimately have adj_factor=1.0 because: (a) their last dividend was before the data range, (b) they are STAR Market (688xxx) IPOs with only one event, or (c) dividends were too small to affect the 6-decimal factor. Only flag as 🔴 if BaoStock returns events with `foreAdjFactor != 1.0` for dates within our data range.
 
 ### 2. fundamentals completeness
 - Daily columns (pe_ttm, pb, market_cap): row counts and NULL rates
@@ -95,7 +95,7 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 | TURNOVER | amount / market_cap | >90% (requires market_cap) |
 | OVERNIGHT_RET | open / preclose - 1 | >95% (requires preclose in daily_bars) |
 | ROE, REVENUE_YOY, PROFIT_YOY | quarterly ffilled | >85% after ffill |
-| GROSS_MARGIN | quarterly ffilled (AkShare only) | >80% after ffill |
+| GROSS_MARGIN | quarterly from `stock_yjbb_em` (after `--with-gross-margin` backfill) | >85% after ffill |
 | Technical factors (159) | daily_bars OHLCV | ~95-97% (first ~59 rows per stock are NaN from rolling warmup) |
 
 ## Report format
@@ -130,12 +130,34 @@ import sqlite3
 conn = sqlite3.connect('data/pangu.db')
 pd.read_sql("SELECT COUNT(*), MIN(date), MAX(date) FROM daily_bars", conn)
 
-# adj_factor anomaly detection
-pd.read_sql("""
-  SELECT symbol, COUNT(*) as rows, MIN(adj_factor), MAX(adj_factor)
-  FROM daily_bars WHERE symbol != '000300'
+# adj_factor anomaly detection — MUST cross-verify with BaoStock API
+# Step 1: Find candidates in DB
+candidates = pd.read_sql("""
+  SELECT symbol, COUNT(*) as rows, MIN(date) as first_date
+  FROM daily_bars WHERE symbol NOT LIKE 'sh.%' AND symbol NOT LIKE 'sz.39%'
   GROUP BY symbol HAVING MIN(adj_factor) = 1.0 AND MAX(adj_factor) = 1.0
 """, conn)
+# Step 2: For each candidate, query BaoStock to check if any event has foreAdj != 1.0
+#   within our data range. Only flag stocks where API confirms mismatched factors.
+import baostock as bs, bisect
+bs.login()
+truly_broken = []
+for _, row in candidates.iterrows():
+    sym = row['symbol']
+    prefix = 'sh' if sym.startswith('6') else 'sz'
+    rs = bs.query_adjust_factor(code=f'{prefix}.{sym}',
+                                start_date='1990-01-01', end_date='2099-12-31')
+    events = []
+    while rs.error_code == '0' and rs.next():
+        events.append((rs.get_row_data()[1], float(rs.get_row_data()[2])))
+    if events:
+        # Check if any date in our range should have factor != 1.0
+        idx = bisect.bisect_right([e[0] for e in events], row['first_date']) - 1
+        expected = events[idx][1] if idx >= 0 else events[0][1]
+        if abs(expected - 1.0) > 1e-6:
+            truly_broken.append(sym)
+bs.logout()
+# Only truly_broken stocks are real anomalies (🔴). The rest are false positives.
 
 # Factor-level checks
 import pandas as pd

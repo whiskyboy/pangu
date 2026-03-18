@@ -6,6 +6,8 @@ import logging
 
 import pandas as pd
 
+from pangu.utils import quarter_dates
+
 logger = logging.getLogger(__name__)
 
 _FINANCIAL_SYNC_INTERVAL_DAYS = 30
@@ -129,3 +131,53 @@ class CompositeFundamentalProvider:
             self._storage.save_fundamentals(symbol, df)
         except Exception:  # noqa: BLE001
             logger.warning("Failed to persist financials for %s", symbol)
+
+    # ------------------------------------------------------------------
+    # Gross margin backfill via stock_yjbb_em
+    # ------------------------------------------------------------------
+
+    def backfill_gross_margin(
+        self, start: str, end: str, *, incremental: bool = False,
+    ) -> tuple[int, int]:
+        """Backfill gross_margin from ``stock_yjbb_em`` API (per-quarter batch).
+
+        Parameters
+        ----------
+        start, end : str
+            Date range in ``YYYY-MM-DD`` format.
+        incremental : bool
+            If True, only fetch the last 2 quarters (for routine use).
+
+        Returns
+        -------
+        (ok_quarters, fail_quarters)
+        """
+        provider = None
+        for p in self._providers:
+            if hasattr(p, "fetch_gross_margin_batch"):
+                provider = p
+                break
+        if provider is None:
+            logger.warning("No provider supports fetch_gross_margin_batch")
+            return 0, 0
+
+        quarters = quarter_dates(start, end)
+        if incremental:
+            quarters = quarters[-2:]
+
+        ok, fail = 0, 0
+        for q in quarters:
+            try:
+                data = provider.fetch_gross_margin_batch(q)
+                if data:
+                    db_date = f"{q[:4]}-{q[4:6]}-{q[6:]}"
+                    self._storage.update_gross_margin_batch(db_date, data)
+                    ok += 1
+                    logger.info("gross_margin %s: %d stocks updated", q, len(data))
+                else:
+                    fail += 1
+                    logger.warning("gross_margin %s: empty response", q)
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to fetch gross_margin for %s", q, exc_info=True)
+                fail += 1
+        return ok, fail
