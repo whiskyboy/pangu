@@ -41,6 +41,8 @@ def _make_multi_stock_bars(n_days: int = 120, n_stocks: int = 5) -> pd.DataFrame
         volumes = rng.integers(500_000, 50_000_000, n_days).astype(float)
         amounts = volumes * closes * (1 + rng.normal(0, 0.01, n_days))
         adj_factors = np.ones(n_days)
+        # preclose: previous day's close (first day uses open as proxy)
+        precloses = np.concatenate([[opens[0]], closes[:-1]])
 
         for i in range(n_days):
             rows.append({
@@ -53,6 +55,7 @@ def _make_multi_stock_bars(n_days: int = 120, n_stocks: int = 5) -> pd.DataFrame
                 "volume": volumes[i],
                 "amount": amounts[i],
                 "adj_factor": adj_factors[i],
+                "preclose": precloses[i],
             })
 
     return pd.DataFrame(rows)
@@ -72,6 +75,8 @@ def _make_fundamentals(bars: pd.DataFrame) -> pd.DataFrame:
                 "date": d,
                 "pe_ttm": rng.uniform(5, 50),
                 "pb": rng.uniform(0.5, 5),
+                "ps_ttm": rng.uniform(0.5, 10),
+                "pcf_ttm": rng.uniform(-5, 20),
                 "roe_ttm": rng.uniform(0.02, 0.25),
                 "revenue_yoy": rng.uniform(-0.3, 0.5),
                 "profit_yoy": rng.uniform(-0.5, 1.0),
@@ -108,23 +113,23 @@ def wide_tables(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 class TestFactorNames:
     def test_count(self):
-        assert len(FACTOR_NAMES) == 166
+        assert len(FACTOR_NAMES) == 169
 
     def test_no_duplicates(self):
-        assert len(set(FACTOR_NAMES)) == 166
+        assert len(set(FACTOR_NAMES)) == 169
 
     def test_kbar_first_9(self):
         expected = ["KMID", "KLEN", "KMID2", "KUP", "KUP2",
                      "KLOW", "KLOW2", "KSFT", "KSFT2"]
         assert FACTOR_NAMES[:9] == expected
 
-    def test_price_next_4(self):
-        assert FACTOR_NAMES[9:13] == ["OPEN0", "HIGH0", "LOW0", "VWAP0"]
+    def test_price_next_5(self):
+        assert FACTOR_NAMES[9:14] == ["OPEN0", "HIGH0", "LOW0", "VWAP0", "OVERNIGHT_RET"]
 
-    def test_fundamentals_last_8(self):
-        expected = ["PE", "PB", "ROE", "REVENUE_YOY", "PROFIT_YOY",
+    def test_fundamentals_last_10(self):
+        expected = ["PE", "PB", "PS", "PCF", "ROE", "REVENUE_YOY", "PROFIT_YOY",
                      "LN_MKTCAP", "TURNOVER", "GROSS_MARGIN"]
-        assert FACTOR_NAMES[-8:] == expected
+        assert FACTOR_NAMES[-10:] == expected
 
     def test_get_factor_names_matches(self, engine: Alpha158Engine):
         assert engine.get_factor_names() == FACTOR_NAMES
@@ -194,12 +199,12 @@ class TestKBar:
 # ---------------------------------------------------------------------------
 
 class TestPrice:
-    def test_all_4_returned(self, wide_tables):
+    def test_all_5_returned(self, wide_tables):
         result = _compute_price(
             wide_tables["O"], wide_tables["H"], wide_tables["L"],
             wide_tables["C"], wide_tables["VWAP"],
         )
-        assert set(result.keys()) == {"OPEN0", "HIGH0", "LOW0", "VWAP0"}
+        assert set(result.keys()) == {"OPEN0", "HIGH0", "LOW0", "VWAP0", "OVERNIGHT_RET"}
 
     def test_high0_ge_low0(self, wide_tables):
         """HIGH0 >= LOW0 always."""

@@ -45,8 +45,6 @@ CREATE TABLE IF NOT EXISTS daily_bars (
     preclose    REAL,               -- previous close
     tradestatus TEXT,               -- 1=normal, 0=suspended
     is_st       INTEGER,            -- 1=ST, 0=normal
-    ps_ttm      REAL,               -- P/S TTM
-    pcf_ttm     REAL,               -- P/CF TTM
     PRIMARY KEY (symbol, date)
 );
 
@@ -121,6 +119,8 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     asset_yoy           REAL,
     cashflow_per_share  REAL,
     cashflow_to_profit  REAL,
+    ps_ttm              REAL,
+    pcf_ttm             REAL,
     PRIMARY KEY (symbol, date)
 );
 
@@ -288,7 +288,7 @@ class Database:
         new_fund_cols = [
             "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
             "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
-            "cashflow_to_profit",
+            "cashflow_to_profit", "ps_ttm", "pcf_ttm",
         ]
         for col in new_fund_cols:
             if col not in fund_cols:
@@ -305,12 +305,33 @@ class Database:
             ("preclose", "REAL"),
             ("tradestatus", "TEXT"),
             ("is_st", "INTEGER"),
-            ("ps_ttm", "REAL"),
-            ("pcf_ttm", "REAL"),
         ]
         for col, col_type in new_bar_cols:
             if col not in bar_cols:
                 self._conn.execute(f"ALTER TABLE daily_bars ADD COLUMN {col} {col_type}")
+        # Remove ps_ttm/pcf_ttm from daily_bars (moved to fundamentals)
+        if "ps_ttm" in bar_cols or "pcf_ttm" in bar_cols:
+            # Migrate existing data: copy ps_ttm/pcf_ttm from daily_bars into fundamentals
+            self._conn.execute("""
+                INSERT OR REPLACE INTO fundamentals (symbol, date, pe_ttm, pb, ps_ttm, pcf_ttm,
+                    roe_ttm, revenue_yoy, profit_yoy, market_cap)
+                SELECT
+                    b.symbol, b.date,
+                    COALESCE(f.pe_ttm, NULL),
+                    COALESCE(f.pb, NULL),
+                    b.ps_ttm,
+                    b.pcf_ttm,
+                    COALESCE(f.roe_ttm, NULL),
+                    COALESCE(f.revenue_yoy, NULL),
+                    COALESCE(f.profit_yoy, NULL),
+                    COALESCE(f.market_cap, NULL)
+                FROM daily_bars b
+                LEFT JOIN fundamentals f ON b.symbol = f.symbol AND b.date = f.date
+                WHERE b.ps_ttm IS NOT NULL OR b.pcf_ttm IS NOT NULL
+            """)
+            for col in ("ps_ttm", "pcf_ttm"):
+                if col in bar_cols:
+                    self._conn.execute(f"ALTER TABLE daily_bars DROP COLUMN {col}")
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -321,8 +342,8 @@ class Database:
         """INSERT OR REPLACE daily bars from *df*.
 
         *df* must contain columns: date, open, high, low, close, volume.
-        Optional: amount, adj_factor, turn, preclose, tradestatus, is_st,
-        ps_ttm, pcf_ttm.  Returns row count inserted.
+        Optional: amount, adj_factor, turn, preclose, tradestatus, is_st.
+        Returns row count inserted.
         """
         if df.empty:
             return 0
@@ -343,15 +364,13 @@ class Database:
                 r.get("preclose"),
                 r.get("tradestatus"),
                 r.get("is_st"),
-                r.get("ps_ttm"),
-                r.get("pcf_ttm"),
             ))
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO daily_bars "
                 "(symbol, date, open, high, low, close, volume, amount, adj_factor,"
-                " turn, preclose, tradestatus, is_st, ps_ttm, pcf_ttm) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " turn, preclose, tradestatus, is_st) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
             self._conn.commit()
@@ -712,7 +731,7 @@ class Database:
         "pe_ttm", "pb", "roe_ttm", "revenue_yoy", "profit_yoy", "market_cap",
         "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
         "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
-        "cashflow_to_profit",
+        "cashflow_to_profit", "ps_ttm", "pcf_ttm",
     ]
 
     def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:

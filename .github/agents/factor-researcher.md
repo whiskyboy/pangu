@@ -46,17 +46,51 @@ This is the most common source of bugs — violating these rules causes silent, 
 | Category | Count | Examples |
 |----------|-------|---------|
 | KBar (candlestick shape) | 9 | KMID, KLEN, KUP, KLOW, KSFT |
-| Price ratios | 4 | OPEN0, HIGH0, LOW0, VWAP0 |
+| Price ratios | 5 | OPEN0, HIGH0, LOW0, VWAP0, OVERNIGHT_RET |
 | Rolling simple | 55 | ROC, MA, STD, MAX, MIN, RSV, VMA (× 5 windows) |
 | Rolling complex | 75 | RANK, IMAX, CORR, CNTP, SUMP (× 5 windows) |
 | Rolling regression | 15 | BETA, RSQR, RESI (× 5 windows) |
-| Fundamental | 8 | PE, PB, ROE, REVENUE_YOY, LN_MKTCAP, TURNOVER |
+| Fundamental | 10 | PE, PB, PS, PCF, ROE, REVENUE_YOY, LN_MKTCAP, TURNOVER |
 
 Rolling windows: {5, 10, 20, 30, 60} trading days.
 
+## Lookahead audit checklist
+
+When adding or reviewing factors, systematically verify no future information leaks in.
+
+### System timing (reference)
+
+```
+Factor computation:  factor[T] uses data from dates ≤ T
+Score generation:    score[T] = model.predict(factor[T])
+Rebalance decision:  on date T, engine uses score[T-1] (prev_date)
+Execution price:     open of date T
+Label computation:   label[T] = excess_return[T+1 : T+5]
+```
+
+### Per-factor verification rules
+
+For each factor `f[T]`, verify:
+1. **Data inputs**: All price/volume/fundamental data used has `date ≤ T`
+2. **No forward-looking operations**: No `.shift(-N)`, no future index access
+3. **Rolling windows**: `rolling(d)` with `min_periods=d` uses `[T-d+1, ..., T]` — correct
+4. **Fundamental ffill**: Only fills backward in time (past → present), never future
+5. **Cross-sectional ops**: rank/zscore across stocks on same date T — no lookahead
+
+### Known safe patterns
+- `open[T] / close[T]` — both known at T close ✅
+- `open[T] / preclose[T]` — both known at T open ✅
+- `close[T].rolling(5).mean()` — uses [T-4, ..., T] ✅
+- `fund.reindex(method='ffill')` — fills from past ✅
+
+### Known dangerous patterns
+- `close.shift(-N)` — uses future close ⛔
+- `label[T] = ret[T:T+5]` — intentional for labels only, never for features ⛔
+- Using T's close for T's rebalance when execution is at T's open ⛔
+
 ## Key files
 
-- `src/pangu/factor/alpha158.py` — Alpha158Engine (166 factors)
+- `src/pangu/factor/alpha158.py` — Alpha158Engine (169 factors)
 - `src/pangu/factor/technical.py` — PandasTA-based technical indicators (production pipeline)
 - `src/pangu/factor/fundamental.py` — Fundamental factor engine
 - `src/pangu/ml/model.py` — LGBModel with feature importance

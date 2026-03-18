@@ -11,14 +11,12 @@ logger = logging.getLogger(__name__)
 
 _STD_COLS = [
     "date", "open", "high", "low", "close", "volume", "amount", "adj_factor",
-    "turn", "preclose", "tradestatus", "is_st", "ps_ttm", "pcf_ttm",
+    "turn", "preclose", "tradestatus", "is_st",
 ]
 
 # Column rename: BaoStock field names → daily_bars DB column names
 _COL_RENAME = {
     "isST": "is_st",
-    "psTTM": "ps_ttm",
-    "pcfNcfTTM": "pcf_ttm",
 }
 
 
@@ -189,6 +187,8 @@ class CompositeMarketDataProvider:
         for _, row in df.iterrows():
             pe = pd.to_numeric(row.get("peTTM", ""), errors="coerce")
             pb = pd.to_numeric(row.get("pbMRQ", ""), errors="coerce")
+            ps = pd.to_numeric(row.get("psTTM", ""), errors="coerce")
+            pcf = pd.to_numeric(row.get("pcfNcfTTM", ""), errors="coerce")
             turn = pd.to_numeric(row.get("turn", ""), errors="coerce")
             close = pd.to_numeric(row.get("close", ""), errors="coerce")
             volume = pd.to_numeric(row.get("volume", ""), errors="coerce")
@@ -199,13 +199,15 @@ class CompositeMarketDataProvider:
                 circ_shares = volume / (turn / 100)
                 mktcap = round(float(close * circ_shares), 2)
 
-            if pd.isna(pe) and pd.isna(pb) and mktcap is None:
+            if pd.isna(pe) and pd.isna(pb) and pd.isna(ps) and pd.isna(pcf) and mktcap is None:
                 continue
             rows.append({
                 "symbol": symbol,
                 "date": row["date"],
                 "pe_ttm": None if pd.isna(pe) or pe == 0 else round(float(pe), 4),
                 "pb": None if pd.isna(pb) or pb == 0 else round(float(pb), 4),
+                "ps_ttm": None if pd.isna(ps) or ps == 0 else round(float(ps), 4),
+                "pcf_ttm": None if pd.isna(pcf) or pcf == 0 else round(float(pcf), 4),
                 "roe_ttm": None,
                 "revenue_yoy": None,
                 "profit_yoy": None,

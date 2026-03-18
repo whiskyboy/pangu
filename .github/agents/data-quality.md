@@ -42,12 +42,12 @@ Quarterly columns (roe_ttm, revenue_yoy, profit_yoy, gross_margin) are stored **
 Data flows through multiple layers with forward-fill at each stage. DB sparsity ≠ factor sparsity:
 
 ```
-daily_bars (turn+close+volume) → composite._persist_valuation → fundamentals (PE/PB/market_cap daily + quarterly sparse)
+daily_bars (turn+close+volume) → composite._persist_valuation → fundamentals (PE/PB/PS/PCF/market_cap daily + quarterly sparse)
 fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) → factors.parquet (dense daily)
 ```
 
-- **daily_bars**: One row per (symbol, date). 15 columns: symbol, date, open, high, low, close, volume, amount, adj_factor, turn, preclose, tradestatus, is_st, ps_ttm, pcf_ttm. Should have no gaps for trading days.
-- **fundamentals**: PE/PB/market_cap are daily (from `_persist_valuation`); ROE, revenue_yoy, profit_yoy, gross_margin are quarterly (only on quarter-end dates). Sparsity in quarterly columns is **expected**.
+- **daily_bars**: One row per (symbol, date). 13 columns: symbol, date, open, high, low, close, volume, amount, adj_factor, turn, preclose, tradestatus, is_st. Should have no gaps for trading days.
+- **fundamentals**: PE/PB/PS/PCF/market_cap are daily (from `_persist_valuation`); ROE, revenue_yoy, profit_yoy, gross_margin are quarterly (only on quarter-end dates). Sparsity in quarterly columns is **expected**.
 - **index_constituents**: Semi-annual snapshots of CSI300/CSI500 membership.
 
 ## Mandatory checklist
@@ -68,8 +68,8 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 
 ### 3. factors.parquet coverage
 - NaN rate per factor column
-- All 8 fundamental factors: PE, PB, LN_MKTCAP, TURNOVER, ROE, REVENUE_YOY, PROFIT_YOY, GROSS_MARGIN
-- 158 technical factors: expect ~3-5% NaN (warmup period)
+- All 10 fundamental factors: PE, PB, PS, PCF, LN_MKTCAP, TURNOVER, ROE, REVENUE_YOY, PROFIT_YOY, GROSS_MARGIN
+- 159 technical factors: expect ~3-5% NaN (warmup period)
 - Date range and stock count consistency with DB
 
 ### 4. score_matrix.parquet (if exists)
@@ -84,8 +84,8 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 
 | Table | Key Columns | Expected Coverage |
 |-------|-------------|-------------------|
-| `daily_bars` | open, close, volume, adj_factor, turn, is_st, tradestatus, preclose, ps_ttm, pcf_ttm | OHLCV >99%, turn/is_st >95% (NULL for suspended days is OK) |
-| `fundamentals` | pe_ttm, pb, market_cap (daily); roe_ttm, profit_yoy, gross_margin (quarterly) | Daily >95%, quarterly = sparse by design |
+| `daily_bars` | open, close, volume, adj_factor, turn, is_st, tradestatus, preclose | OHLCV >99%, turn/is_st >95% (NULL for suspended days is OK) |
+| `fundamentals` | pe_ttm, pb, ps_ttm, pcf_ttm, market_cap (daily); roe_ttm, profit_yoy, gross_margin (quarterly) | Daily >95%, quarterly = sparse by design |
 | `index_constituents` | index_code, symbol, date | Both 000300 and 000905 |
 | `data_sync_log` | provider, last_date | Check for stale syncs |
 
@@ -93,12 +93,15 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 
 | Factor | Source | Expected Coverage |
 |--------|--------|-------------------|
-| PE, PB | daily fundamentals | >90% |
+| PE, PB | fundamentals pe_ttm, pb | >90% |
+| PS | fundamentals ps_ttm | >85% (NULL for loss-making stocks) |
+| PCF | fundamentals pcf_ttm | >80% (NULL for negative-cashflow stocks) |
 | LN_MKTCAP | log(market_cap) from turn+close+volume | >90% (requires bars backfill with turn field) |
 | TURNOVER | amount / market_cap | >90% (requires market_cap) |
+| OVERNIGHT_RET | open / preclose - 1 | >95% (requires preclose in daily_bars) |
 | ROE, REVENUE_YOY, PROFIT_YOY | quarterly ffilled | >85% after ffill |
 | GROSS_MARGIN | quarterly ffilled (AkShare only) | >80% after ffill |
-| Technical factors (158) | daily_bars OHLCV | ~95-97% (first ~59 rows per stock are NaN from rolling warmup) |
+| Technical factors (159) | daily_bars OHLCV | ~95-97% (first ~59 rows per stock are NaN from rolling warmup) |
 
 ## Report format
 

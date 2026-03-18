@@ -1,14 +1,14 @@
 """QLib Alpha158 full factor set + fundamental factors.
 
-Computes 158 technical factors + 8 fundamental factors = 166 total,
+Computes 159 technical factors + 10 fundamental factors = 169 total,
 all vectorized on (date × symbol) wide-format DataFrames.
 
 Technical factors follow the exact definitions from Microsoft QLib's Alpha158:
   - KBar (9): candlestick shape features
-  - Price (4): OHLC/VWAP ratios to close
+  - Price (5): OHLC/VWAP ratios to close + overnight return
   - Rolling (145): 29 operations × 5 windows {5, 10, 20, 30, 60}
 
-Fundamental factors (8): PE, PB, ROE, revenue_yoy, profit_yoy,
+Fundamental factors (10): PE, PB, PS, PCF, ROE, revenue_yoy, profit_yoy,
   ln_mktcap, turnover, gross_margin.
 
 Prices are forward-adjusted (unadj × adj_factor) for continuity;
@@ -33,6 +33,8 @@ _WARMUP = 60  # max rolling window; first 59 rows produce NaN
 _FUNDAMENTAL_COLS = [
     "PE",
     "PB",
+    "PS",
+    "PCF",
     "ROE",
     "REVENUE_YOY",
     "PROFIT_YOY",
@@ -56,8 +58,8 @@ def _build_factor_names() -> list[str]:
         "KLOW", "KLOW2", "KSFT", "KSFT2",
     ]
 
-    # Price (4)
-    names += ["OPEN0", "HIGH0", "LOW0", "VWAP0"]
+    # Price (5)
+    names += ["OPEN0", "HIGH0", "LOW0", "VWAP0", "OVERNIGHT_RET"]
 
     # Rolling (29 ops × 5 windows = 145)
     _rolling_ops = [
@@ -74,10 +76,10 @@ def _build_factor_names() -> list[str]:
         for op in _rolling_ops:
             names.append(f"{op}{d}")
 
-    # Fundamental (8)
+    # Fundamental (10)
     names += _FUNDAMENTAL_COLS
 
-    assert len(names) == 166, f"Expected 166, got {len(names)}"
+    assert len(names) == 169, f"Expected 169, got {len(names)}"
     return names
 
 
@@ -119,6 +121,7 @@ def _prepare_wide_tables(
     return {
         "O": O, "H": H, "L": L, "C": C,
         "V": volume, "amount": amount, "VWAP": VWAP,
+        "raw_open": raw_open, "preclose": _pivot(bars, "preclose") if "preclose" in bars.columns else None,
     }
 
 
@@ -158,14 +161,26 @@ def _compute_kbar(
 def _compute_price(
     O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame,  # noqa: E741
     C: pd.DataFrame, VWAP: pd.DataFrame,
+    raw_open: pd.DataFrame | None = None,
+    preclose: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     c_safe = C + _EPS  # protect against C=0 (data errors)
-    return {
+    factors: dict[str, pd.DataFrame] = {
         "OPEN0": O / c_safe,
         "HIGH0": H / c_safe,
         "LOW0": L / c_safe,
         "VWAP0": VWAP / c_safe,
     }
+    # OVERNIGHT_RET uses UNADJUSTED prices (raw_open / preclose).
+    # This is the only factor NOT using forward-adjusted prices, because:
+    #   - preclose is the exchange reference price (adjusted for ex-dividend by exchange)
+    #   - Using forward-adjusted prices would mute the overnight gap on ex-dividend days
+    if raw_open is not None and preclose is not None:
+        pc_safe = preclose.astype("float64") + _EPS
+        factors["OVERNIGHT_RET"] = raw_open.astype("float64") / pc_safe - 1
+    else:
+        factors["OVERNIGHT_RET"] = pd.DataFrame(np.nan, index=O.index, columns=O.columns)
+    return factors
 
 
 # ---------------------------------------------------------------------------
@@ -395,13 +410,13 @@ def _compute_fundamentals(
     fundamentals: pd.DataFrame,
     amount: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
-    """Compute 8 fundamental factors from fundamentals + daily amount.
+    """Compute 10 fundamental factors from fundamentals + daily amount.
 
     Parameters
     ----------
     fundamentals : DataFrame
-        Long format with columns: symbol, date, pe_ttm, pb, roe_ttm,
-        revenue_yoy, profit_yoy, market_cap, gross_margin.
+        Long format with columns: symbol, date, pe_ttm, pb, ps_ttm, pcf_ttm,
+        roe_ttm, revenue_yoy, profit_yoy, market_cap, gross_margin.
     amount : DataFrame
         Wide format (date × symbol) daily trading amount in yuan.
     """
@@ -415,6 +430,8 @@ def _compute_fundamentals(
     for src_col, out_name in [
         ("pe_ttm", "PE"),
         ("pb", "PB"),
+        ("ps_ttm", "PS"),
+        ("pcf_ttm", "PCF"),
         ("roe_ttm", "ROE"),
         ("revenue_yoy", "REVENUE_YOY"),
         ("profit_yoy", "PROFIT_YOY"),
@@ -451,7 +468,7 @@ class Alpha158Engine:
 
     @staticmethod
     def get_factor_names() -> list[str]:
-        """Return ordered list of all 166 factor names (no duplicates)."""
+        """Return ordered list of all 169 factor names (no duplicates)."""
         return list(FACTOR_NAMES)
 
     def compute(
@@ -459,20 +476,21 @@ class Alpha158Engine:
         all_bars: pd.DataFrame,
         fundamentals: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Batch compute all 166 factors.
+        """Batch compute all 169 factors.
 
         Parameters
         ----------
         all_bars : DataFrame (long format)
-            Columns: symbol, date, open, high, low, close, volume, amount, adj_factor.
+            Columns: symbol, date, open, high, low, close, volume, amount,
+            adj_factor, preclose.
             Unadjusted prices; forward adjustment done internally.
         fundamentals : DataFrame (long format)
-            Columns: symbol, date, pe_ttm, pb, roe_ttm, revenue_yoy,
-            profit_yoy, market_cap, gross_margin.
+            Columns: symbol, date, pe_ttm, pb, ps_ttm, pcf_ttm, roe_ttm,
+            revenue_yoy, profit_yoy, market_cap, gross_margin.
 
         Returns
         -------
-        DataFrame with MultiIndex (date, symbol) and 166 factor columns, dtype=float32.
+        DataFrame with MultiIndex (date, symbol) and 169 factor columns, dtype=float32.
         First ~59 rows per stock will have NaN for rolling(60) factors.
         """
         # Pivot to wide format + forward-adjust prices
@@ -483,8 +501,12 @@ class Alpha158Engine:
         # 1. KBar (9)
         factors = _compute_kbar(O, H, L, C)
 
-        # 2. Price (4)
-        factors.update(_compute_price(O, H, L, C, VWAP))
+        # 2. Price (5) — includes OVERNIGHT_RET from preclose
+        factors.update(_compute_price(
+            O, H, L, C, VWAP,
+            raw_open=wide.get("raw_open"),
+            preclose=wide.get("preclose"),
+        ))
 
         # 3. Rolling — simple (55)
         factors.update(_compute_rolling_simple(C, H, L, V))
@@ -495,7 +517,7 @@ class Alpha158Engine:
         # 5. Rolling — regression (15)
         factors.update(_compute_rolling_regression(C))
 
-        # 6. Fundamental (8)
+        # 6. Fundamental (10) — PE/PB/PS/PCF from fundamentals table
         factors.update(_compute_fundamentals(fundamentals, amount))
 
         # Stack to panel: MultiIndex (date, symbol)
@@ -521,7 +543,7 @@ class Alpha158Engine:
 
         Returns
         -------
-        DataFrame (index=symbol, columns=166 factors).
+        DataFrame (index=symbol, columns=169 factors).
         """
 
         target_dt = pd.Timestamp(target_date)

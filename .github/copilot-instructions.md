@@ -24,7 +24,7 @@ Production (daily, async):
 
 Offline (on-demand, sync):
   BaoStock/AkShare → SQLite DB (unadjusted prices + adj_factor + turn/tradestatus/is_st/valuation)
-      → Alpha158Engine (166 factors) → LightGBM Walk-Forward (17 windows)
+      → Alpha158Engine (169 factors) → LightGBM Walk-Forward (17 windows)
       → score_matrix.parquet → BacktestEngine (5-step rebalance)
 ```
 
@@ -40,7 +40,7 @@ Offline (on-demand, sync):
    - `src/pangu/scheduler.py` — APScheduler-based cron orchestration.
 
 2. **ML training & backtest pipeline** (offline, sync):
-   - `src/pangu/factor/alpha158.py` — 166-factor engine (158 technical + 8 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 166 columns, float32.
+   - `src/pangu/factor/alpha158.py` — 169-factor engine (159 technical + 10 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 169 columns, float32.
    - `src/pangu/ml/dataset.py` — Walk-Forward window splitting, label computation (5-day excess return using forward-adjusted prices).
    - `src/pangu/ml/model.py` — LightGBM wrapper with fit/predict/save/load.
    - `src/pangu/ml/score_evaluator.py` — Score matrix quality diagnostics (discrimination, stability, rank stability).
@@ -63,7 +63,7 @@ Offline (on-demand, sync):
 - **Label computation** uses forward-adjusted prices: `(close * adj_factor)[t+5] / (close * adj_factor)[t] - 1`. This captures dividend returns.
 - **Never mix adjusted and unadjusted prices** in the same calculation.
 
-**Fundamental data:** DB stores fundamentals **sparsely** — PE/PB/market_cap are daily rows (extracted from daily bars by `composite._persist_valuation()`); ROE, revenue_yoy, profit_yoy, gross_margin etc. are quarterly (only on quarter-end dates). Two layers of forward-fill produce daily-frequency output:
+**Fundamental data:** DB stores fundamentals **sparsely** — PE/PB/PS/PCF/market_cap are daily rows (extracted from daily bars by `composite._persist_valuation()`); ROE, revenue_yoy, profit_yoy, gross_margin etc. are quarterly (only on quarter-end dates). Two layers of forward-fill produce daily-frequency output:
 1. `Database.load_fundamentals_filled()` fetches a seed row before the query range and ffills quarterly columns.
 2. `Alpha158Engine._compute_fundamentals()` does a second ffill via `reindex(amount.index, method='ffill')` to align to trading dates.
 - **Never judge data completeness by raw DB row counts.** Always check factor-level output (`factors.parquet`) or call `load_fundamentals_filled()`.
@@ -76,7 +76,7 @@ Offline (on-demand, sync):
 
 **Data pipeline layers:** When diagnosing data issues, check the right layer — DB sparsity ≠ factor sparsity:
 ```
-daily_bars (turn+close+volume) → composite._persist_valuation → fundamentals (PE/PB/market_cap daily + quarterly sparse)
+daily_bars (turn+close+volume) → composite._persist_valuation → fundamentals (PE/PB/PS/PCF/market_cap daily + quarterly sparse)
 fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) → factors.parquet (dense daily)
 ```
 
@@ -135,7 +135,7 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 | `pangu backfill bars --start 2019-01-01 --force --pool config/backfill_stock_pool.yaml` | Re-fetch all daily bars with extended fields | ~4-7h (~18s/stock) |
 | `pangu backfill fundamentals --start 2019-01-01` | Backfill quarterly fundamentals from AkShare | ~2h |
 | `pangu backfill index --start 2019-01-01` | Backfill index daily bars (default: CSI300) | <1min |
-| `pangu compute-factors` | Compute 166 Alpha158 factors → `data/factors.parquet` | ~10min |
+| `pangu compute-factors` | Compute 169 Alpha158 factors → `data/factors.parquet` | ~10min |
 | `pangu train walkforward` | Walk-Forward LightGBM training → `data/score_matrix.parquet` | ~30min |
 | `pangu backtest --strategy lgb --scores data/score_matrix.parquet` | Run backtest on score matrix | <1min |
 | `pangu evaluate-scores --scores data/score_matrix.parquet` | Score quality diagnostics | <10s |
@@ -161,6 +161,6 @@ Volumes: `./data:/app/data` (SQLite DB), `./config:/app/config` (settings/watchl
 ## Data Files (not in git)
 
 - `data/pangu.db` — SQLite database (daily_bars, fundamentals, index_constituents, etc.)
-- `data/factors.parquet` — Pre-computed 166-factor panel (~1.3GB)
+- `data/factors.parquet` — Pre-computed 169-factor panel (~1.3GB)
 - `data/score_matrix.parquet` — Model predictions (date × symbol)
 - `models/wf_window_*.txt` — LightGBM model files (17 Walk-Forward windows)
