@@ -524,13 +524,19 @@ class TestFundamentals:
         assert filled.empty
 
     def test_update_gross_margin_batch(self, db: Database) -> None:
-        """Batch gross_margin update creates sparse rows."""
-        data = {"600519": 0.9187, "000001": 0.2977}
+        """Batch gross_margin update only touches existing rows."""
+        # Pre-populate rows so UPDATE can find them
+        db.save_fundamentals("600519", pd.DataFrame({"date": ["2024-03-31"], "pe_ttm": [30.0]}))
+        db.save_fundamentals("000001", pd.DataFrame({"date": ["2024-03-31"], "pe_ttm": [8.0]}))
+        data = {"600519": 0.9187, "000001": 0.2977, "999999": 0.5}  # 999999 not in DB
         n = db.update_gross_margin_batch("2024-03-31", data)
-        assert n == 2
+        assert n == 2  # only 600519 and 000001 exist, 999999 skipped
         loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
         assert len(loaded) == 1
         assert loaded.iloc[0]["gross_margin"] == pytest.approx(0.9187)
+        # 999999 should NOT have been inserted
+        orphan = db.load_fundamentals("999999", "2024-03-31", "2024-03-31")
+        assert len(orphan) == 0
 
     def test_update_gross_margin_batch_preserves_existing(self, db: Database) -> None:
         """Batch gross_margin update does not overwrite existing columns."""

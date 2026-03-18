@@ -36,7 +36,7 @@ class TestQuarterDates:
 
 
 # ---------------------------------------------------------------------------
-# backfill_gross_margin
+# refresh_gross_margin
 # ---------------------------------------------------------------------------
 
 
@@ -58,12 +58,21 @@ class TestBackfillGrossMargin:
         return d
 
     def test_full_backfill(self, db: Database) -> None:
+        import pandas as pd
+
+        # Pre-populate fundamentals rows (simulating prior per-stock sync)
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-03-31", "2024-06-30"], "pe_ttm": [30.0, 31.0],
+        }))
+        db.save_fundamentals("000001", pd.DataFrame({
+            "date": ["2024-03-31"], "pe_ttm": [8.0],
+        }))
         provider = _FakeGrossMarginProvider({
-            "20240331": {"600519": 0.92, "000001": 0.30},
+            "20240331": {"600519": 0.92, "000001": 0.30, "999999": 0.5},
             "20240630": {"600519": 0.91},
         })
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
-        ok, fail = composite.backfill_gross_margin("2024-01-01", "2024-06-30")
+        ok, fail = composite.refresh_gross_margin("2024-01-01", "2024-06-30")
         assert ok == 2
         assert fail == 0
 
@@ -72,7 +81,17 @@ class TestBackfillGrossMargin:
         assert loaded.iloc[0]["gross_margin"] == pytest.approx(0.92)
         assert loaded.iloc[1]["gross_margin"] == pytest.approx(0.91)
 
+        # 999999 not in DB — should NOT have been inserted
+        orphan = db.load_fundamentals("999999", "2024-03-31", "2024-03-31")
+        assert orphan.empty
+
     def test_incremental_only_last_two(self, db: Database) -> None:
+        import pandas as pd
+
+        # Pre-populate rows for Q3/Q4 only (incremental should only fetch those)
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-09-30", "2024-12-31"], "pe_ttm": [30.0, 31.0],
+        }))
         provider = _FakeGrossMarginProvider({
             "20240331": {"600519": 0.92},
             "20240630": {"600519": 0.91},
@@ -80,7 +99,7 @@ class TestBackfillGrossMargin:
             "20241231": {"600519": 0.89},
         })
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
-        ok, fail = composite.backfill_gross_margin("2024-01-01", "2024-12-31", incremental=True)
+        ok, fail = composite.refresh_gross_margin("2024-01-01", "2024-12-31", incremental=True)
         # Should only fetch last 2 quarters (Q3, Q4)
         assert ok == 2
         assert fail == 0
@@ -92,14 +111,14 @@ class TestBackfillGrossMargin:
     def test_no_provider(self, db: Database) -> None:
         """No provider supports fetch_gross_margin_batch → returns (0, 0)."""
         composite = CompositeFundamentalProvider(storage=db, providers=[])
-        ok, fail = composite.backfill_gross_margin("2024-01-01", "2024-12-31")
+        ok, fail = composite.refresh_gross_margin("2024-01-01", "2024-12-31")
         assert ok == 0
         assert fail == 0
 
     def test_empty_response_counted_as_fail(self, db: Database) -> None:
         provider = _FakeGrossMarginProvider({"20240331": {}})
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
-        ok, fail = composite.backfill_gross_margin("2024-01-01", "2024-03-31")
+        ok, fail = composite.refresh_gross_margin("2024-01-01", "2024-03-31")
         assert ok == 0
         assert fail == 1
 
@@ -112,7 +131,7 @@ class TestBackfillGrossMargin:
         }))
         provider = _FakeGrossMarginProvider({"20240331": {"600519": 0.92}})
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
-        composite.backfill_gross_margin("2024-01-01", "2024-03-31")
+        composite.refresh_gross_margin("2024-01-01", "2024-03-31")
 
         loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
         assert loaded.iloc[0]["pe_ttm"] == pytest.approx(25.0)

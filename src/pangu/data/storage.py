@@ -759,23 +759,22 @@ class Database:
     def update_gross_margin_batch(self, quarter_date: str, data: dict[str, float]) -> int:
         """Batch update gross_margin for a given quarter date.
 
-        Inserts or updates fundamentals rows with only the gross_margin field.
-        Existing fields on the same (symbol, date) row are preserved
-        automatically (only gross_margin is updated).
+        Only updates rows that already exist in the fundamentals table —
+        stocks outside the pool (no existing row) are silently skipped to
+        avoid creating orphan rows.
 
-        Returns number of rows upserted.
+        Returns number of rows affected.
         """
         if not data:
             return 0
-        rows = [(sym, quarter_date, val) for sym, val in data.items()]
+        rows = [(val, sym, quarter_date) for sym, val in data.items()]
         with self._lock:
-            self._conn.executemany(
-                "INSERT INTO fundamentals (symbol, date, gross_margin) VALUES (?, ?, ?) "
-                "ON CONFLICT(symbol, date) DO UPDATE SET gross_margin = excluded.gross_margin",
+            cur = self._conn.executemany(
+                "UPDATE fundamentals SET gross_margin = ? WHERE symbol = ? AND date = ?",
                 rows,
             )
             self._conn.commit()
-        return len(rows)
+        return cur.rowcount
 
     def load_fundamentals(
         self, symbol: str, start: str, end: str

@@ -136,7 +136,7 @@ class CompositeFundamentalProvider:
     # Gross margin backfill via stock_yjbb_em
     # ------------------------------------------------------------------
 
-    def backfill_gross_margin(
+    def refresh_gross_margin(
         self, start: str, end: str, *, incremental: bool = False,
     ) -> tuple[int, int]:
         """Backfill gross_margin from ``stock_yjbb_em`` API (per-quarter batch).
@@ -171,9 +171,9 @@ class CompositeFundamentalProvider:
                 data = provider.fetch_gross_margin_batch(q)
                 if data:
                     db_date = f"{q[:4]}-{q[4:6]}-{q[6:]}"
-                    self._storage.update_gross_margin_batch(db_date, data)
+                    affected = self._storage.update_gross_margin_batch(db_date, data)
                     ok += 1
-                    logger.info("gross_margin %s: %d stocks updated", q, len(data))
+                    logger.info("gross_margin %s: %d/%d stocks updated", q, affected, len(data))
                 else:
                     fail += 1
                     logger.warning("gross_margin %s: empty response", q)

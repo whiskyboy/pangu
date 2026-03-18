@@ -361,7 +361,7 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     from pangu.tz import now as tz_now
     today = tz_now().strftime("%Y-%m-%d")
     click.echo(f"\nBackfilling gross_margin ({start} → {today})...")
-    gm_ok, gm_fail = c.fundamental.backfill_gross_margin(start, today)
+    gm_ok, gm_fail = c.fundamental.refresh_gross_margin(start, today)
     click.echo(f"✅ gross_margin done: {gm_ok} quarters ok, {gm_fail} failed")
 
 
