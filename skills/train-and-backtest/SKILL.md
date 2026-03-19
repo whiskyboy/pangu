@@ -29,14 +29,14 @@ Execute these steps sequentially. After each step, verify success before proceed
 
 ### Step 1: Compute Factors
 
-Compute Alpha158 (169 factors: 159 technical + 10 fundamental) for all stocks
+Compute Alpha158 (177 factors: 159 technical + 18 fundamental) for all stocks
 in the configured pool (CSI300+CSI500, ~800 stocks).
 
 ```bash
 uv run pangu compute-factors --output data/factors.parquet
 ```
 
-**Expected output:** `data/factors.parquet` file created. Log shows 169 factor
+**Expected output:** `data/factors.parquet` file created. Log shows 177 factor
 columns and date range. Typical size ~1.3 GB for full universe.
 
 **If the user already has a recent `data/factors.parquet`**, skip this step and

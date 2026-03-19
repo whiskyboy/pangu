@@ -63,7 +63,7 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 
 ### 3. factors.parquet coverage
 - NaN rate per factor column
-- All 10 fundamental factors: PE, PB, PS, PCF, LN_MKTCAP, TURNOVER, ROE, REVENUE_YOY, PROFIT_YOY, GROSS_MARGIN
+- All 18 fundamental factors: PE, PB, PS, PCF, LN_MKTCAP, TURNOVER, ROE, REVENUE_YOY, PROFIT_YOY, GROSS_MARGIN, NET_PROFIT_MARGIN, DEBT_RATIO, ASSET_TURNOVER, CURRENT_RATIO, EQUITY_YOY, ASSET_YOY, CASHFLOW_PER_SHARE, CASHFLOW_TO_PROFIT
 - 159 technical factors: expect ~3-5% NaN (warmup period)
 - Date range and stock count consistency with DB
 

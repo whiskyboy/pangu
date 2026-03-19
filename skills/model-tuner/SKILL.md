@@ -20,7 +20,7 @@ improvements — all with user review at each decision point.
 ## Prerequisites
 
 - Working directory: `trading-agent` project root
-- `data/factors.parquet` (169 factors, up to date)
+- `data/factors.parquet` (177 factors, up to date)
 - Existing models in `models/` and `data/score_matrix.parquet` (for baseline comparison)
 - Package manager: `uv`
 

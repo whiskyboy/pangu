@@ -119,7 +119,7 @@ Skills（主对话中交互，需用户决策）
 - 手动选择：`/skills` → train-and-backtest
 
 **Pipeline 步骤：**
-1. **Compute Factors** — Alpha158 (169 因子)
+1. **Compute Factors** — Alpha158 (177 因子)
 2. **Walk-Forward Training** — LightGBM 滚动训练
 3. **Model & Score Diagnostics** — 诊断 dead features、score 质量
 4. **Backtest** — 回测 LGB 策略

@@ -24,7 +24,7 @@ Production (daily, async):
 
 Offline (on-demand, sync):
   BaoStock/AkShare → SQLite DB (unadjusted prices + adj_factor + turn/tradestatus/is_st/valuation)
-      → Alpha158Engine (169 factors) → LightGBM Walk-Forward (17 windows)
+      → Alpha158Engine (177 factors) → LightGBM Walk-Forward (17 windows)
       → score_matrix.parquet → BacktestEngine (5-step rebalance)
 ```
 
@@ -40,7 +40,7 @@ Offline (on-demand, sync):
    - `src/pangu/scheduler.py` — APScheduler-based cron orchestration.
 
 2. **ML training & backtest pipeline** (offline, sync):
-   - `src/pangu/factor/alpha158.py` — 169-factor engine (159 technical + 10 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 169 columns, float32.
+   - `src/pangu/factor/alpha158.py` — 177-factor engine (159 technical + 18 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 177 columns, float32.
    - `src/pangu/ml/dataset.py` — Walk-Forward window splitting, label computation (5-day excess return using forward-adjusted prices).
    - `src/pangu/ml/model.py` — LightGBM wrapper with fit/predict/save/load.
    - `src/pangu/ml/score_evaluator.py` — Score matrix quality diagnostics (discrimination, stability, rank stability).
@@ -157,6 +157,6 @@ Volumes: `./data:/app/data` (SQLite DB), `./config:/app/config` (settings/watchl
 ## Data Files (not in git)
 
 - `data/pangu.db` — SQLite database (daily_bars, fundamentals, index_constituents, etc.)
-- `data/factors.parquet` — Pre-computed 169-factor panel (~1.3GB)
+- `data/factors.parquet` — Pre-computed 177-factor panel (~1.3GB)
 - `data/score_matrix.parquet` — Model predictions (date × symbol)
 - `models/wf_window_*.txt` — LightGBM model files (17 Walk-Forward windows)

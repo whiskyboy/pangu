@@ -82,6 +82,14 @@ def _make_fundamentals(bars: pd.DataFrame) -> pd.DataFrame:
                 "profit_yoy": rng.uniform(-0.5, 1.0),
                 "market_cap": rng.uniform(1e9, 1e11),
                 "gross_margin": rng.uniform(0.1, 0.6),
+                "net_profit_margin": rng.uniform(0.02, 0.3),
+                "debt_ratio": rng.uniform(0.2, 0.8),
+                "asset_turnover": rng.uniform(0.1, 2.0),
+                "current_ratio": rng.uniform(0.5, 3.0),
+                "equity_yoy": rng.uniform(-0.2, 0.5),
+                "asset_yoy": rng.uniform(-0.1, 0.4),
+                "cashflow_per_share": rng.uniform(-1.0, 5.0),
+                "cashflow_to_profit": rng.uniform(-0.5, 2.0),
             })
 
     return pd.DataFrame(rows)
@@ -113,10 +121,10 @@ def wide_tables(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 class TestFactorNames:
     def test_count(self):
-        assert len(FACTOR_NAMES) == 169
+        assert len(FACTOR_NAMES) == 177
 
     def test_no_duplicates(self):
-        assert len(set(FACTOR_NAMES)) == 169
+        assert len(set(FACTOR_NAMES)) == 177
 
     def test_kbar_first_9(self):
         expected = ["KMID", "KLEN", "KMID2", "KUP", "KUP2",
@@ -126,10 +134,13 @@ class TestFactorNames:
     def test_price_next_5(self):
         assert FACTOR_NAMES[9:14] == ["OPEN0", "HIGH0", "LOW0", "VWAP0", "OVERNIGHT_RET"]
 
-    def test_fundamentals_last_10(self):
+    def test_fundamentals_last(self):
         expected = ["PE", "PB", "PS", "PCF", "ROE", "REVENUE_YOY", "PROFIT_YOY",
-                     "LN_MKTCAP", "TURNOVER", "GROSS_MARGIN"]
-        assert FACTOR_NAMES[-10:] == expected
+                     "LN_MKTCAP", "TURNOVER", "GROSS_MARGIN",
+                     "NET_PROFIT_MARGIN", "DEBT_RATIO", "ASSET_TURNOVER",
+                     "CURRENT_RATIO", "EQUITY_YOY", "ASSET_YOY",
+                     "CASHFLOW_PER_SHARE", "CASHFLOW_TO_PROFIT"]
+        assert FACTOR_NAMES[-18:] == expected
 
     def test_get_factor_names_matches(self, engine: Alpha158Engine):
         assert engine.get_factor_names() == FACTOR_NAMES

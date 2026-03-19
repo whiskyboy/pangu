@@ -1,6 +1,6 @@
 """QLib Alpha158 full factor set + fundamental factors.
 
-Computes 159 technical factors + 10 fundamental factors = 169 total,
+Computes 159 technical factors + 18 fundamental factors = 177 total,
 all vectorized on (date × symbol) wide-format DataFrames.
 
 Technical factors follow the exact definitions from Microsoft QLib's Alpha158:
@@ -8,8 +8,10 @@ Technical factors follow the exact definitions from Microsoft QLib's Alpha158:
   - Price (5): OHLC/VWAP ratios to close + overnight return
   - Rolling (145): 29 operations × 5 windows {5, 10, 20, 30, 60}
 
-Fundamental factors (10): PE, PB, PS, PCF, ROE, revenue_yoy, profit_yoy,
-  ln_mktcap, turnover, gross_margin.
+Fundamental factors (18): PE, PB, PS, PCF, ROE, revenue_yoy, profit_yoy,
+  ln_mktcap, turnover, gross_margin, net_profit_margin, debt_ratio,
+  asset_turnover, current_ratio, equity_yoy, asset_yoy,
+  cashflow_per_share, cashflow_to_profit.
 
 Prices are forward-adjusted (unadj × adj_factor) for continuity;
 volume and amount are NOT adjusted.
@@ -41,15 +43,23 @@ _FUNDAMENTAL_COLS = [
     "LN_MKTCAP",
     "TURNOVER",
     "GROSS_MARGIN",
+    "NET_PROFIT_MARGIN",
+    "DEBT_RATIO",
+    "ASSET_TURNOVER",
+    "CURRENT_RATIO",
+    "EQUITY_YOY",
+    "ASSET_YOY",
+    "CASHFLOW_PER_SHARE",
+    "CASHFLOW_TO_PROFIT",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Factor name registry (deterministic order, 166 total)
+# Factor name registry (deterministic order, 177 total)
 # ---------------------------------------------------------------------------
 
 def _build_factor_names() -> list[str]:
-    """Return the ordered list of all 166 factor names."""
+    """Return the ordered list of all 177 factor names."""
     names: list[str] = []
 
     # KBar (9)
@@ -76,10 +86,10 @@ def _build_factor_names() -> list[str]:
         for op in _rolling_ops:
             names.append(f"{op}{d}")
 
-    # Fundamental (10)
+    # Fundamental (18)
     names += _FUNDAMENTAL_COLS
 
-    assert len(names) == 169, f"Expected 169, got {len(names)}"
+    assert len(names) == 177, f"Expected 177, got {len(names)}"
     return names
 
 
@@ -410,13 +420,15 @@ def _compute_fundamentals(
     fundamentals: pd.DataFrame,
     amount: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
-    """Compute 10 fundamental factors from fundamentals + daily amount.
+    """Compute 18 fundamental factors from fundamentals + daily amount.
 
     Parameters
     ----------
     fundamentals : DataFrame
         Long format with columns: symbol, date, pe_ttm, pb, ps_ttm, pcf_ttm,
-        roe_ttm, revenue_yoy, profit_yoy, market_cap, gross_margin.
+        roe_ttm, revenue_yoy, profit_yoy, market_cap, gross_margin,
+        net_profit_margin, debt_ratio, asset_turnover, current_ratio,
+        equity_yoy, asset_yoy, cashflow_per_share, cashflow_to_profit.
     amount : DataFrame
         Wide format (date × symbol) daily trading amount in yuan.
     """
@@ -436,6 +448,14 @@ def _compute_fundamentals(
         ("revenue_yoy", "REVENUE_YOY"),
         ("profit_yoy", "PROFIT_YOY"),
         ("gross_margin", "GROSS_MARGIN"),
+        ("net_profit_margin", "NET_PROFIT_MARGIN"),
+        ("debt_ratio", "DEBT_RATIO"),
+        ("asset_turnover", "ASSET_TURNOVER"),
+        ("current_ratio", "CURRENT_RATIO"),
+        ("equity_yoy", "EQUITY_YOY"),
+        ("asset_yoy", "ASSET_YOY"),
+        ("cashflow_per_share", "CASHFLOW_PER_SHARE"),
+        ("cashflow_to_profit", "CASHFLOW_TO_PROFIT"),
     ]:
         if src_col in fund.columns:
             wide = fund.pivot(index="date", columns="symbol", values=src_col)
@@ -468,7 +488,7 @@ class Alpha158Engine:
 
     @staticmethod
     def get_factor_names() -> list[str]:
-        """Return ordered list of all 169 factor names (no duplicates)."""
+        """Return ordered list of all 177 factor names (no duplicates)."""
         return list(FACTOR_NAMES)
 
     def compute(
@@ -476,7 +496,7 @@ class Alpha158Engine:
         all_bars: pd.DataFrame,
         fundamentals: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Batch compute all 169 factors.
+        """Batch compute all 177 factors.
 
         Parameters
         ----------
@@ -486,11 +506,13 @@ class Alpha158Engine:
             Unadjusted prices; forward adjustment done internally.
         fundamentals : DataFrame (long format)
             Columns: symbol, date, pe_ttm, pb, ps_ttm, pcf_ttm, roe_ttm,
-            revenue_yoy, profit_yoy, market_cap, gross_margin.
+            revenue_yoy, profit_yoy, market_cap, gross_margin,
+            net_profit_margin, debt_ratio, asset_turnover, current_ratio,
+            equity_yoy, asset_yoy, cashflow_per_share, cashflow_to_profit.
 
         Returns
         -------
-        DataFrame with MultiIndex (date, symbol) and 169 factor columns, dtype=float32.
+        DataFrame with MultiIndex (date, symbol) and 177 factor columns, dtype=float32.
         First ~59 rows per stock will have NaN for rolling(60) factors.
         """
         # Pivot to wide format + forward-adjust prices
@@ -517,7 +539,7 @@ class Alpha158Engine:
         # 5. Rolling — regression (15)
         factors.update(_compute_rolling_regression(C))
 
-        # 6. Fundamental (10) — PE/PB/PS/PCF from fundamentals table
+        # 6. Fundamental (18) — PE/PB/PS/PCF from fundamentals table
         factors.update(_compute_fundamentals(fundamentals, amount))
 
         # Stack to panel: MultiIndex (date, symbol)
@@ -543,7 +565,7 @@ class Alpha158Engine:
 
         Returns
         -------
-        DataFrame (index=symbol, columns=169 factors).
+        DataFrame (index=symbol, columns=177 factors).
         """
 
         target_dt = pd.Timestamp(target_date)
