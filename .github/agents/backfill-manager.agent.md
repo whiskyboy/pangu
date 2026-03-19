@@ -52,7 +52,22 @@ for backfill — the TCP connection silently breaks in fully detached processes.
 
 **Correct approach:** Use `screen` sessions:
 ```bash
-screen -dmS backfill bash -c 'cd /workspace/trading-agent && uv run pangu backfill bars --start 2019-01-01 --force --pool config/backfill_stock_pool.yaml > data/backfill_bars.log 2>&1'
+screen -dmS backfill bash -c 'cd /workspace/trading-agent && uv run pangu backfill bars --start 2019-01-01 --force --pool config/backfill_stock_pool.yaml 2>&1 | tee /tmp/backfill_bars.log'
+```
+
+### Always use `--force` after schema changes
+
+The fundamentals provider caches sync timestamps in `data_sync_log` (30-day interval).
+If you add new DB columns or field mappings, a normal backfill will **read from DB cache
+instead of calling providers**, and new fields remain NULL. Always pass `--force` to
+bypass the cache when backfilling after schema/field expansions.
+
+### Log files go to `/tmp/`, not `data/`
+
+Write backfill logs to `/tmp/` to avoid polluting the data directory:
+```bash
+# Good:  /tmp/backfill_bars.log
+# Bad:   data/backfill_bars.log
 ```
 
 ### Do NOT kill mid-run
@@ -95,11 +110,11 @@ Fetches daily OHLCV + extended fields (turn, preclose, tradestatus, is_st, pe, p
 
 ```bash
 # Full backfill (use screen for long-running):
-screen -dmS backfill-bars bash -c 'cd /workspace/trading-agent && uv run pangu backfill bars --start 2019-01-01 --force --pool config/backfill_stock_pool.yaml > data/backfill_bars.log 2>&1'
+screen -dmS backfill-bars bash -c 'cd /workspace/trading-agent && uv run pangu backfill bars --start 2019-01-01 --force --pool config/backfill_stock_pool.yaml 2>&1 | tee /tmp/backfill_bars.log'
 
 # Monitor:
 screen -ls                        # check session exists
-tail -5 data/backfill_bars.log    # check progress
+tail -5 /tmp/backfill_bars.log    # check progress
 
 # Incremental (no --force, only fetches new dates):
 uv run pangu backfill bars --start 2024-01-01 --pool config/backfill_stock_pool.yaml
@@ -115,7 +130,7 @@ sqlite3 data/pangu.db "SELECT COUNT(*), COUNT(DISTINCT symbol), MIN(date), MAX(d
 Backfills quarterly financial indicators from AkShare.
 
 ```bash
-screen -dmS backfill-fund bash -c 'cd /workspace/trading-agent && uv run pangu backfill fundamentals --start 2019-01-01 > data/backfill_fund.log 2>&1'
+screen -dmS backfill-fund bash -c 'cd /workspace/trading-agent && uv run pangu backfill fundamentals --start 2019-01-01 2>&1 | tee /tmp/backfill_fund.log'
 ```
 
 **Verify:**
@@ -138,12 +153,12 @@ uv run pangu backfill index --start 2019-01-01
 screen -ls
 
 # Tail the latest log
-tail -20 data/backfill_bars.log
-tail -20 data/backfill_fund.log
+tail -20 /tmp/backfill_bars.log
+tail -20 /tmp/backfill_fund.log
 
 # Check ok/fail counts (bars)
-grep -o 'ok=[0-9]*' data/backfill_bars.log | tail -1
-grep -o 'fail=[0-9]*' data/backfill_bars.log | tail -1
+grep -o 'ok=[0-9]*' /tmp/backfill_bars.log | tail -1
+grep -o 'fail=[0-9]*' /tmp/backfill_bars.log | tail -1
 
 # Check if backfill is still running
 ps aux | grep "pangu backfill" | grep -v grep
