@@ -191,10 +191,9 @@ class CompositeFundamentalProvider:
     ) -> tuple[int, int]:
         """Backfill ``pub_date`` (first announcement date) for quarterly rows.
 
-        Creates a dedicated ``BaoStockFundamentalProvider`` internally —
-        BaoStock is the only source with reliable ``pubDate`` and is NOT
-        added to the main provider chain (to avoid it being used as a
-        fallback for ``get_financial_indicator``).
+        Uses BaoStock ``query_profit_data`` which returns ``pubDate``.
+        Discovers the provider via ``hasattr`` (same pattern as
+        ``refresh_gross_margin``).
 
         Parameters
         ----------
@@ -207,9 +206,15 @@ class CompositeFundamentalProvider:
         -------
         (ok_stocks, fail_stocks)
         """
-        from pangu.data.fundamental.baostock import BaoStockFundamentalProvider
+        provider = None
+        for p in self._providers:
+            if hasattr(p, "fetch_pub_dates"):
+                provider = p
+                break
+        if provider is None:
+            logger.warning("No provider supports fetch_pub_dates")
+            return 0, 0
 
-        provider = BaoStockFundamentalProvider()
         start_year = int(start[:4])
         ok, fail = 0, 0
         for sym in symbols:
