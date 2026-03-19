@@ -45,6 +45,13 @@ Your job is to plan, execute, monitor, and verify data backfill operations.
 
 ## ⚠️ Critical rules
 
+### ALWAYS use `--pool config/backfill_stock_pool.yaml`
+
+The default stock pool (~800) only covers **current** index constituents. ML training
+needs data for **ALL** stocks that were ever in the pool (~1311). **Every backfill
+command MUST use `--pool config/backfill_stock_pool.yaml`** to include the full
+historical pool. Failing to do so leaves ~500 stocks without data.
+
 ### BaoStock TCP connection fragility
 
 BaoStock uses a persistent TCP connection. **NEVER** use Copilot's `detach: true` mode
