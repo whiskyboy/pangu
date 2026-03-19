@@ -41,7 +41,7 @@ Offline (on-demand, sync):
 
 2. **ML training & backtest pipeline** (offline, sync):
    - `src/pangu/factor/alpha158.py` — 191-factor engine (159 technical + 32 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 191 columns, float32.
-   - `src/pangu/ml/dataset.py` — Walk-Forward window splitting, label computation (5-day excess return using forward-adjusted prices).
+   - `src/pangu/ml/dataset.py` — Walk-Forward window splitting, label computation (5-day excess return using forward-adjusted prices). Train uses constituents union (all ~1311 stocks); val/test use point-in-time constituents (~800) to simulate real trading pool.
    - `src/pangu/ml/model.py` — LightGBM wrapper with fit/predict/save/load.
    - `src/pangu/ml/score_evaluator.py` — Score matrix quality diagnostics (discrimination, stability, rank stability).
    - `src/pangu/ml/model_evaluator.py` — Model quality diagnostics (feature importance, per-window summary, feature drift).

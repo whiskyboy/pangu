@@ -30,7 +30,7 @@ Execute these steps sequentially. After each step, verify success before proceed
 ### Step 1: Compute Factors
 
 Compute Alpha158 (191 factors: 159 technical + 32 fundamental) for all stocks
-in the configured pool (CSI300+CSI500, ~800 stocks).
+in the full historical pool (CSI300+CSI500 union, ~1311 stocks).
 
 ```bash
 uv run pangu compute-factors --output data/factors.parquet
@@ -46,6 +46,10 @@ proceed to Step 2 — ask the user whether to recompute or reuse.
 
 Train LightGBM across all walk-forward windows (default: 18-month train +
 3-month validation + 3-month test, stepped by 3 months).
+
+**Stock pool filtering per split:**
+- **Train**: union of all constituents during training period — maximizes sample count
+- **Val/Test**: point-in-time constituents at period start — simulates real trading pool
 
 ```bash
 uv run pangu train walkforward \
