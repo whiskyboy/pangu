@@ -49,8 +49,8 @@ Your job is to plan, execute, monitor, and verify data backfill operations.
 
 The default stock pool (~800) only covers **current** index constituents. ML training
 needs data for **ALL** stocks that were ever in the pool (~1311). **Every backfill
-command MUST use `--pool config/backfill_stock_pool.yaml`** to include the full
-historical pool. Failing to do so leaves ~500 stocks without data.
+command (including incremental) MUST use `--pool config/backfill_stock_pool.yaml`**
+to include the full historical pool. Failing to do so leaves ~500 stocks without data.
 
 ### BaoStock TCP connection fragility
 
@@ -137,7 +137,7 @@ sqlite3 data/pangu.db "SELECT COUNT(*), COUNT(DISTINCT symbol), MIN(date), MAX(d
 Backfills quarterly financial indicators from AkShare.
 
 ```bash
-screen -dmS backfill-fund bash -c 'cd /workspace/trading-agent && uv run pangu backfill fundamentals --start 2019-01-01 2>&1 | tee /tmp/backfill_fund.log'
+screen -dmS backfill-fund bash -c 'cd /workspace/trading-agent && uv run pangu backfill fundamentals --start 2019-01-01 --pool config/backfill_stock_pool.yaml 2>&1 | tee /tmp/backfill_fund.log'
 ```
 
 **Verify:**
