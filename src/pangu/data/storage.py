@@ -811,6 +811,7 @@ class Database:
                 {k: v for k, v in r.items()
                  if pd.notna(v) and not (isinstance(v, float) and math.isinf(v))},
                 ensure_ascii=False,
+                default=str,
             )
             rows.append((symbol, date_val, data))
         if not rows:
