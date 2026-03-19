@@ -122,6 +122,27 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     ps_ttm              REAL,
     pcf_ttm             REAL,
     pub_date            TEXT,
+    roa                 REAL,
+    operating_profit_ratio REAL,
+    ocf_to_revenue      REAL,
+    eps_weighted         REAL,
+    quick_ratio          REAL,
+    receivables_turnover REAL,
+    inventory_turnover   REAL,
+    cost_profit_ratio    REAL,
+    dividend_payout_ratio REAL,
+    cash_ratio           REAL,
+    equity_ratio         REAL,
+    shareholder_equity_ratio REAL,
+    undistributed_per_share REAL,
+    capital_reserve_per_share REAL,
+    PRIMARY KEY (symbol, date)
+);
+
+CREATE TABLE IF NOT EXISTS fundamentals_raw (
+    symbol  TEXT NOT NULL,
+    date    TEXT NOT NULL,
+    data    TEXT NOT NULL,
     PRIMARY KEY (symbol, date)
 );
 
@@ -290,6 +311,10 @@ class Database:
             "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
             "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
             "cashflow_to_profit", "ps_ttm", "pcf_ttm", "pub_date",
+            "roa", "operating_profit_ratio", "ocf_to_revenue",
+            "eps_weighted", "quick_ratio", "receivables_turnover", "inventory_turnover",
+            "cost_profit_ratio", "dividend_payout_ratio", "cash_ratio", "equity_ratio",
+            "shareholder_equity_ratio", "undistributed_per_share", "capital_reserve_per_share",
         ]
         for col in new_fund_cols:
             if col not in fund_cols:
@@ -734,6 +759,10 @@ class Database:
         "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
         "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
         "cashflow_to_profit", "ps_ttm", "pcf_ttm", "pub_date",
+        "roa", "operating_profit_ratio", "ocf_to_revenue",
+        "eps_weighted", "quick_ratio", "receivables_turnover", "inventory_turnover",
+        "cost_profit_ratio", "dividend_payout_ratio", "cash_ratio", "equity_ratio",
+        "shareholder_equity_ratio", "undistributed_per_share", "capital_reserve_per_share",
     ]
 
     def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:
@@ -753,6 +782,43 @@ class Database:
             self._conn.executemany(
                 f"INSERT INTO fundamentals ({col_list}) VALUES ({placeholders}) "
                 f"ON CONFLICT(symbol, date) DO UPDATE SET {upsert}",
+                rows,
+            )
+            self._conn.commit()
+        return len(rows)
+
+    def save_fundamentals_raw(self, symbol: str, df: pd.DataFrame) -> int:
+        """Store full API response as JSON in ``fundamentals_raw`` table.
+
+        Each row is keyed by (symbol, date) and stores the complete
+        API response as a JSON string, preserving all 86+ columns for
+        future use without re-running backfill.
+        """
+        import json
+        import math
+
+        if df.empty:
+            return 0
+        rows = []
+        for _, r in df.iterrows():
+            date_raw = r.get("日期")
+            if date_raw is None or pd.isna(date_raw):
+                continue
+            date_val = str(date_raw)
+            if not date_val:
+                continue
+            data = json.dumps(
+                {k: v for k, v in r.items()
+                 if pd.notna(v) and not (isinstance(v, float) and math.isinf(v))},
+                ensure_ascii=False,
+            )
+            rows.append((symbol, date_val, data))
+        if not rows:
+            return 0
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO fundamentals_raw (symbol, date, data) VALUES (?, ?, ?) "
+                "ON CONFLICT(symbol, date) DO UPDATE SET data = excluded.data",
                 rows,
             )
             self._conn.commit()
@@ -819,6 +885,10 @@ class Database:
         "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
         "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
         "cashflow_to_profit",
+        "roa", "operating_profit_ratio", "ocf_to_revenue",
+        "eps_weighted", "quick_ratio", "receivables_turnover", "inventory_turnover",
+        "cost_profit_ratio", "dividend_payout_ratio", "cash_ratio", "equity_ratio",
+        "shareholder_equity_ratio", "undistributed_per_share", "capital_reserve_per_share",
     ]
 
     def load_fundamentals_filled(

@@ -77,11 +77,29 @@ class AkShareFundamentalProvider(ThrottleMixin):
         "净资产增长率(%)": "equity_yoy",
         "总资产增长率(%)": "asset_yoy",
         "经营现金净流量与净利润的比率(%)": "cashflow_to_profit",
+        # High-value additions
+        "总资产利润率(%)": "roa",
+        "营业利润率(%)": "operating_profit_ratio",
+        "经营现金净流量对销售收入比率(%)": "ocf_to_revenue",
+        # Medium-value additions
+        "成本费用利润率(%)": "cost_profit_ratio",
+        "股息发放率(%)": "dividend_payout_ratio",
+        "现金比率(%)": "cash_ratio",
+        "产权比率(%)": "equity_ratio",
+        "股东权益比率(%)": "shareholder_equity_ratio",
     }
     _FIELD_MAP_RAW = {
         "总资产周转率(次)": "asset_turnover",
         "流动比率": "current_ratio",
         "每股经营性现金流(元)": "cashflow_per_share",
+        # High-value additions
+        "加权每股收益(元)": "eps_weighted",
+        "速动比率": "quick_ratio",
+        "应收账款周转率(次)": "receivables_turnover",
+        "存货周转率(次)": "inventory_turnover",
+        # Medium-value additions
+        "每股未分配利润(元)": "undistributed_per_share",
+        "每股资本公积金(元)": "capital_reserve_per_share",
     }
 
     def fetch_gross_margin_batch(self, quarter_date: str) -> dict[str, float]:
@@ -115,12 +133,19 @@ class AkShareFundamentalProvider(ThrottleMixin):
     def get_financial_indicator(
         self, symbol: str, start: str | None = None, end: str | None = None,
     ) -> pd.DataFrame:
-        """Return standardized financial indicators DataFrame."""
+        """Return standardized financial indicators DataFrame.
+
+        Also stores the raw API response in ``_last_raw_response`` for
+        ``CompositeFundamentalProvider`` to persist to ``fundamentals_raw``.
+        """
+        self._last_raw_response = pd.DataFrame()
         try:
             start_year = start[:4] if start else None
             fin = self._fetch_financial_indicator(symbol, start_year=start_year)
             if fin.empty:
                 return pd.DataFrame()
+
+            self._last_raw_response = fin
 
             rows = []
             for _, raw in fin.iterrows():

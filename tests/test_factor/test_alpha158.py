@@ -90,6 +90,20 @@ def _make_fundamentals(bars: pd.DataFrame) -> pd.DataFrame:
                 "asset_yoy": rng.uniform(-0.1, 0.4),
                 "cashflow_per_share": rng.uniform(-1.0, 5.0),
                 "cashflow_to_profit": rng.uniform(-0.5, 2.0),
+                "roa": rng.uniform(0.01, 0.15),
+                "operating_profit_ratio": rng.uniform(0.05, 0.4),
+                "ocf_to_revenue": rng.uniform(-0.2, 0.5),
+                "eps_weighted": rng.uniform(0.1, 5.0),
+                "quick_ratio": rng.uniform(0.3, 2.5),
+                "receivables_turnover": rng.uniform(1.0, 20.0),
+                "inventory_turnover": rng.uniform(0.5, 15.0),
+                "cost_profit_ratio": rng.uniform(0.05, 0.5),
+                "dividend_payout_ratio": rng.uniform(0.0, 0.8),
+                "cash_ratio": rng.uniform(0.1, 1.5),
+                "equity_ratio": rng.uniform(0.3, 3.0),
+                "shareholder_equity_ratio": rng.uniform(0.2, 0.8),
+                "undistributed_per_share": rng.uniform(0.5, 10.0),
+                "capital_reserve_per_share": rng.uniform(0.1, 5.0),
             })
 
     return pd.DataFrame(rows)
@@ -121,10 +135,10 @@ def wide_tables(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
 
 class TestFactorNames:
     def test_count(self):
-        assert len(FACTOR_NAMES) == 177
+        assert len(FACTOR_NAMES) == 191
 
     def test_no_duplicates(self):
-        assert len(set(FACTOR_NAMES)) == 177
+        assert len(set(FACTOR_NAMES)) == 191
 
     def test_kbar_first_9(self):
         expected = ["KMID", "KLEN", "KMID2", "KUP", "KUP2",
@@ -139,8 +153,14 @@ class TestFactorNames:
                      "LN_MKTCAP", "TURNOVER", "GROSS_MARGIN",
                      "NET_PROFIT_MARGIN", "DEBT_RATIO", "ASSET_TURNOVER",
                      "CURRENT_RATIO", "EQUITY_YOY", "ASSET_YOY",
-                     "CASHFLOW_PER_SHARE", "CASHFLOW_TO_PROFIT"]
-        assert FACTOR_NAMES[-18:] == expected
+                     "CASHFLOW_PER_SHARE", "CASHFLOW_TO_PROFIT",
+                     "ROA", "OPERATING_PROFIT_RATIO", "OCF_TO_REVENUE",
+                     "EPS_WEIGHTED", "QUICK_RATIO", "RECEIVABLES_TURNOVER",
+                     "INVENTORY_TURNOVER", "COST_PROFIT_RATIO",
+                     "DIVIDEND_PAYOUT_RATIO", "CASH_RATIO", "EQUITY_RATIO",
+                     "SHAREHOLDER_EQUITY_RATIO", "UNDISTRIBUTED_PER_SHARE",
+                     "CAPITAL_RESERVE_PER_SHARE"]
+        assert FACTOR_NAMES[-32:] == expected
 
     def test_get_factor_names_matches(self, engine: Alpha158Engine):
         assert engine.get_factor_names() == FACTOR_NAMES

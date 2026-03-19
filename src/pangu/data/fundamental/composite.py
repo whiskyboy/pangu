@@ -78,6 +78,13 @@ class CompositeFundamentalProvider:
 
         # Persist + update sync log
         self._persist_financial(symbol, df)
+        # Save raw API response if available (for future field expansion)
+        raw = getattr(p, "_last_raw_response", None) if df is not None else None
+        if raw is not None and not raw.empty:
+            try:
+                self._storage.save_fundamentals_raw(symbol, raw)
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to save raw fundamentals for %s", symbol)
         self._storage.update_sync_log(
             symbol, "financial_indicator", "ok", source,
             last_date=tz_now().strftime("%Y-%m-%d"),
@@ -107,26 +114,19 @@ class CompositeFundamentalProvider:
             return pd.DataFrame()
 
     def _persist_financial(self, symbol: str, result: pd.DataFrame) -> None:
-        """Save financial indicators to fundamentals table."""
-        df = pd.DataFrame({
-            "symbol": symbol,
-            "date": result["date"],
-            "pe_ttm": None,
-            "pb": None,
-            "roe_ttm": result.get("roe_ttm"),
-            "revenue_yoy": result.get("revenue_yoy"),
-            "profit_yoy": result.get("profit_yoy"),
-            "market_cap": None,
-            "net_profit_margin": result.get("net_profit_margin"),
-            "gross_margin": result.get("gross_margin"),
-            "debt_ratio": result.get("debt_ratio"),
-            "asset_turnover": result.get("asset_turnover"),
-            "current_ratio": result.get("current_ratio"),
-            "equity_yoy": result.get("equity_yoy"),
-            "asset_yoy": result.get("asset_yoy"),
-            "cashflow_per_share": result.get("cashflow_per_share"),
-            "cashflow_to_profit": result.get("cashflow_to_profit"),
-        })
+        """Save financial indicators to fundamentals table.
+
+        Passes through all columns from the provider result. Columns not in
+        ``_FUND_COLS`` are silently ignored by ``save_fundamentals()``.
+        """
+        if result.empty:
+            return
+        df = result.copy()
+        df["symbol"] = symbol
+        # Ensure columns that come from other sources are not overwritten
+        for col in ("pe_ttm", "pb", "market_cap", "ps_ttm", "pcf_ttm", "pub_date"):
+            if col not in df.columns:
+                df[col] = None
         try:
             self._storage.save_fundamentals(symbol, df)
         except Exception:  # noqa: BLE001

@@ -46,11 +46,11 @@ else:
 ```bash
 uv run pangu compute-factors --output data/factors.parquet
 ```
-**If factor count ≠ 177:** Warn that factors.parquet may be outdated (current Alpha158 produces 177).
+**If factor count ≠ 191:** Warn that factors.parquet may be outdated (current Alpha158 produces 191).
 
 ### Step 1: Factor Coverage Check
 
-Check NaN rates and coverage of all 177 factors.
+Check NaN rates and coverage of all 191 factors.
 
 ```bash
 uv run python3 -c "
@@ -255,11 +255,11 @@ This is the most common source of bugs:
 | Rolling regression | 15 | BETA, RSQR, RESI (× 5 windows) |
 | Fundamental | 18 | PE, PB, PS, PCF, ROE, REVENUE_YOY, PROFIT_YOY, LN_MKTCAP, TURNOVER, GROSS_MARGIN, NET_PROFIT_MARGIN, DEBT_RATIO, ASSET_TURNOVER, CURRENT_RATIO, EQUITY_YOY, ASSET_YOY, CASHFLOW_PER_SHARE, CASHFLOW_TO_PROFIT |
 
-Rolling windows: {5, 10, 20, 30, 60} trading days. Total: 177 factors.
+Rolling windows: {5, 10, 20, 30, 60} trading days. Total: 191 factors.
 
 ## Key Files
 
-- `src/pangu/factor/alpha158.py` — Alpha158Engine (177 factors)
+- `src/pangu/factor/alpha158.py` — Alpha158Engine (191 factors)
 - `src/pangu/factor/technical.py` — PandasTA-based technical indicators (production)
 - `src/pangu/factor/fundamental.py` — Fundamental factor engine
 - `src/pangu/ml/model.py` — LGBModel with feature importance

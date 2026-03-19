@@ -116,7 +116,7 @@ def load_factor_panel(
 
     Returns
     -------
-    DataFrame with MultiIndex(date, symbol) × 177 factor columns, float32.
+    DataFrame with MultiIndex(date, symbol) × 191 factor columns, float32.
     """
     if factors_path and Path(factors_path).exists():
         panel = pd.read_parquet(factors_path)
@@ -254,7 +254,7 @@ def build_window_datasets(
     Returns
     -------
     {"train": (X, y), "val": (X, y), "test": (X, y)}
-    Each X is a DataFrame (rows=samples, cols=177 factors).
+    Each X is a DataFrame (rows=samples, cols=191 factors).
     Each y is a Series of labels.
     NaN labels are dropped.
     """
