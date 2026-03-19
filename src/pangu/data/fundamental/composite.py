@@ -217,7 +217,8 @@ class CompositeFundamentalProvider:
 
         start_year = int(start[:4])
         ok, fail = 0, 0
-        for sym in symbols:
+        total = len(symbols)
+        for i, sym in enumerate(symbols, 1):
             try:
                 data = provider.fetch_pub_dates(sym, start_year=start_year)
                 if data:
@@ -228,4 +229,6 @@ class CompositeFundamentalProvider:
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to fetch pub_dates for %s", sym, exc_info=True)
                 fail += 1
+            if i % 10 == 0 or i == total:
+                logger.info("pub_dates [%d/%d] ok=%d fail=%d", i, total, ok, fail)
         return ok, fail
