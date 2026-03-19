@@ -64,9 +64,11 @@ Offline (on-demand, sync):
 - **Never mix adjusted and unadjusted prices** in the same calculation.
 
 **Fundamental data:** DB stores fundamentals **sparsely** — PE/PB/PS/PCF/market_cap are daily rows (extracted from daily bars by `composite._persist_valuation()`); ROE, revenue_yoy, profit_yoy, gross_margin etc. are quarterly (only on quarter-end dates). Two layers of forward-fill produce daily-frequency output:
-1. `Database.load_fundamentals_filled()` fetches a seed row before the query range and ffills quarterly columns.
+1. `Database.load_fundamentals_filled()` fetches a seed row before the query range and ffills quarterly columns. **PIT-aware**: if `pub_date` is set and later than `date`, quarterly values are delayed to `pub_date` before ffill.
 2. `Alpha158Engine._compute_fundamentals()` does a second ffill via `reindex(amount.index, method='ffill')` to align to trading dates.
 - **Never judge data completeness by raw DB row counts.** Always check factor-level output (`factors.parquet`) or call `load_fundamentals_filled()`.
+
+**Point-in-Time (PIT):** Quarterly financial data has a `pub_date` column (first announcement date from BaoStock `pubDate`). The ffill logic delays quarterly values so they only become effective from `pub_date`, not from the report period end. This prevents look-ahead bias (Q4 annual reports can be announced ~94 days after period-end). Backfill via `pangu backfill fundamentals --start 2019-01-01` (includes pub_dates automatically).
 
 **Circulating market cap:** The system uses **circulating (float) market cap**, not total market cap. This is the A-share industry standard (Barra CNE5, Qlib Alpha158 all use float_mv). The derivation formula is a mathematical tautology from the exchange definition of turnover rate:
 - `circ_shares = volume / (turn / 100)`, then `circ_mv = close × circ_shares`
@@ -133,9 +135,9 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 |---------|---------|---------|
 | `pangu backfill constituents --start 2019-01-01` | Sync historical index constituents → `config/backfill_stock_pool.yaml` | <1min |
 | `pangu backfill bars --start 2019-01-01 --force --pool config/backfill_stock_pool.yaml` | Re-fetch all daily bars with extended fields | ~4-7h (~18s/stock) |
-| `pangu backfill fundamentals --start 2019-01-01` | Backfill quarterly fundamentals from AkShare | ~2h |
+| `pangu backfill fundamentals --start 2019-01-01` | Backfill quarterly fundamentals + gross_margin + pub_dates (PIT) | ~4-5h |
 | `pangu backfill index --start 2019-01-01` | Backfill index daily bars (default: CSI300) | <1min |
-| `pangu compute-factors` | Compute 169 Alpha158 factors → `data/factors.parquet` | ~10min |
+| `pangu compute-factors` | Compute 177 Alpha158 factors → `data/factors.parquet` | ~10min |
 | `pangu train walkforward` | Walk-Forward LightGBM training → `data/score_matrix.parquet` | ~30min |
 | `pangu backtest --strategy lgb --scores data/score_matrix.parquet` | Run backtest on score matrix | <1min |
 | `pangu evaluate-scores --scores data/score_matrix.parquet` | Score quality diagnostics | <10s |

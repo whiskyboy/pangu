@@ -104,6 +104,46 @@ class BaoStockFundamentalProvider:
 
     # -- Protocol methods --
 
+    def fetch_pub_dates(
+        self, symbol: str, start_year: int | None = None,
+    ) -> dict[str, str]:
+        """Return mapping of report_date → pub_date for each quarter.
+
+        Uses ``query_profit_data`` which returns both ``statDate``
+        (quarter-end) and ``pubDate`` (first announcement date).
+
+        Returns
+        -------
+        dict[str, str]
+            ``{report_date: pub_date}`` e.g. ``{"2024-03-31": "2024-04-27"}``.
+        """
+        bs_code = self._to_bs_code(symbol)
+
+        from pangu.tz import now as _now
+        current_year = _now().year
+        if start_year is None:
+            start_year = current_year - 1
+
+        result: dict[str, str] = {}
+        for year in range(start_year, current_year + 1):
+            for quarter in range(1, 5):
+                try:
+                    rs = self._query_with_retry(
+                        lambda y=year, q=quarter: self._bs.query_profit_data(
+                            bs_code, year=y, quarter=q,
+                        ),
+                    )
+                    df = self._query_to_df(rs)
+                    if not df.empty:
+                        r = df.iloc[0]
+                        stat_date = str(r.get("statDate", "")).strip()
+                        pub_date = str(r.get("pubDate", "")).strip()
+                        if stat_date and pub_date:
+                            result[stat_date] = pub_date
+                except Exception:  # noqa: BLE001
+                    logger.debug("pub_date query failed for %s %dQ%d", symbol, year, quarter)
+        return result
+
     def get_financial_indicator(
         self, symbol: str, start: str | None = None, end: str | None = None,
     ) -> pd.DataFrame:

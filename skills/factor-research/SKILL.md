@@ -188,6 +188,31 @@ Label computation:   label[T] = excess_return[T+1 : T+5]
 - `label[T] = ret[T:T+5]` — intentional for labels only, never for features ⛔
 - Using T's close for T's rebalance when execution is at T's open ⛔
 
+#### Data timeliness (PIT compliance)
+
+For quarterly factors (ROE, REVENUE_YOY, PROFIT_YOY, GROSS_MARGIN, etc.),
+the effective date (ffill start) must be the **announcement date** (`pub_date`),
+NOT the report period end date. Without PIT, Q4 annual reports can leak data
+up to ~94 days early.
+
+Verify:
+1. `fundamentals.pub_date IS NOT NULL` for all quarterly rows
+2. `pub_date >= date` for each row (announcement is after or on period-end)
+3. `load_fundamentals_filled()` delays quarterly values to `pub_date`
+4. Sample check: for 5 random stocks, verify `pub_date` matches BaoStock `pubDate`
+
+```bash
+# Quick PIT audit: check pub_date coverage
+uv run python -c "
+from pangu.data.storage import Database
+db = Database('data/pangu.db')
+db.init_tables()
+total = db._conn.execute('SELECT COUNT(*) FROM fundamentals WHERE roe_ttm IS NOT NULL').fetchone()[0]
+has_pub = db._conn.execute('SELECT COUNT(*) FROM fundamentals WHERE roe_ttm IS NOT NULL AND pub_date IS NOT NULL').fetchone()[0]
+print(f'PIT coverage: {has_pub}/{total} quarterly rows have pub_date ({has_pub/total*100:.1f}%)')
+"
+```
+
 ### Step 4: Test & Validate
 
 ```bash

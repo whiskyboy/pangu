@@ -82,4 +82,14 @@ async def _sync_domestic_market_impl(c: Components) -> None:
     except Exception:  # noqa: BLE001
         logger.warning("[T3] Gross margin sync failed", exc_info=True)
 
+    # Publication dates — incremental refresh for recent quarters (PIT)
+    try:
+        from pangu.tz import now as tz_now
+        pit_start = str(tz_now().year - 1)  # last year
+        pd_ok, pd_fail = c.fundamental.refresh_pub_dates(pool, pit_start + "-01-01")
+        if pd_ok > 0:
+            logger.info("[T3] Pub dates: %d stocks updated", pd_ok)
+    except Exception:  # noqa: BLE001
+        logger.warning("[T3] Pub dates sync failed", exc_info=True)
+
     logger.info("[T3] Done")

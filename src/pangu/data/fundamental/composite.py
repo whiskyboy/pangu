@@ -181,3 +181,46 @@ class CompositeFundamentalProvider:
                 logger.warning("Failed to fetch gross_margin for %s", q, exc_info=True)
                 fail += 1
         return ok, fail
+
+    # ------------------------------------------------------------------
+    # Publication date backfill via BaoStock
+    # ------------------------------------------------------------------
+
+    def refresh_pub_dates(
+        self, symbols: list[str], start: str,
+    ) -> tuple[int, int]:
+        """Backfill ``pub_date`` (first announcement date) for quarterly rows.
+
+        Creates a dedicated ``BaoStockFundamentalProvider`` internally —
+        BaoStock is the only source with reliable ``pubDate`` and is NOT
+        added to the main provider chain (to avoid it being used as a
+        fallback for ``get_financial_indicator``).
+
+        Parameters
+        ----------
+        symbols : list[str]
+            Stock symbols to process.
+        start : str
+            Start date in ``YYYY-MM-DD`` format (determines start_year).
+
+        Returns
+        -------
+        (ok_stocks, fail_stocks)
+        """
+        from pangu.data.fundamental.baostock import BaoStockFundamentalProvider
+
+        provider = BaoStockFundamentalProvider()
+        start_year = int(start[:4])
+        ok, fail = 0, 0
+        for sym in symbols:
+            try:
+                data = provider.fetch_pub_dates(sym, start_year=start_year)
+                if data:
+                    self._storage.update_pub_date_batch(sym, data)
+                    ok += 1
+                else:
+                    fail += 1
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to fetch pub_dates for %s", sym, exc_info=True)
+                fail += 1
+        return ok, fail

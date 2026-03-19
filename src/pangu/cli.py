@@ -364,6 +364,11 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     gm_ok, gm_fail = c.fundamental.refresh_gross_margin(start, today)
     click.echo(f"✅ gross_margin done: {gm_ok} quarters ok, {gm_fail} failed")
 
+    # Publication dates backfill via BaoStock (PIT fix)
+    click.echo(f"\nBackfilling pub_dates ({start} → today)...")
+    pd_ok, pd_fail = c.fundamental.refresh_pub_dates(pool, start)
+    click.echo(f"✅ pub_dates done: {pd_ok} ok, {pd_fail} failed")
+
 
 
 

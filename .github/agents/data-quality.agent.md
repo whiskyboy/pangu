@@ -75,12 +75,18 @@ Run ALL of these on every audit. Report each as ✅/🟡/🔴.
 - Check feature_infos in model files for `none` entries (= all-NaN features during training)
 - Flag any feature that was dead across all windows
 
+### 6. PIT compliance
+- All quarterly rows in `fundamentals` should have `pub_date` populated
+- `pub_date >= date` for each row (announcement date after or on report period end)
+- No quarterly factor should be ffilled before its `pub_date`
+- If `pub_date` coverage < 90%, flag as 🔴 Critical (look-ahead bias in 12 quarterly factors)
+
 ## Key tables to check
 
 | Table | Key Columns | Expected Coverage |
 |-------|-------------|-------------------|
 | `daily_bars` | open, close, volume, adj_factor, turn, is_st, tradestatus, preclose | OHLCV >99%, turn/is_st >95% (NULL for suspended days is OK) |
-| `fundamentals` | pe_ttm, pb, ps_ttm, pcf_ttm, market_cap (daily); roe_ttm, profit_yoy, gross_margin (quarterly) | Daily >95%, quarterly = sparse by design |
+| `fundamentals` | pe_ttm, pb, ps_ttm, pcf_ttm, market_cap (daily); roe_ttm, profit_yoy, gross_margin (quarterly); pub_date (PIT) | Daily >95%, quarterly = sparse by design, pub_date >90% |
 | `index_constituents` | index_code, symbol, date | Both 000300 and 000905 |
 | `data_sync_log` | provider, last_date | Check for stale syncs |
 

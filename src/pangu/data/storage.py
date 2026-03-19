@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     cashflow_to_profit  REAL,
     ps_ttm              REAL,
     pcf_ttm             REAL,
+    pub_date            TEXT,
     PRIMARY KEY (symbol, date)
 );
 
@@ -288,11 +289,12 @@ class Database:
         new_fund_cols = [
             "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
             "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
-            "cashflow_to_profit", "ps_ttm", "pcf_ttm",
+            "cashflow_to_profit", "ps_ttm", "pcf_ttm", "pub_date",
         ]
         for col in new_fund_cols:
             if col not in fund_cols:
-                self._conn.execute(f"ALTER TABLE fundamentals ADD COLUMN {col} REAL")
+                col_type = "TEXT" if col == "pub_date" else "REAL"
+                self._conn.execute(f"ALTER TABLE fundamentals ADD COLUMN {col} {col_type}")
         self._conn.commit()
 
         # Migrate daily_bars: add new columns if missing
@@ -731,7 +733,7 @@ class Database:
         "pe_ttm", "pb", "roe_ttm", "revenue_yoy", "profit_yoy", "market_cap",
         "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
         "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
-        "cashflow_to_profit", "ps_ttm", "pcf_ttm",
+        "cashflow_to_profit", "ps_ttm", "pcf_ttm", "pub_date",
     ]
 
     def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:
@@ -776,6 +778,29 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
+    def update_pub_date_batch(self, symbol: str, data: dict[str, str]) -> int:
+        """Batch update pub_date for a given symbol.
+
+        Parameters
+        ----------
+        symbol : str
+            Stock symbol.
+        data : dict[str, str]
+            Mapping of ``report_date → pub_date`` (both YYYY-MM-DD).
+
+        Returns number of rows affected.
+        """
+        if not data:
+            return 0
+        rows = [(pub, symbol, report) for report, pub in data.items()]
+        with self._lock:
+            cur = self._conn.executemany(
+                "UPDATE fundamentals SET pub_date = ? WHERE symbol = ? AND date = ?",
+                rows,
+            )
+            self._conn.commit()
+        return cur.rowcount
+
     def load_fundamentals(
         self, symbol: str, start: str, end: str
     ) -> pd.DataFrame:
@@ -805,6 +830,11 @@ class Database:
         quarterly — only present on quarter-end dates. This method fetches
         the latest quarterly row before *start* as a seed for ffill, so
         the first trading day always has values.
+
+        **PIT handling**: If a quarterly row has ``pub_date`` set and
+        ``pub_date > date``, the quarterly values are delayed — they
+        become effective only from ``pub_date`` onward, not from the
+        report period end date.
         """
         with self._lock:
             # Find the latest quarterly row before start (seed for ffill)
@@ -825,6 +855,53 @@ class Database:
 
         if df.empty:
             return df
+
+        # PIT (Point-in-Time): delay quarterly data to announcement date.
+        #
+        # Without PIT, a Q1 report (period-end 2024-03-31, announced 2024-04-27)
+        # would be ffilled starting from 03-31 — 27 days before anyone could
+        # know the data. This loop moves each quarterly value from its
+        # report-date row to the first row on or after pub_date.
+        #
+        # Multi-quarter example (same stock):
+        #   Row 2023-12-31: Q4 roe=0.20, pub_date=2024-04-03
+        #   Row 2024-03-31: Q1 roe=0.15, pub_date=2024-04-27
+        #
+        # After this loop:
+        #   Row 2023-12-31: roe=NaN  (cleared — not yet announced)
+        #   Row 2024-03-31: roe=NaN  (cleared — not yet announced)
+        #   Row 2024-04-03: roe=0.20 (Q4 data lands here — first row ≥ pub_date)
+        #   Row 2024-04-27: roe=0.15 (Q1 data lands here)
+        #
+        # After ffill:
+        #   Dates before 2024-04-03 → NaN (or previous seed value)
+        #   2024-04-03 to 2024-04-26 → Q4 value (0.20)
+        #   2024-04-27 onward → Q1 value (0.15)
+        #
+        # Edge cases:
+        # - pub_date falls on non-trading day → value lands on next available row
+        # - pub_date beyond query range → value is dropped (not yet announced)
+        # - pub_date is NULL (no backfill yet) → no delay, ffill from report date
+        #   (backward compatible — behaves exactly as before PIT)
+        has_pub = "pub_date" in df.columns
+        if has_pub:
+            for idx in df.index:
+                pub = df.at[idx, "pub_date"]
+                row_date = df.at[idx, "date"]
+                if pd.notna(pub) and str(pub) > str(row_date):
+                    target_mask = df["date"] >= str(pub)
+                    if target_mask.any():
+                        target_idx = df.index[target_mask][0]
+                        for col in self._QUARTERLY_COLS:
+                            if col not in df.columns:
+                                continue
+                            val = df.at[idx, col]
+                            if pd.notna(val):
+                                # Later (more recent) quarter overwrites earlier
+                                # when both share the same pub_date
+                                df.at[target_idx, col] = val
+                                df.at[idx, col] = None
+
         for col in self._QUARTERLY_COLS:
             if col in df.columns:
                 df[col] = df[col].ffill()

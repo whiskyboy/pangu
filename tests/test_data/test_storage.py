@@ -555,6 +555,125 @@ class TestFundamentals:
         """Empty data dict is a no-op."""
         assert db.update_gross_margin_batch("2024-03-31", {}) == 0
 
+    # ------------------------------------------------------------------
+    # pub_date / PIT tests
+    # ------------------------------------------------------------------
+
+    def test_update_pub_date_batch(self, db: Database) -> None:
+        """Batch pub_date update writes to existing quarterly rows."""
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-03-31", "2024-06-30"],
+            "roe_ttm": [0.15, 0.18],
+        }))
+        data = {"2024-03-31": "2024-04-27", "2024-06-30": "2024-08-25"}
+        n = db.update_pub_date_batch("600519", data)
+        assert n == 2
+        loaded = db.load_fundamentals("600519", "2024-03-31", "2024-06-30")
+        assert loaded.iloc[0]["pub_date"] == "2024-04-27"
+        assert loaded.iloc[1]["pub_date"] == "2024-08-25"
+
+    def test_update_pub_date_batch_empty(self, db: Database) -> None:
+        """Empty data dict is a no-op."""
+        assert db.update_pub_date_batch("600519", {}) == 0
+
+    def test_load_fundamentals_filled_pit_delays_quarterly(self, db: Database) -> None:
+        """PIT: quarterly values delayed to pub_date, not available from report date."""
+        # Q1 2024 report (period-end 2024-03-31, announced 2024-04-27)
+        rows = pd.DataFrame({
+            "date": [
+                "2024-03-29", "2024-03-31", "2024-04-01", "2024-04-26",
+                "2024-04-27", "2024-04-28",
+            ],
+            "pe_ttm": [25.0, 25.5, 26.0, 27.0, 27.5, 28.0],
+            "roe_ttm": [None, 0.15, None, None, None, None],
+            "pub_date": [None, "2024-04-27", None, None, None, None],
+        })
+        db.save_fundamentals("600519", rows)
+        filled = db.load_fundamentals_filled("600519", "2024-03-29", "2024-04-28")
+
+        # Before pub_date (2024-04-27): ROE should NOT be available
+        assert pd.isna(filled.loc[filled["date"] == "2024-03-29", "roe_ttm"].iloc[0])
+        assert pd.isna(filled.loc[filled["date"] == "2024-03-31", "roe_ttm"].iloc[0])
+        assert pd.isna(filled.loc[filled["date"] == "2024-04-01", "roe_ttm"].iloc[0])
+        assert pd.isna(filled.loc[filled["date"] == "2024-04-26", "roe_ttm"].iloc[0])
+
+        # From pub_date onward: ROE should be 0.15
+        assert filled.loc[filled["date"] == "2024-04-27", "roe_ttm"].iloc[0] == pytest.approx(0.15)
+        assert filled.loc[filled["date"] == "2024-04-28", "roe_ttm"].iloc[0] == pytest.approx(0.15)
+
+    def test_load_fundamentals_filled_pit_pub_date_not_in_rows(self, db: Database) -> None:
+        """PIT: when pub_date falls on a non-trading day, values go to next available row."""
+        # pub_date 2024-04-27 is Saturday — next trading day is 2024-04-29
+        rows = pd.DataFrame({
+            "date": ["2024-03-31", "2024-04-26", "2024-04-29"],
+            "pe_ttm": [25.0, 26.0, 27.0],
+            "roe_ttm": [0.15, None, None],
+            "pub_date": ["2024-04-27", None, None],
+        })
+        db.save_fundamentals("600519", rows)
+        filled = db.load_fundamentals_filled("600519", "2024-03-31", "2024-04-29")
+
+        # 03-31 and 04-26 should NOT have ROE (pub_date is after)
+        assert pd.isna(filled.loc[filled["date"] == "2024-03-31", "roe_ttm"].iloc[0])
+        assert pd.isna(filled.loc[filled["date"] == "2024-04-26", "roe_ttm"].iloc[0])
+
+        # 04-29 (first row >= pub_date 04-27) should have ROE
+        assert filled.loc[filled["date"] == "2024-04-29", "roe_ttm"].iloc[0] == pytest.approx(0.15)
+
+    def test_load_fundamentals_filled_pit_no_pub_date_falls_back(self, db: Database) -> None:
+        """Without pub_date, quarterly ffill works as before (backward compatible)."""
+        rows = pd.DataFrame({
+            "date": ["2024-03-31", "2024-04-01", "2024-04-02"],
+            "pe_ttm": [25.0, 25.5, 26.0],
+            "roe_ttm": [0.15, None, None],
+            # no pub_date column or all NULL
+        })
+        db.save_fundamentals("600519", rows)
+        filled = db.load_fundamentals_filled("600519", "2024-03-31", "2024-04-02")
+
+        # Without PIT, ffill from report date as before
+        assert filled.iloc[0]["roe_ttm"] == pytest.approx(0.15)
+        assert filled.iloc[1]["roe_ttm"] == pytest.approx(0.15)
+        assert filled.iloc[2]["roe_ttm"] == pytest.approx(0.15)
+
+    def test_load_fundamentals_filled_pit_same_pub_date(self, db: Database) -> None:
+        """PIT: when Q3 and Q4 share the same pub_date, newer quarter wins."""
+        rows = pd.DataFrame({
+            "date": ["2024-09-30", "2024-12-31", "2025-04-27", "2025-04-28"],
+            "pe_ttm": [20.0, 21.0, 22.0, 23.0],
+            "roe_ttm": [0.18, 0.20, None, None],
+            "pub_date": ["2025-04-27", "2025-04-27", None, None],
+        })
+        db.save_fundamentals("600519", rows)
+        filled = db.load_fundamentals_filled("600519", "2024-09-30", "2025-04-28")
+
+        # Before pub_date: both Q3 and Q4 not yet announced
+        assert pd.isna(filled.loc[filled["date"] == "2024-09-30", "roe_ttm"].iloc[0])
+        assert pd.isna(filled.loc[filled["date"] == "2024-12-31", "roe_ttm"].iloc[0])
+
+        # On pub_date: Q4 (newer, roe=0.20) should overwrite Q3 (roe=0.18)
+        assert filled.loc[filled["date"] == "2025-04-27", "roe_ttm"].iloc[0] == pytest.approx(0.20)
+        assert filled.loc[filled["date"] == "2025-04-28", "roe_ttm"].iloc[0] == pytest.approx(0.20)
+
+    def test_load_fundamentals_filled_pit_seed_with_pub_date(self, db: Database) -> None:
+        """PIT: seed row from before range is still used correctly."""
+        # Old Q4 data with pub_date already passed
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2023-12-31"],
+            "roe_ttm": [0.20],
+            "pub_date": ["2024-04-03"],  # announced before our query range
+        }))
+        # Daily rows in May 2024
+        db.save_fundamentals("600519", pd.DataFrame({
+            "date": ["2024-05-01", "2024-05-02"],
+            "pe_ttm": [25.0, 25.5],
+        }))
+        filled = db.load_fundamentals_filled("600519", "2024-05-01", "2024-05-02")
+
+        # Seed pub_date 2024-04-03 < query start 2024-05-01 → data already available
+        assert filled.iloc[0]["roe_ttm"] == pytest.approx(0.20)
+        assert filled.iloc[1]["roe_ttm"] == pytest.approx(0.20)
+
 
 # ------------------------------------------------------------------
 # close
