@@ -137,7 +137,7 @@ class CompositeFundamentalProvider:
     # ------------------------------------------------------------------
 
     def refresh_gross_margin(
-        self, start: str, end: str, *, incremental: bool = False,
+        self, start: str, end: str,
     ) -> tuple[int, int]:
         """Backfill gross_margin from ``stock_yjbb_em`` API (per-quarter batch).
 
@@ -145,8 +145,6 @@ class CompositeFundamentalProvider:
         ----------
         start, end : str
             Date range in ``YYYY-MM-DD`` format.
-        incremental : bool
-            If True, only fetch the last 2 quarters (for routine use).
 
         Returns
         -------
@@ -162,8 +160,6 @@ class CompositeFundamentalProvider:
             return 0, 0
 
         quarters = quarter_dates(start, end)
-        if incremental:
-            quarters = quarters[-2:]
 
         ok, fail = 0, 0
         for q in quarters:
@@ -183,52 +179,50 @@ class CompositeFundamentalProvider:
         return ok, fail
 
     # ------------------------------------------------------------------
-    # Publication date backfill via BaoStock
+    # Publication date backfill via cninfo disclosure schedule
     # ------------------------------------------------------------------
 
     def refresh_pub_dates(
-        self, symbols: list[str], start: str,
+        self, start: str, end: str,
     ) -> tuple[int, int]:
         """Backfill ``pub_date`` (first announcement date) for quarterly rows.
 
-        Uses BaoStock ``query_profit_data`` which returns ``pubDate``.
-        Discovers the provider via ``hasattr`` (same pattern as
-        ``refresh_gross_margin``).
+        Uses cninfo ``stock_report_disclosure`` API via AkShare, which
+        returns all stocks for a given quarter in a single call.
 
         Parameters
         ----------
-        symbols : list[str]
-            Stock symbols to process.
-        start : str
-            Start date in ``YYYY-MM-DD`` format (determines start_year).
+        start, end : str
+            Date range in ``YYYY-MM-DD`` format.
 
         Returns
         -------
-        (ok_stocks, fail_stocks)
+        (ok_quarters, fail_quarters)
         """
         provider = None
         for p in self._providers:
-            if hasattr(p, "fetch_pub_dates"):
+            if hasattr(p, "fetch_pub_dates_batch"):
                 provider = p
                 break
         if provider is None:
-            logger.warning("No provider supports fetch_pub_dates")
+            logger.warning("No provider supports fetch_pub_dates_batch")
             return 0, 0
 
-        start_year = int(start[:4])
+        quarters = quarter_dates(start, end)
+
         ok, fail = 0, 0
-        total = len(symbols)
-        for i, sym in enumerate(symbols, 1):
+        for q in quarters:
             try:
-                data = provider.fetch_pub_dates(sym, start_year=start_year)
+                data = provider.fetch_pub_dates_batch(q)
                 if data:
-                    self._storage.update_pub_date_batch(sym, data)
+                    db_date = f"{q[:4]}-{q[4:6]}-{q[6:]}"
+                    affected = self._storage.update_pub_dates_by_quarter(db_date, data)
                     ok += 1
+                    logger.info("pub_dates %s: %d/%d stocks updated", q, affected, len(data))
                 else:
                     fail += 1
+                    logger.warning("pub_dates %s: empty response", q)
             except Exception:  # noqa: BLE001
-                logger.debug("Failed to fetch pub_dates for %s", sym, exc_info=True)
+                logger.warning("Failed to fetch pub_dates for %s", q, exc_info=True)
                 fail += 1
-            if i % 10 == 0 or i == total:
-                logger.info("pub_dates [%d/%d] ok=%d fail=%d", i, total, ok, fail)
         return ok, fail

@@ -130,3 +130,27 @@ def quarter_dates(start: str, end: str) -> list[str]:
             if start_d <= d <= end_d:
                 result.append(d.strftime("%Y%m%d"))
     return result
+
+
+_CNINFO_PERIOD_MAP = {
+    "0331": "一季",
+    "0630": "半年报",
+    "0930": "三季",
+    "1231": "年报",
+}
+
+
+def quarter_to_cninfo_period(quarter_date: str) -> str:
+    """Convert quarter-end date to cninfo period string.
+
+    >>> quarter_to_cninfo_period("20240331")
+    '2024一季'
+    >>> quarter_to_cninfo_period("20231231")
+    '2023年报'
+    """
+    year = quarter_date[:4]
+    suffix = quarter_date[4:]
+    label = _CNINFO_PERIOD_MAP.get(suffix)
+    if label is None:
+        raise ValueError(f"Not a quarter-end date: {quarter_date}")
+    return f"{year}{label}"

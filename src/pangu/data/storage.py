@@ -868,6 +868,29 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
+    def update_pub_dates_by_quarter(self, quarter_date: str, data: dict[str, str]) -> int:
+        """Batch update pub_date for all stocks in a given quarter.
+
+        Parameters
+        ----------
+        quarter_date : str
+            Quarter end date in ``YYYY-MM-DD`` format.
+        data : dict[str, str]
+            Mapping of ``symbol → pub_date``.
+
+        Returns number of rows affected.
+        """
+        if not data:
+            return 0
+        rows = [(pub, sym, quarter_date) for sym, pub in data.items()]
+        with self._lock:
+            cur = self._conn.executemany(
+                "UPDATE fundamentals SET pub_date = ? WHERE symbol = ? AND date = ?",
+                rows,
+            )
+            self._conn.commit()
+        return cur.rowcount
+
     def load_fundamentals(
         self, symbol: str, start: str, end: str
     ) -> pd.DataFrame:

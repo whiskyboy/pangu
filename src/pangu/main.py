@@ -37,7 +37,6 @@ load_env()
 from pangu.config import Settings, load_settings  # noqa: E402
 from pangu.data.fundamental import (  # noqa: E402
     AkShareFundamentalProvider,
-    BaoStockFundamentalProvider,
     CompositeFundamentalProvider,
 )
 from pangu.data.market import BaoStockMarketDataProvider, CompositeMarketDataProvider  # noqa: E402
@@ -84,9 +83,8 @@ def build_components() -> tuple[Components, str, Settings]:
     market = CompositeMarketDataProvider(storage=db, providers=[baostock_market])
     news = AkShareNewsDataProvider(storage=db)
     akshare_fund = AkShareFundamentalProvider()
-    baostock_fund = BaoStockFundamentalProvider()
     fundamental = CompositeFundamentalProvider(
-        storage=db, providers=[akshare_fund, baostock_fund],
+        storage=db, providers=[akshare_fund],
     )
 
     sys_cfg = settings.system

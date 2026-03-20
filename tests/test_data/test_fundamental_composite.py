@@ -85,10 +85,10 @@ class TestBackfillGrossMargin:
         orphan = db.load_fundamentals("999999", "2024-03-31", "2024-03-31")
         assert orphan.empty
 
-    def test_incremental_only_last_two(self, db: Database) -> None:
+    def test_narrow_range_only_fetches_covered_quarters(self, db: Database) -> None:
         import pandas as pd
 
-        # Pre-populate rows for Q3/Q4 only (incremental should only fetch those)
+        # Pre-populate rows for Q3/Q4 only
         db.save_fundamentals("600519", pd.DataFrame({
             "date": ["2024-09-30", "2024-12-31"], "pe_ttm": [30.0, 31.0],
         }))
@@ -99,8 +99,8 @@ class TestBackfillGrossMargin:
             "20241231": {"600519": 0.89},
         })
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
-        ok, fail = composite.refresh_gross_margin("2024-01-01", "2024-12-31", incremental=True)
-        # Should only fetch last 2 quarters (Q3, Q4)
+        # Narrow date range covers only Q3 and Q4
+        ok, fail = composite.refresh_gross_margin("2024-07-01", "2024-12-31")
         assert ok == 2
         assert fail == 0
 

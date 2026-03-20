@@ -103,8 +103,11 @@ class TestStorageVerification:
         assert updated[2] is None
 
     def test_get_signal_returns(self, db):
-        _insert_signal(db, "600001", "BUY", 10.0, "2026-02-17")
-        _insert_signal(db, "600002", "SELL", 20.0, "2026-02-17")
+        from pangu.utils import date_str
+
+        recent = date_str(days_ago=15)
+        _insert_signal(db, "600001", "BUY", 10.0, recent)
+        _insert_signal(db, "600002", "SELL", 20.0, recent)
 
         row1 = db._conn.execute("SELECT id FROM trade_signals WHERE symbol = '600001'").fetchone()
         row2 = db._conn.execute("SELECT id FROM trade_signals WHERE symbol = '600002'").fetchone()

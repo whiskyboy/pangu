@@ -102,6 +102,44 @@ class AkShareFundamentalProvider(ThrottleMixin):
         "每股资本公积金(元)": "capital_reserve_per_share",
     }
 
+    def fetch_pub_dates_batch(self, quarter_date: str) -> dict[str, str]:
+        """Fetch first-announcement dates for all stocks via cninfo disclosure schedule.
+
+        Uses ``ak.stock_report_disclosure`` which returns the official
+        预约披露 data from 巨潮资讯 (cninfo.com.cn).  The ``实际披露``
+        field is the first disclosure date (not revision date).
+
+        Parameters
+        ----------
+        quarter_date : str
+            Quarter end date in ``YYYYMMDD`` format (e.g. ``"20240331"``).
+
+        Returns
+        -------
+        dict[str, str]
+            Mapping of ``symbol → pub_date`` (``YYYY-MM-DD``).
+        """
+        from pangu.utils import quarter_to_cninfo_period
+
+        period = quarter_to_cninfo_period(quarter_date)
+        self._throttle()
+        df = retry_call(
+            lambda: self._ak.stock_report_disclosure(market="沪深京", period=period),
+            circuit=self._circuit,
+        )
+        if df is None or df.empty:
+            return {}
+
+        result: dict[str, str] = {}
+        for _, row in df.iterrows():
+            code = str(row.get("股票代码", "")).strip()
+            pub = row.get("实际披露")
+            if not code or pub is None or (hasattr(pub, "__class__") and str(pub) == "NaT"):
+                continue
+            pub_str = pub.strftime("%Y-%m-%d") if hasattr(pub, "strftime") else str(pub)[:10]
+            result[code] = pub_str
+        return result
+
     def fetch_gross_margin_batch(self, quarter_date: str) -> dict[str, float]:
         """Fetch gross margin for all stocks for a given quarter via ``stock_yjbb_em``.
 
