@@ -125,6 +125,48 @@ class TestComputeLabels:
         labels = compute_labels(mock_storage, ["A", "B"], "2024-01-01", "2024-06-30")
         assert labels.notna().sum() > 0
 
+    def test_normalize_mean_zero_std_one(self, mock_storage):
+        """With normalize=True, per-day labels should have mean≈0, std≈1."""
+        pool = [f"S{i}" for i in range(30)]
+        labels = compute_labels(
+            mock_storage, pool, "2024-01-01", "2024-06-30",
+            normalize=True,
+        )
+        unstacked = labels.unstack("symbol")
+        daily_mean = unstacked.mean(axis=1).dropna()
+        daily_std = unstacked.std(axis=1).dropna()
+        assert daily_mean.abs().max() < 1e-10
+        assert daily_std.between(0.99, 1.01).all()
+
+    def test_normalize_false_raw_labels(self, mock_storage):
+        """With normalize=False, labels should be raw excess returns."""
+        pool = ["A", "B"]
+        raw = compute_labels(mock_storage, pool, "2024-01-01", "2024-06-30", normalize=False)
+        normed = compute_labels(mock_storage, pool, "2024-01-01", "2024-06-30", normalize=True)
+        # Raw labels should not have mean=0 per day (unless by coincidence)
+        # But normalized and raw should have same ranking
+        for date in raw.index.get_level_values("date").unique()[:5]:
+            r = raw.loc[date].dropna()
+            n = normed.loc[date].dropna()
+            if len(r) >= 2 and len(n) >= 2:
+                shared = r.index.intersection(n.index)
+                if len(shared) >= 2:
+                    assert r[shared].corr(n[shared]) == pytest.approx(1.0, abs=1e-10)
+
+    def test_normalize_preserves_ranking(self, mock_storage):
+        """Z-score is monotonic — ranking must be preserved."""
+        pool = [f"S{i}" for i in range(20)]
+        raw = compute_labels(mock_storage, pool, "2024-01-01", "2024-03-31", normalize=False)
+        normed = compute_labels(mock_storage, pool, "2024-01-01", "2024-03-31", normalize=True)
+        for date in raw.index.get_level_values("date").unique()[:10]:
+            r = raw.loc[date].dropna().sort_values()
+            n = normed.loc[date].dropna()
+            if len(r) >= 2:
+                n_aligned = n.reindex(r.index).dropna()
+                if len(n_aligned) >= 2:
+                    # Same ordering
+                    assert list(r.index) == list(n_aligned.sort_values().index)
+
 
 # ---------------------------------------------------------------------------
 # load_factor_panel

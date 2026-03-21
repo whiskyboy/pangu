@@ -159,10 +159,15 @@ def train() -> None:
               "Default params when not set: objective=mae, num_leaves=15, "
               "learning_rate=0.01, n_estimators=2000, subsample=0.8, "
               "colsample_bytree=0.8, min_child_samples=200, early_stopping=100")
+@click.option("--normalize-label/--no-normalize-label", default=False,
+              help="Cross-sectional z-score on labels (Qlib CSZScoreNorm). "
+              "Model learns relative outperformance instead of absolute excess returns. "
+              "(default: disabled)")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: int,
                           train_months: int, first_train_start: str,
-                          last_test_end: str, params_file: str | None) -> None:
+                          last_test_end: str, params_file: str | None,
+                          normalize_label: bool) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -193,6 +198,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         train_months=train_months,
         first_train_start=first_train_start,
         last_test_end=last_test_end,
+        normalize_label=normalize_label,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

@@ -160,6 +160,7 @@ def compute_labels(
     end: str,
     horizon: int = 5,
     winsorize: float | None = 0.2,
+    normalize: bool = False,
 ) -> pd.Series:
     """Compute forward N-day excess return labels.
 
@@ -179,6 +180,12 @@ def compute_labels(
     winsorize : float or None
         If set, clip labels to [-winsorize, +winsorize] to reduce
         the impact of extreme returns on MSE/MAE loss (default 0.2).
+    normalize : bool
+        If True, apply Qlib-style cross-sectional z-score to labels.
+        Each day's labels are standardized to mean=0, std=1 across all stocks,
+        so the model learns to predict relative outperformance rather than
+        absolute excess returns. Disabled by default — raw excess returns
+        perform better for Top-N selection strategies.
 
     Returns
     -------
@@ -226,6 +233,18 @@ def compute_labels(
     # Winsorize to reduce impact of extreme returns
     if winsorize is not None:
         label = label.clip(-winsorize, winsorize)
+
+    # Cross-sectional z-score (Qlib CSZScoreNorm on labels)
+    if normalize:
+        import numpy as np
+
+        unstacked = label.unstack("symbol")
+        cs_mean = unstacked.mean(axis=1)
+        cs_std = unstacked.std(axis=1).replace(0.0, np.nan)
+        unstacked = unstacked.sub(cs_mean, axis=0).div(cs_std, axis=0)
+        label = unstacked.stack(future_stack=True)
+        label.index.names = ["date", "symbol"]
+        label.name = "label"
 
     return label
 

@@ -185,12 +185,13 @@ def train_walk_forward(
     test_months: int = 3,
     first_train_start: str = "2020-01-01",
     last_test_end: str = "2025-12-31",
+    normalize_label: bool = False,
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
     Steps:
     1. Load/compute factor panel (166 cols) for full date range
-    2. Compute N-day excess return labels
+    2. Compute N-day excess return labels (with optional CS z-score)
     3. For each window:
        a. Build train/val/test datasets (constituent-filtered)
        b. Train LGBModel with early stopping
@@ -199,6 +200,13 @@ def train_walk_forward(
        e. Log metrics (IC, Rank IC, Val MSE)
     4. Concatenate test scores → score_matrix (date × symbol)
     5. Save to parquet
+
+    Parameters
+    ----------
+    normalize_label : bool
+        If True, apply Qlib-style cross-sectional z-score to labels
+        before training. The model learns to predict relative outperformance
+        rather than absolute excess returns. Disabled by default.
 
     Returns
     -------
@@ -242,9 +250,13 @@ def train_walk_forward(
 
     # 2. Compute labels
     logger.info("Computing %d-day excess return labels...", label_horizon)
-    labels = compute_labels(storage, pool, global_start, global_end, horizon=label_horizon)
+    labels = compute_labels(
+        storage, pool, global_start, global_end,
+        horizon=label_horizon, normalize=normalize_label,
+    )
     n_valid = labels.notna().sum()
-    logger.info("Labels: %s valid / %s total", f"{n_valid:,}", f"{len(labels):,}")
+    logger.info("Labels: %s valid / %s total (normalize=%s)",
+                f"{n_valid:,}", f"{len(labels):,}", normalize_label)
 
     # 3. Walk-Forward training
     all_test_scores: list[pd.Series] = []
