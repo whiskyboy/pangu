@@ -88,7 +88,8 @@ class BacktestEngine:
     def __init__(
         self,
         *,
-        top_n: int = 10,
+        top_n: int = 30,
+        n_drop: int = 0,
         initial_capital: float = 1_000_000.0,
         stamp_tax: float = 0.001,
         commission: float = 0.0003,
@@ -96,6 +97,7 @@ class BacktestEngine:
         min_commission: float = 5.0,
     ) -> None:
         self._top_n = top_n
+        self._n_drop = n_drop
         self._capital = initial_capital
         self._stamp_tax = stamp_tax
         self._commission = commission
@@ -197,9 +199,9 @@ class BacktestEngine:
         benchmark_close = benchmark_close.sort_index()  # keep pre-start dates for base
 
         logger.info(
-            "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d",
+            "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d, n_drop=%d",
             dates[0].date(), dates[-1].date(), len(dates),
-            len(common_stocks), self._top_n,
+            len(common_stocks), self._top_n, self._n_drop,
         )
 
         # Forward-fill close prices so suspended stocks retain last-known value
@@ -298,7 +300,35 @@ class BacktestEngine:
                     prev_scores = prev_scores[prev_scores.index.isin(universe)]
 
                 if len(prev_scores) >= self._top_n:
-                    target = prev_scores.nlargest(self._top_n).index.tolist()
+                    if self._n_drop > 0 and holdings:
+                        # Qlib-style TopkDropout: sell the worst n_drop held
+                        # stocks, buy the best n_drop non-held stocks.
+                        # Portfolio size stays constant at top_n.
+                        held = set(holdings.keys())
+                        # Rank held stocks by current score
+                        held_scores = {
+                            s: prev_scores.get(s, float("-inf"))
+                            for s in held
+                        }
+                        sorted_held = sorted(
+                            held_scores, key=held_scores.get, reverse=True
+                        )
+                        # Keep the best (top_n - n_drop) held stocks
+                        n_keep = max(0, min(len(sorted_held), self._top_n - self._n_drop))
+                        kept = sorted_held[:n_keep]
+                        # Fill remaining slots from top-ranked non-held stocks
+                        n_buy = self._top_n - len(kept)
+                        top_ranked = prev_scores.nlargest(
+                            self._top_n + self._n_drop + n_buy
+                        )
+                        kept_set = set(kept)
+                        to_buy = [
+                            s for s in top_ranked.index
+                            if s not in kept_set
+                        ][:n_buy]
+                        target = kept + to_buy
+                    else:
+                        target = prev_scores.nlargest(self._top_n).index.tolist()
                 else:
                     target = prev_scores.sort_values(ascending=False).index.tolist()
 

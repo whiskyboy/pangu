@@ -400,7 +400,10 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
               help="Strategy to backtest")
 @click.option("--start", default="2022-01-01", help="Start date")
 @click.option("--end", default="2025-12-31", help="End date")
-@click.option("--top-n", default=10, type=int, help="TopN stocks to hold")
+@click.option("--top-n", default=30, type=int, help="TopN stocks to hold (default: 30)")
+@click.option("--n-drop", default=10, type=int,
+              help="TopkDropout: stocks to drop and replace each rebalance (default: 10). "
+              "Set to 0 to disable dropout and use pure top-N replacement.")
 @click.option("--capital", default=1_000_000, type=float, help="Initial capital (CNY)")
 @click.option("--stamp-tax", default=0.001, type=float,
               help="Sell stamp tax rate (default: 0.001)")
@@ -417,7 +420,8 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
               help="Generate equity curve chart (default: --plot)")
 @click.option("--plot-output", default=None,
               help="Chart output path (default: data/backtest_{strategy}_{date}.png)")
-def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float,
+def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
+                 capital: float,
                  stamp_tax: float, commission: float, slippage: float,
                  exclude_prefixes: str,
                  pool_file: str | None, scores_path: str | None,
@@ -529,7 +533,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
 
     # Run backtest with dynamic constituents
     engine = BacktestEngine(
-        top_n=top_n, initial_capital=capital,
+        top_n=top_n, n_drop=n_drop, initial_capital=capital,
         stamp_tax=stamp_tax, commission=commission, slippage=slippage,
     )
     result = engine.run(scores, open_prices, close_prices, bench_close,
@@ -539,7 +543,8 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, capital: float
 
     # Print results
     click.echo(f"\n{'='*60}")
-    click.echo(f"Backtest Result: {strategy} ({start} ~ {end}, TopN={top_n})")
+    dropout_str = f", n_drop={n_drop}" if n_drop > 0 else ""
+    click.echo(f"Backtest Result: {strategy} ({start} ~ {end}, TopN={top_n}{dropout_str})")
     click.echo(f"{'='*60}")
     for k, v in result.metrics.items():
         if isinstance(v, float):
