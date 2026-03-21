@@ -163,11 +163,16 @@ def train() -> None:
               help="Cross-sectional z-score on labels (Qlib CSZScoreNorm). "
               "Model learns relative outperformance instead of absolute excess returns. "
               "(default: disabled)")
+@click.option("--mode", type=click.Choice(["regression", "ranking"]), default="regression",
+              help="Training mode: regression (MAE, default) or ranking (LambdaRank NDCG)")
+@click.option("--n-bins", default=10, type=int,
+              help="Number of relevance bins for ranking mode (default: 10 = decile). "
+              "Ignored in regression mode.")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: int,
                           train_months: int, first_train_start: str,
                           last_test_end: str, params_file: str | None,
-                          normalize_label: bool) -> None:
+                          normalize_label: bool, mode: str, n_bins: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -199,6 +204,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         first_train_start=first_train_start,
         last_test_end=last_test_end,
         normalize_label=normalize_label,
+        mode=mode,
+        n_bins=n_bins,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

@@ -250,6 +250,69 @@ def compute_labels(
 
 
 # ---------------------------------------------------------------------------
+# LambdaRank helpers
+# ---------------------------------------------------------------------------
+
+def discretize_labels(labels: pd.Series, n_bins: int = 10) -> pd.Series:
+    """Per-day percentile discretization for LambdaRank.
+
+    Converts continuous excess returns into integer relevance grades 0..n_bins-1.
+    Each day independently: rank stocks → divide into n_bins equal groups.
+    Distribution is uniform by construction (each bin ≈ 1/n_bins of stocks).
+
+    LGBMRanker requires non-negative integer labels; continuous floats cause
+    a Fatal error in the C++ core.
+
+    Parameters
+    ----------
+    labels : Series with MultiIndex(date, symbol)
+        Continuous labels (e.g. excess returns).
+    n_bins : int
+        Number of relevance grades (default 10 = decile).
+
+    Returns
+    -------
+    Series with same index, integer values 0..n_bins-1, name="label".
+    NaN labels remain NaN.
+    """
+    import numpy as np
+
+    unstacked = labels.unstack("symbol")
+    ranked = unstacked.rank(axis=1, pct=True, na_option="keep")
+    # pct=True gives values in (0, 1]; multiply by n_bins and floor
+    # clip to n_bins-1 to handle the exact 1.0 case
+    binned = (ranked * n_bins).apply(np.floor).clip(upper=n_bins - 1)
+    # Preserve NaN where original labels were NaN
+    binned = binned.where(unstacked.notna())
+    stacked = binned.stack(future_stack=True).astype("Int32")
+    stacked.index.names = ["date", "symbol"]
+    stacked.name = "label"
+    # unstack/stack can introduce new (date, symbol) combinations for sparse panels;
+    # restrict to the original index to keep alignment with X
+    return stacked.reindex(labels.index)
+
+
+def compute_groups(index: pd.MultiIndex) -> list[int]:
+    """Return per-day sample counts for LambdaRank group parameter.
+
+    LGBMRanker requires a ``group`` list where each element is the number
+    of samples in one query (= one trading day). The list must be ordered
+    chronologically and its sum must equal the total number of samples.
+
+    The input index MUST be sorted by date (level 0). Raises ValueError
+    if dates are not in non-decreasing order.
+    """
+    dates = index.get_level_values("date")
+    # Verify data is sorted by date — LGBMRanker requires contiguous groups
+    if not dates.is_monotonic_increasing:
+        raise ValueError(
+            "Index must be sorted by date for LambdaRank groups. "
+            "Call .sort_index(level='date') first."
+        )
+    return dates.value_counts().sort_index().tolist()
+
+
+# ---------------------------------------------------------------------------
 # Window dataset builder
 # ---------------------------------------------------------------------------
 

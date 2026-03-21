@@ -18,7 +18,9 @@ from scipy import stats
 
 from pangu.ml.dataset import (
     build_window_datasets,
+    compute_groups,
     compute_labels,
+    discretize_labels,
     generate_walk_forward_windows,
     load_factor_panel,
 )
@@ -42,6 +44,22 @@ DEFAULT_PARAMS: dict = {
 }
 EARLY_STOPPING_ROUNDS = 200
 MIN_ITERATIONS = 50
+
+RANKER_DEFAULT_PARAMS: dict = {
+    "objective": "lambdarank",
+    "metric": "ndcg",
+    "eval_at": [10, 30],
+    "num_leaves": 31,
+    "learning_rate": 0.05,
+    "n_estimators": 2000,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_samples": 100,
+    "lambdarank_truncation_level": 30,
+    "lambdarank_norm": True,
+    "random_state": 42,
+    "verbosity": -1,
+}
 
 
 class LGBModel:
@@ -133,6 +151,101 @@ class LGBModel:
         return pd.Series(imp, index=names, name="importance").sort_values(ascending=False)
 
 
+class LGBRankerModel:
+    """LightGBM LambdaRank model for stock ranking.
+
+    Uses LGBMRanker with NDCG optimization. Requires integer relevance labels
+    (produced by ``discretize_labels()``) and per-day group sizes
+    (produced by ``compute_groups()``).
+    """
+
+    def __init__(self, params: dict | None = None):
+        self.params = {**RANKER_DEFAULT_PARAMS, **(params or {})}
+        self.model: lgb.LGBMRanker | None = None
+
+    def fit(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        groups_train: list[int],
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
+        groups_val: list[int],
+    ) -> dict:
+        """Train with early stopping on validation NDCG.
+
+        Returns dict with 'best_iteration' and 'val_ndcg'.
+        """
+        n_estimators = self.params.pop("n_estimators", 2000)
+        self.model = lgb.LGBMRanker(n_estimators=n_estimators, **self.params)
+        self.params["n_estimators"] = n_estimators  # restore
+
+        self.model.fit(
+            X_train, y_train,
+            group=groups_train,
+            eval_set=[(X_val, y_val)],
+            eval_group=[groups_val],
+            callbacks=[
+                lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False),
+                lgb.log_evaluation(period=0),
+            ],
+        )
+
+        best_iter = self.model.best_iteration_
+
+        # Guard against pathological early stopping
+        if best_iter < MIN_ITERATIONS and best_iter < n_estimators:
+            logger.info(
+                "  Early stop at %d < MIN_ITERATIONS=%d, retraining with %d rounds",
+                best_iter, MIN_ITERATIONS, MIN_ITERATIONS,
+            )
+            retrain_params = {k: v for k, v in self.params.items() if k != "n_estimators"}
+            self.model = lgb.LGBMRanker(n_estimators=MIN_ITERATIONS, **retrain_params)
+            self.model.fit(
+                X_train, y_train,
+                group=groups_train,
+                eval_set=[(X_val, y_val)],
+                eval_group=[groups_val],
+                callbacks=[lgb.log_evaluation(period=0)],
+            )
+            best_iter = MIN_ITERATIONS
+
+        return {"best_iteration": best_iter, "val_ndcg": float("nan")}
+
+    def predict(self, X: pd.DataFrame) -> pd.Series:
+        """Predict ranking scores. Returns Series with same index as X."""
+        if self.model is None:
+            raise RuntimeError("Model not trained. Call fit() first.")
+        preds = self.model.predict(X)
+        return pd.Series(preds, index=X.index, name="score")
+
+    def save(self, path: str) -> None:
+        """Save model to LightGBM native text format."""
+        if self.model is None:
+            raise RuntimeError("No model to save.")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.model.booster_.save_model(path)
+
+    @classmethod
+    def load(cls, path: str) -> "LGBRankerModel":
+        """Load model from file."""
+        obj = cls()
+        booster = lgb.Booster(model_file=path)
+        obj.model = lgb.LGBMRanker()
+        obj.model._Booster = booster
+        obj.model.fitted_ = True
+        obj.model._n_features = booster.num_feature()
+        return obj
+
+    def feature_importance(self) -> pd.Series:
+        """Return feature importance (gain-based), sorted descending."""
+        if self.model is None:
+            raise RuntimeError("No model.")
+        imp = self.model.feature_importances_
+        names = self.model.feature_name_
+        return pd.Series(imp, index=names, name="importance").sort_values(ascending=False)
+
+
 # ---------------------------------------------------------------------------
 # Per-window evaluation metrics
 # ---------------------------------------------------------------------------
@@ -186,6 +299,8 @@ def train_walk_forward(
     first_train_start: str = "2020-01-01",
     last_test_end: str = "2025-12-31",
     normalize_label: bool = False,
+    mode: str = "regression",
+    n_bins: int = 10,
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
@@ -194,7 +309,7 @@ def train_walk_forward(
     2. Compute N-day excess return labels (with optional CS z-score)
     3. For each window:
        a. Build train/val/test datasets (constituent-filtered)
-       b. Train LGBModel with early stopping
+       b. Train LGBModel or LGBRankerModel
        c. Predict test scores
        d. Save model
        e. Log metrics (IC, Rank IC, Val MSE)
@@ -205,13 +320,23 @@ def train_walk_forward(
     ----------
     normalize_label : bool
         If True, apply Qlib-style cross-sectional z-score to labels
-        before training. The model learns to predict relative outperformance
-        rather than absolute excess returns. Disabled by default.
+        before training. Disabled by default.
+    mode : str
+        Training mode: "regression" (default, MAE objective) or
+        "ranking" (LambdaRank NDCG objective). Ranking mode discretizes
+        labels into n_bins relevance grades and uses LGBMRanker.
+    n_bins : int
+        Number of relevance grade bins for ranking mode (default 10 = decile).
+        Ignored when mode="regression".
 
     Returns
     -------
     score_matrix : DataFrame (date × symbol), values = predicted scores.
     """
+    if mode not in ("regression", "ranking"):
+        raise ValueError(f"mode must be 'regression' or 'ranking', got '{mode}'")
+
+    is_ranking = mode == "ranking"
     windows = generate_walk_forward_windows(
         train_months=train_months,
         val_months=val_months,
@@ -223,8 +348,8 @@ def train_walk_forward(
     global_end = windows[-1].test_end
 
     logger.info(
-        "Walk-Forward: %d windows, train=%dmo, test covers %s ~ %s",
-        len(windows), train_months, windows[0].test_start, global_end,
+        "Walk-Forward: %d windows, train=%dmo, mode=%s, test covers %s ~ %s",
+        len(windows), train_months, mode, windows[0].test_start, global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -284,10 +409,22 @@ def train_walk_forward(
         )
 
         # Train
-        model = LGBModel(params)
-        fit_info = model.fit(X_train, y_train, X_val, y_val)
+        if is_ranking:
+            # Discretize labels for LambdaRank (per-day percentile → 0..n_bins-1)
+            y_train_rank = discretize_labels(y_train, n_bins=n_bins)
+            y_val_rank = discretize_labels(y_val, n_bins=n_bins)
+            groups_train = compute_groups(X_train.index)
+            groups_val = compute_groups(X_val.index)
+            model = LGBRankerModel(params)
+            fit_info = model.fit(
+                X_train, y_train_rank, groups_train,
+                X_val, y_val_rank, groups_val,
+            )
+        else:
+            model = LGBModel(params)
+            fit_info = model.fit(X_train, y_train, X_val, y_val)
 
-        # Predict test
+        # Predict test (IC always computed against original continuous labels)
         if not X_test.empty:
             test_scores = model.predict(X_test)
             all_test_scores.append(test_scores)
@@ -300,14 +437,22 @@ def train_walk_forward(
         metrics = {
             "window": w.window_id,
             "best_iter": fit_info["best_iteration"],
-            "val_mse": fit_info["val_mse"],
             **ic_metrics,
         }
+        if is_ranking:
+            metrics["val_ndcg"] = fit_info.get("val_ndcg", float("nan"))
+        else:
+            metrics["val_mse"] = fit_info.get("val_mse", float("nan"))
         window_metrics.append(metrics)
 
+        val_metric_str = (
+            f"val_ndcg={metrics.get('val_ndcg', float('nan')):.6f}"
+            if is_ranking else
+            f"val_mse={metrics.get('val_mse', float('nan')):.6f}"
+        )
         logger.info(
-            "  best_iter=%d  val_mse=%.6f  IC=%.4f  RankIC=%.4f",
-            metrics["best_iter"], metrics["val_mse"],
+            "  best_iter=%d  %s  IC=%.4f  RankIC=%.4f",
+            metrics["best_iter"], val_metric_str,
             metrics.get("ic_mean", float("nan")),
             metrics.get("rank_ic_mean", float("nan")),
         )
@@ -334,11 +479,15 @@ def train_walk_forward(
 
     # Summary
     metrics_df = pd.DataFrame(window_metrics)
-    logger.info("\n=== Walk-Forward Summary ===")
+    logger.info("\n=== Walk-Forward Summary (%s) ===", mode)
     logger.info("Windows: %d", len(metrics_df))
     logger.info("Mean IC: %.4f ± %.4f", metrics_df["ic_mean"].mean(), metrics_df["ic_mean"].std())
     logger.info("Mean Rank IC: %.4f ± %.4f",
                 metrics_df["rank_ic_mean"].mean(), metrics_df["rank_ic_mean"].std())
-    logger.info("Mean Val MSE: %.6f", metrics_df["val_mse"].mean())
+    if is_ranking:
+        if "val_ndcg" in metrics_df.columns:
+            logger.info("Mean Val NDCG: %.6f", metrics_df["val_ndcg"].mean())
+    elif "val_mse" in metrics_df.columns:
+        logger.info("Mean Val MSE: %.6f", metrics_df["val_mse"].mean())
 
     return score_matrix

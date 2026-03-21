@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pangu.ml.model import LGBModel, MIN_ITERATIONS, _compute_ic
+from pangu.ml.dataset import compute_groups, discretize_labels
+from pangu.ml.model import MIN_ITERATIONS, LGBModel, LGBRankerModel, _compute_ic
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -196,3 +197,100 @@ class TestComputeIC:
         metrics = _compute_ic(y_true, y_pred)
         # Should be close to 0 with random data
         assert abs(metrics["ic_mean"]) < 0.3
+
+
+# ---------------------------------------------------------------------------
+# LGBRankerModel
+# ---------------------------------------------------------------------------
+
+_RANKER_TEST_PARAMS = {
+    "num_leaves": 15,
+    "learning_rate": 0.05,
+    "min_child_samples": 20,
+    "n_estimators": 100,
+    "lambdarank_truncation_level": 10,
+}
+
+
+@pytest.fixture
+def ranker_data(synthetic_data):
+    """Discretized labels + groups for ranker tests."""
+    X, y = synthetic_data
+    y_rank = discretize_labels(y, n_bins=5)
+    dates = X.index.get_level_values("date").unique().sort_values()
+    train_dates = dates[:35]
+    val_dates = dates[35:]
+    X_train = X.loc[train_dates]
+    y_train = y_rank.loc[X_train.index]
+    X_val = X.loc[val_dates]
+    y_val = y_rank.loc[X_val.index]
+    groups_train = compute_groups(X_train.index)
+    groups_val = compute_groups(X_val.index)
+    return X_train, y_train, groups_train, X_val, y_val, groups_val
+
+
+class TestLGBRankerModel:
+    def test_fit_returns_metrics(self, ranker_data):
+        X_train, y_train, g_train, X_val, y_val, g_val = ranker_data
+        model = LGBRankerModel(_RANKER_TEST_PARAMS)
+        info = model.fit(X_train, y_train, g_train, X_val, y_val, g_val)
+        assert "best_iteration" in info
+        assert info["best_iteration"] > 0
+
+    def test_predict_shape(self, ranker_data):
+        X_train, y_train, g_train, X_val, y_val, g_val = ranker_data
+        model = LGBRankerModel(_RANKER_TEST_PARAMS)
+        model.fit(X_train, y_train, g_train, X_val, y_val, g_val)
+        preds = model.predict(X_val)
+        assert len(preds) == len(X_val)
+        assert preds.index.equals(X_val.index)
+
+    def test_predict_not_constant(self, ranker_data):
+        X_train, y_train, g_train, X_val, y_val, g_val = ranker_data
+        model = LGBRankerModel(_RANKER_TEST_PARAMS)
+        model.fit(X_train, y_train, g_train, X_val, y_val, g_val)
+        preds = model.predict(X_val)
+        assert preds.std() > 0.01
+
+    def test_save_load_roundtrip(self, ranker_data, tmp_path):
+        X_train, y_train, g_train, X_val, y_val, g_val = ranker_data
+        model = LGBRankerModel(_RANKER_TEST_PARAMS)
+        model.fit(X_train, y_train, g_train, X_val, y_val, g_val)
+        preds_before = model.predict(X_val)
+
+        path = str(tmp_path / "ranker.txt")
+        model.save(path)
+
+        loaded = LGBRankerModel.load(path)
+        preds_after = loaded.predict(X_val)
+        pd.testing.assert_series_equal(preds_before, preds_after, check_names=False)
+
+    def test_feature_importance(self, ranker_data):
+        X_train, y_train, g_train, X_val, y_val, g_val = ranker_data
+        model = LGBRankerModel(_RANKER_TEST_PARAMS)
+        model.fit(X_train, y_train, g_train, X_val, y_val, g_val)
+        imp = model.feature_importance()
+        assert len(imp) == X_train.shape[1]
+        assert imp.sum() > 0
+
+    def test_predict_before_fit_raises(self):
+        model = LGBRankerModel()
+        with pytest.raises(RuntimeError, match="not trained"):
+            model.predict(pd.DataFrame({"a": [1]}))
+
+    def test_ranking_correlates_with_true_returns(self, synthetic_data, ranker_data):
+        """Ranker predictions should correlate with true continuous returns."""
+        X, y_true = synthetic_data
+        X_train, y_train, g_train, X_val, y_val, g_val = ranker_data
+        model = LGBRankerModel(_RANKER_TEST_PARAMS)
+        model.fit(X_train, y_train, g_train, X_val, y_val, g_val)
+
+        dates = X.index.get_level_values("date").unique().sort_values()
+        val_dates = dates[35:]
+        X_val_full = X.loc[val_dates]
+        y_val_true = y_true.loc[X_val_full.index]
+        preds = model.predict(X_val_full)
+
+        # Compute Rank IC against continuous labels
+        ic_metrics = _compute_ic(y_val_true, preds)
+        assert ic_metrics["rank_ic_mean"] > 0.1  # should have meaningful signal
