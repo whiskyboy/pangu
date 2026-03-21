@@ -156,9 +156,9 @@ def train() -> None:
               "(default: 2025-12-31)")
 @click.option("--params-file", default=None, type=click.Path(exists=True),
               help="LightGBM params JSON file (overrides defaults). "
-              "Default params when not set: objective=mae, num_leaves=15, "
-              "learning_rate=0.01, n_estimators=2000, subsample=0.8, "
-              "colsample_bytree=0.8, min_child_samples=200, early_stopping=100")
+              "Default params when not set: objective=mae, num_leaves=31, "
+              "learning_rate=0.02, n_estimators=2000, subsample=0.8, "
+              "colsample_bytree=0.7, min_child_samples=100, early_stopping=200")
 @click.option("--normalize-label/--no-normalize-label", default=False,
               help="Cross-sectional z-score on labels (Qlib CSZScoreNorm). "
               "Model learns relative outperformance instead of absolute excess returns. "
@@ -168,11 +168,16 @@ def train() -> None:
 @click.option("--n-bins", default=10, type=int,
               help="Number of relevance bins for ranking mode (default: 10 = decile). "
               "Ignored in regression mode.")
+@click.option("--early-stop-metric", type=click.Choice(["mae", "rankic"]), default="mae",
+              help="Early stopping metric for regression mode: mae (default) or rankic "
+              "(daily Spearman rank correlation — aligns stopping with ranking quality). "
+              "Ignored in ranking mode.")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: int,
                           train_months: int, first_train_start: str,
                           last_test_end: str, params_file: str | None,
-                          normalize_label: bool, mode: str, n_bins: int) -> None:
+                          normalize_label: bool, mode: str, n_bins: int,
+                          early_stop_metric: str) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -206,6 +211,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         normalize_label=normalize_label,
         mode=mode,
         n_bins=n_bins,
+        early_stop_metric=early_stop_metric,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

@@ -33,17 +33,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_PARAMS: dict = {
     "objective": "mae",
     "metric": "mae",
-    "num_leaves": 15,
-    "learning_rate": 0.01,
+    "num_leaves": 31,
+    "learning_rate": 0.02,
     "n_estimators": 2000,
     "subsample": 0.8,
-    "colsample_bytree": 0.8,
-    "min_child_samples": 200,
+    "colsample_bytree": 0.7,
+    "min_child_samples": 100,
     "random_state": 42,
     "verbosity": -1,
 }
 EARLY_STOPPING_ROUNDS = 200
 MIN_ITERATIONS = 50
+VALID_EARLY_STOP_METRICS = ("mae", "rankic")
 
 RANKER_DEFAULT_PARAMS: dict = {
     "objective": "lambdarank",
@@ -62,11 +63,43 @@ RANKER_DEFAULT_PARAMS: dict = {
 }
 
 
+def _make_rankic_eval_metric(val_dates: np.ndarray):
+    """Create a RankIC evaluation metric for LightGBM early stopping.
+
+    Groups predictions by date and computes mean Spearman rank correlation.
+    This aligns early stopping with ranking quality rather than pointwise MAE.
+    """
+    unique_dates = np.unique(val_dates)
+    date_masks = []
+    for d in unique_dates:
+        mask = val_dates == d
+        if mask.sum() >= 5:
+            date_masks.append(mask)
+
+    def rankic_metric(y_true, y_pred):
+        rank_ics = []
+        for mask in date_masks:
+            t = y_true[mask]
+            p = y_pred[mask]
+            if np.std(t) < 1e-12 or np.std(p) < 1e-12:
+                continue
+            ric, _ = stats.spearmanr(t, p)
+            if not np.isnan(ric):
+                rank_ics.append(ric)
+        mean_ric = float(np.mean(rank_ics)) if rank_ics else 0.0
+        return "rankic", mean_ric, True
+
+    return rankic_metric
+
+
 class LGBModel:
     """LightGBM regression model wrapper."""
 
-    def __init__(self, params: dict | None = None):
+    def __init__(self, params: dict | None = None, early_stop_metric: str = "mae"):
+        if early_stop_metric not in VALID_EARLY_STOP_METRICS:
+            raise ValueError(f"early_stop_metric must be one of {VALID_EARLY_STOP_METRICS}")
         self.params = {**DEFAULT_PARAMS, **(params or {})}
+        self.early_stop_metric = early_stop_metric
         self.model: lgb.LGBMRegressor | None = None
 
     def fit(
@@ -79,9 +112,20 @@ class LGBModel:
         """Train with early stopping on validation set.
 
         Returns dict with 'best_iteration' and 'val_mse'.
+        When early_stop_metric='rankic', early stopping uses daily mean
+        Spearman rank correlation instead of MAE.
         """
         n_estimators = self.params.pop("n_estimators", 500)
-        self.model = lgb.LGBMRegressor(n_estimators=n_estimators, **self.params)
+
+        fit_kwargs: dict = {}
+        model_params = dict(self.params)
+
+        if self.early_stop_metric == "rankic":
+            val_dates = y_val.index.get_level_values("date").values
+            fit_kwargs["eval_metric"] = _make_rankic_eval_metric(val_dates)
+            model_params["metric"] = "None"
+
+        self.model = lgb.LGBMRegressor(n_estimators=n_estimators, **model_params)
         self.params["n_estimators"] = n_estimators  # restore
 
         self.model.fit(
@@ -91,6 +135,7 @@ class LGBModel:
                 lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False),
                 lgb.log_evaluation(period=0),
             ],
+            **fit_kwargs,
         )
 
         best_iter = self.model.best_iteration_
@@ -103,12 +148,13 @@ class LGBModel:
                 "  Early stop at %d < MIN_ITERATIONS=%d, retraining with %d rounds",
                 best_iter, MIN_ITERATIONS, MIN_ITERATIONS,
             )
-            retrain_params = {k: v for k, v in self.params.items() if k != "n_estimators"}
+            retrain_params = {k: v for k, v in model_params.items() if k != "n_estimators"}
             self.model = lgb.LGBMRegressor(n_estimators=MIN_ITERATIONS, **retrain_params)
             self.model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
                 callbacks=[lgb.log_evaluation(period=0)],
+                **fit_kwargs,
             )
             best_iter = MIN_ITERATIONS
 
@@ -301,6 +347,7 @@ def train_walk_forward(
     normalize_label: bool = False,
     mode: str = "regression",
     n_bins: int = 10,
+    early_stop_metric: str = "mae",
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
@@ -328,6 +375,11 @@ def train_walk_forward(
     n_bins : int
         Number of relevance grade bins for ranking mode (default 10 = decile).
         Ignored when mode="regression".
+    early_stop_metric : str
+        Metric for early stopping in regression mode: "mae" (default,
+        built-in MAE) or "rankic" (custom daily Spearman rank correlation).
+        RankIC aligns stopping with ranking quality rather than pointwise error.
+        Ignored when mode="ranking".
 
     Returns
     -------
@@ -348,8 +400,9 @@ def train_walk_forward(
     global_end = windows[-1].test_end
 
     logger.info(
-        "Walk-Forward: %d windows, train=%dmo, mode=%s, test covers %s ~ %s",
-        len(windows), train_months, mode, windows[0].test_start, global_end,
+        "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, test covers %s ~ %s",
+        len(windows), train_months, mode, early_stop_metric,
+        windows[0].test_start, global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -421,7 +474,7 @@ def train_walk_forward(
                 X_val, y_val_rank, groups_val,
             )
         else:
-            model = LGBModel(params)
+            model = LGBModel(params, early_stop_metric=early_stop_metric)
             fit_info = model.fit(X_train, y_train, X_val, y_val)
 
         # Predict test (IC always computed against original continuous labels)
