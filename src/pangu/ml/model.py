@@ -40,7 +40,8 @@ DEFAULT_PARAMS: dict = {
     "random_state": 42,
     "verbosity": -1,
 }
-EARLY_STOPPING_ROUNDS = 100
+EARLY_STOPPING_ROUNDS = 200
+MIN_ITERATIONS = 50
 
 
 class LGBModel:
@@ -75,6 +76,24 @@ class LGBModel:
         )
 
         best_iter = self.model.best_iteration_
+
+        # Guard against pathological early stopping: if model stopped before
+        # MIN_ITERATIONS, retrain without early stopping using MIN_ITERATIONS.
+        # Only trigger when early stopping fired (best_iter < n_estimators).
+        if best_iter < MIN_ITERATIONS and best_iter < n_estimators:
+            logger.info(
+                "  Early stop at %d < MIN_ITERATIONS=%d, retraining with %d rounds",
+                best_iter, MIN_ITERATIONS, MIN_ITERATIONS,
+            )
+            retrain_params = {k: v for k, v in self.params.items() if k != "n_estimators"}
+            self.model = lgb.LGBMRegressor(n_estimators=MIN_ITERATIONS, **retrain_params)
+            self.model.fit(
+                X_train, y_train,
+                eval_set=[(X_val, y_val)],
+                callbacks=[lgb.log_evaluation(period=0)],
+            )
+            best_iter = MIN_ITERATIONS
+
         val_pred = self.model.predict(X_val)
         val_mse = float(np.mean((y_val.values - val_pred) ** 2))
 
