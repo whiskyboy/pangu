@@ -475,6 +475,8 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
 @click.option("--scores", "scores_path", default=None,
               help="Parquet file with pre-computed scores (for lgb strategy)")
+@click.option("--score-smooth-halflife", default=0, type=click.IntRange(min=0),
+              help="EMA halflife (trading days) for temporal score smoothing. 0=disabled (default).")
 @click.option("--plot/--no-plot", default=True,
               help="Generate equity curve chart (default: --plot)")
 @click.option("--plot-output", default=None,
@@ -484,6 +486,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
                  stamp_tax: float, commission: float, slippage: float,
                  exclude_prefixes: str,
                  pool_file: str | None, scores_path: str | None,
+                 score_smooth_halflife: int,
                  plot: bool, plot_output: str | None) -> None:
     """Run local backtest for a given strategy."""
     from pangu.main import build_components, load_env
@@ -579,6 +582,11 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
     if scores is None or scores.empty:
         click.echo("ERROR: No scores computed")
         return
+
+    # Temporal EMA smoothing — reduces day-to-day ranking noise
+    if score_smooth_halflife > 0:
+        scores = scores.ewm(halflife=score_smooth_halflife, min_periods=1).mean()
+        click.echo(f"Applied EMA smoothing (halflife={score_smooth_halflife}d)")
 
     click.echo(f"Scores: {scores.shape}")
 

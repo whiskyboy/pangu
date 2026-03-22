@@ -57,6 +57,11 @@ def generate_walk_forward_windows(
 
     if step_months is None:
         step_months = test_months
+    elif step_months > test_months:
+        raise ValueError(
+            f"step_months ({step_months}) cannot exceed test_months ({test_months}). "
+            f"This would create gaps in score coverage."
+        )
 
     start = datetime.strptime(first_train_start, "%Y-%m-%d")
     cutoff = datetime.strptime(last_test_end, "%Y-%m-%d")
