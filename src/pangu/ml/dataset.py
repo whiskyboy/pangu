@@ -403,6 +403,7 @@ def build_window_datasets(
     window: WindowSplit,
     storage: "DataStorage",
     label_horizon: int = 5,
+    train_subsample_stride: int | None = None,
 ) -> dict[str, tuple[pd.DataFrame, pd.Series]]:
     """Build train/val/test datasets for one Walk-Forward window.
 
@@ -413,6 +414,16 @@ def build_window_datasets(
 
     For training data, the last ``label_horizon`` trading days are excluded
     to prevent data leakage (their labels use prices from the validation period).
+
+    Parameters
+    ----------
+    train_subsample_stride : int or None
+        If set, subsample training dates using random block sampling to reduce
+        label overlap redundancy. Dates are divided into non-overlapping blocks
+        of ``train_subsample_stride`` trading days, and one date is randomly
+        selected from each block. Typically set equal to ``label_horizon``
+        (e.g. 5 for 5-day labels) so consecutive selected dates have no label
+        overlap. Val and test splits are not affected.
 
     Returns
     -------
@@ -440,6 +451,18 @@ def build_window_datasets(
             if len(unique_dates) > label_horizon:
                 cutoff = unique_dates[-label_horizon]
                 subset = subset.loc[subset.index.get_level_values("date") < cutoff]
+
+        # Random block subsampling for training set to reduce label overlap
+        if split_name == "train" and train_subsample_stride and not subset.empty:
+            unique_dates = subset.index.get_level_values("date").unique().sort_values()
+            rng = np.random.RandomState(42)
+            sampled_dates = []
+            for block_start in range(0, len(unique_dates), train_subsample_stride):
+                block = unique_dates[block_start:block_start + train_subsample_stride]
+                sampled_dates.append(rng.choice(block))
+            subset = subset.loc[
+                subset.index.get_level_values("date").isin(sampled_dates)
+            ]
 
         if subset.empty:
             result[split_name] = (pd.DataFrame(), pd.Series(dtype="float64"))

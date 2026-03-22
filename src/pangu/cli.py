@@ -182,13 +182,19 @@ def train() -> None:
               help="Half-life in trading days for exponential time-decay sample weights. "
               "0 = no decay (uniform, default). Typical: 40 (~2mo), 80 (~4mo), 120 (~6mo). "
               "Recent samples get higher weight; oldest in 18mo window get ~0.12 with halflife=120.")
+@click.option("--train-subsample-stride", default=0, type=click.IntRange(min=0),
+              help="Random block subsampling stride for training data. "
+              "0 = no subsampling (default). Divides training dates into blocks of this size "
+              "and randomly selects one date per block. Reduces label overlap redundancy. "
+              "Typically set equal to label horizon (e.g. 5 for 5-day labels).")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: str,
                           label_horizon_weights: str | None,
                           train_months: int, first_train_start: str,
                           last_test_end: str, params_file: str | None,
                           normalize_label: bool, mode: str, n_bins: int,
-                          early_stop_metric: str, time_decay_halflife: int) -> None:
+                          early_stop_metric: str, time_decay_halflife: int,
+                          train_subsample_stride: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -259,6 +265,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         n_bins=n_bins,
         early_stop_metric=early_stop_metric,
         time_decay_halflife=time_decay_halflife,
+        train_subsample_stride=train_subsample_stride or None,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

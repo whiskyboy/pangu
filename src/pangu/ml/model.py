@@ -360,6 +360,7 @@ def train_walk_forward(
     n_bins: int = 10,
     early_stop_metric: str = "mae",
     time_decay_halflife: int = 0,
+    train_subsample_stride: int | None = None,
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
@@ -403,6 +404,10 @@ def train_walk_forward(
         0 = no decay (uniform weights, default). Typical values:
         40 (~2 months), 80 (~4 months), 120 (~6 months).
         Only applied to training samples; validation is always unweighted.
+    train_subsample_stride : int or None
+        If set, subsample training dates using random block sampling.
+        Dates are divided into blocks of this size; one random date per block.
+        Reduces label overlap redundancy. Typically equals label_horizon.
 
     Returns
     -------
@@ -432,9 +437,10 @@ def train_walk_forward(
 
     logger.info(
         "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, "
-        "time_decay_halflife=%dd, labels=%s, test covers %s ~ %s",
+        "time_decay_halflife=%dd, train_subsample_stride=%s, labels=%s, test covers %s ~ %s",
         len(windows), train_months, mode, early_stop_metric,
-        time_decay_halflife, horizon_desc, windows[0].test_start, global_end,
+        time_decay_halflife, train_subsample_stride or "none",
+        horizon_desc, windows[0].test_start, global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -485,6 +491,7 @@ def train_walk_forward(
         # where N = max horizon (e.g. 20d labels peek 20 days ahead)
         datasets = build_window_datasets(
             panel, labels, w, storage, label_horizon=max_horizon,
+            train_subsample_stride=train_subsample_stride,
         )
         X_train, y_train = datasets["train"]
         X_val, y_val = datasets["val"]
