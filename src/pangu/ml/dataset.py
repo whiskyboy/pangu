@@ -42,15 +42,21 @@ def generate_walk_forward_windows(
     train_months: int = 18,
     val_months: int = 3,
     test_months: int = 3,
+    step_months: int | None = None,
     first_train_start: str = "2020-01-01",
     last_test_end: str = "2025-12-31",
 ) -> list[WindowSplit]:
     """Generate Walk-Forward window date ranges.
 
-    Each window slides forward by ``test_months`` months.
-    Generates all windows whose test_end ≤ ``last_test_end``.
+    Each window slides forward by ``step_months`` months (default: same as
+    ``test_months``).  When ``step_months < test_months``, test periods
+    overlap and the same date may be scored by multiple windows — the caller
+    is responsible for averaging the overlapping predictions.
     """
     from dateutil.relativedelta import relativedelta
+
+    if step_months is None:
+        step_months = test_months
 
     start = datetime.strptime(first_train_start, "%Y-%m-%d")
     cutoff = datetime.strptime(last_test_end, "%Y-%m-%d")
@@ -58,7 +64,7 @@ def generate_walk_forward_windows(
 
     i = 0
     while True:
-        offset = relativedelta(months=test_months * i)
+        offset = relativedelta(months=step_months * i)
         t_start = start + offset
         t_end = t_start + relativedelta(months=train_months) - relativedelta(days=1)
         v_start = t_end + relativedelta(days=1)

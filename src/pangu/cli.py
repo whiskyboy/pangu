@@ -187,6 +187,10 @@ def train() -> None:
               "0 = no subsampling (default). Divides training dates into blocks of this size "
               "and randomly selects one date per block. Reduces label overlap redundancy. "
               "Typically set equal to label horizon (e.g. 5 for 5-day labels).")
+@click.option("--step-months", default=0, type=click.IntRange(min=0),
+              help="Sliding step between windows in months. "
+              "0 = same as test period (default, no overlap). "
+              "Set to 1 for overlapping ensemble: each month scored by 3 windows, averaged.")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: str,
                           label_horizon_weights: str | None,
@@ -194,7 +198,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           last_test_end: str, params_file: str | None,
                           normalize_label: bool, mode: str, n_bins: int,
                           early_stop_metric: str, time_decay_halflife: int,
-                          train_subsample_stride: int) -> None:
+                          train_subsample_stride: int, step_months: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -266,6 +270,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         early_stop_metric=early_stop_metric,
         time_decay_halflife=time_decay_halflife,
         train_subsample_stride=train_subsample_stride or None,
+        step_months=step_months or None,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

@@ -361,6 +361,7 @@ def train_walk_forward(
     early_stop_metric: str = "mae",
     time_decay_halflife: int = 0,
     train_subsample_stride: int | None = None,
+    step_months: int | None = None,
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
@@ -408,6 +409,11 @@ def train_walk_forward(
         If set, subsample training dates using random block sampling.
         Dates are divided into blocks of this size; one random date per block.
         Reduces label overlap redundancy. Typically equals label_horizon.
+    step_months : int or None
+        Sliding step between consecutive windows in months.
+        Default (None) equals test_months (no overlap).
+        Set to 1 for overlapping ensemble: each month is covered by
+        ``test_months`` windows and their scores are averaged.
 
     Returns
     -------
@@ -421,6 +427,7 @@ def train_walk_forward(
         train_months=train_months,
         val_months=val_months,
         test_months=test_months,
+        step_months=step_months,
         first_train_start=first_train_start,
         last_test_end=last_test_end,
     )
@@ -573,6 +580,12 @@ def train_walk_forward(
         raise ValueError("No test scores produced. Check data coverage.")
 
     combined = pd.concat(all_test_scores)
+
+    # When step_months < test_months, the same (date, symbol) may have
+    # predictions from multiple overlapping windows — average them.
+    if combined.index.duplicated().any():
+        combined = combined.groupby(level=["date", "symbol"]).mean()
+
     # Pivot to (date × symbol) — compatible with BacktestEngine.run(scores=...)
     score_matrix = combined.unstack(level="symbol")
     score_matrix.index = pd.to_datetime(score_matrix.index)
