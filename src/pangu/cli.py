@@ -145,8 +145,14 @@ def train() -> None:
 @click.option("--model-dir", default="models", help="Directory to save trained models")
 @click.option("--output", default="data/score_matrix.parquet", help="Score matrix output path")
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
-@click.option("--label-horizon", default=5, type=int,
-              help="Forward return horizon in trading days (default: 5)")
+@click.option("--label-horizon", default="5", type=str,
+              help="Forward return horizon(s) in trading days. Single int (e.g. '5') or "
+              "comma-separated for multi-horizon fusion (e.g. '5,10,20'). "
+              "Multi-horizon fuses raw excess returns across horizons, "
+              "aligning with TopkDropout strategies where holding periods vary.")
+@click.option("--label-horizon-weights", default=None, type=str,
+              help="Weights for multi-horizon fusion: comma-separated floats, e.g. '0.5,0.3,0.2'. "
+              "Must match --label-horizon length. Default: equal weights.")
 @click.option("--train-months", default=18, type=int,
               help="Training window length in months (default: 18)")
 @click.option("--first-train-start", default="2020-01-01",
@@ -177,7 +183,8 @@ def train() -> None:
               "0 = no decay (uniform, default). Typical: 40 (~2mo), 80 (~4mo), 120 (~6mo). "
               "Recent samples get higher weight; oldest in 18mo window get ~0.12 with halflife=120.")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
-                          pool_file: str | None, label_horizon: int,
+                          pool_file: str | None, label_horizon: str,
+                          label_horizon_weights: str | None,
                           train_months: int, first_train_start: str,
                           last_test_end: str, params_file: str | None,
                           normalize_label: bool, mode: str, n_bins: int,
@@ -185,6 +192,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
+    import math
 
     from pangu.main import build_components, load_env
     from pangu.ml.model import train_walk_forward
@@ -194,6 +202,39 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
     load_env()
     c, _, _ = build_components()
     storage = c.market._storage
+
+    # Parse horizon: single int or comma-separated list
+    parsed_horizon: int | list[int] = 5
+    parsed_weights: list[float] | None = None
+    parts = [h.strip() for h in label_horizon.split(",") if h.strip()]
+    if not parts:
+        raise click.BadParameter("--label-horizon cannot be empty", param_hint="label_horizon")
+    int_parts = [int(p) for p in parts]
+    if any(h <= 0 for h in int_parts):
+        raise click.BadParameter("All horizons must be positive integers", param_hint="label_horizon")
+    parsed_horizon = int_parts if len(int_parts) > 1 else int_parts[0]
+    if isinstance(parsed_horizon, list):
+        click.echo(f"Multi-horizon label fusion: {parsed_horizon}")
+
+    if label_horizon_weights:
+        if not isinstance(parsed_horizon, list):
+            raise click.BadParameter(
+                "--label-horizon-weights requires multi-horizon (e.g. --label-horizon 5,10,20)",
+                param_hint="label_horizon_weights",
+            )
+        parsed_weights = [float(w.strip()) for w in label_horizon_weights.split(",") if w.strip()]
+        if any(not math.isfinite(w) or w < 0 for w in parsed_weights):
+            raise click.BadParameter(
+                "All weights must be non-negative finite numbers", param_hint="label_horizon_weights"
+            )
+        if sum(parsed_weights) <= 0:
+            raise click.BadParameter("Weights must sum to a positive value", param_hint="label_horizon_weights")
+        if len(parsed_weights) != len(parsed_horizon):
+            raise click.BadParameter(
+                f"Weight count ({len(parsed_weights)}) must match horizon count ({len(parsed_horizon)})",
+                param_hint="label_horizon_weights",
+            )
+        click.echo(f"Horizon weights: {parsed_weights}")
 
     # Load custom LightGBM params from JSON file
     params = None
@@ -208,7 +249,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         model_dir=model_dir,
         output_path=output,
         params=params,
-        label_horizon=label_horizon,
+        label_horizon=parsed_horizon,
+        label_horizon_weights=parsed_weights,
         train_months=train_months,
         first_train_start=first_train_start,
         last_test_end=last_test_end,

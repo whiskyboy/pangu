@@ -159,7 +159,8 @@ def compute_labels(
     pool: list[str],
     start: str,
     end: str,
-    horizon: int = 5,
+    horizon: int | list[int] = 5,
+    horizon_weights: list[float] | None = None,
     winsorize: float | None = 0.2,
     normalize: bool = False,
 ) -> pd.Series:
@@ -169,15 +170,29 @@ def compute_labels(
     Uses forward-adjusted close prices (close × adj_factor) so that
     ex-dividend/split price gaps do not bias the return calculation.
 
+    When ``horizon`` is a list with multiple values (e.g. [5, 10, 20]),
+    multi-horizon label fusion is applied: weighted sum of raw excess
+    returns across horizons. Since horizon returns overlap (5d ⊂ 10d ⊂ 20d),
+    the raw sum naturally creates time-decay weighting:
+    days 1-5 counted 3x, days 6-10 counted 2x, days 11-20 counted 1x.
+
+    No z-score normalization is applied — preserving absolute return
+    magnitude is critical for Top-N selection strategies.
+
     Parameters
     ----------
     storage : DataStorage
     pool : list[str]
         Symbols to compute labels for.
     start, end : str
-        Date range. Note: last ``horizon`` trading days will have NaN labels.
-    horizon : int
+        Date range. Note: last ``max(horizon)`` trading days will have
+        NaN labels.
+    horizon : int or list[int]
         Forward return horizon in trading days (default 5).
+        Pass a list (e.g. [5, 10, 20]) for multi-horizon label fusion.
+    horizon_weights : list[float] or None
+        Weights for each horizon in multi-horizon fusion.
+        Must match length of ``horizon`` list. If None, equal weights.
     winsorize : float or None
         If set, clip labels to [-winsorize, +winsorize] to reduce
         the impact of extreme returns on MSE/MAE loss (default 0.2).
@@ -192,6 +207,25 @@ def compute_labels(
     -------
     Series with MultiIndex(date, symbol), name="label".
     """
+    # Resolve horizon to a list
+    horizon_list: list[int] = horizon if isinstance(horizon, list) else [horizon]
+    if not horizon_list:
+        raise ValueError("horizon cannot be empty")
+    if any(h <= 0 for h in horizon_list):
+        raise ValueError(f"All horizons must be positive integers, got {horizon_list}")
+    if len(horizon_list) > 1:
+        if horizon_weights is not None:
+            if len(horizon_weights) != len(horizon_list):
+                raise ValueError(
+                    f"horizon_weights length {len(horizon_weights)} != "
+                    f"horizons length {len(horizon_list)}"
+                )
+            paired = sorted(zip(horizon_list, horizon_weights))
+            horizon_list = [h for h, _ in paired]
+            horizon_weights = [w for _, w in paired]
+        else:
+            horizon_list = sorted(horizon_list)
+
     # Load stock close prices and adj_factor for forward-adjusted returns
     bar_frames = []
     for sym in pool:
@@ -210,35 +244,40 @@ def compute_labels(
     # Forward-adjusted close: eliminates ex-dividend/split price gaps
     fwd_adj_close = close_wide * adj_wide.ffill()
 
-    # Stock forward return (using forward-adjusted prices)
-    stock_ret = fwd_adj_close.shift(-horizon) / fwd_adj_close - 1
-
     # Benchmark (CSI300) forward return
     bench_df = storage.load_daily_bars("000300", start, end)
     if bench_df is None or bench_df.empty:
         raise ValueError("No CSI300 benchmark data. Run 'pangu backfill index' first.")
     bench_df["date"] = pd.to_datetime(bench_df["date"])
     bench_close = bench_df.set_index("date")["close"]
-    bench_ret = bench_close.shift(-horizon) / bench_close - 1
-    # Align to stock dates
-    bench_ret = bench_ret.reindex(close_wide.index)
 
-    # Excess return: stock - benchmark (broadcast across columns)
-    excess = stock_ret.sub(bench_ret, axis=0)
+    # Compute weighted sum of per-horizon excess returns.
+    # For single horizon this is just 1.0 × excess. For multi-horizon,
+    # overlapping horizons naturally create time-decay weighting
+    # (e.g. 5d+10d+20d: days 1-5 counted 3×, 6-10 counted 2×, 11-20 counted 1×).
+    weights = horizon_weights if horizon_weights is not None else [1.0] * len(horizon_list)
 
-    # Stack to MultiIndex Series
-    label = excess.stack(future_stack=True)
+    excess_parts = []
+    for h in horizon_list:
+        stock_ret = fwd_adj_close.shift(-h) / fwd_adj_close - 1
+        stock_ret = stock_ret.replace([np.inf, -np.inf], np.nan)
+        bench_ret = bench_close.shift(-h) / bench_close - 1
+        bench_ret = bench_ret.reindex(close_wide.index)
+        excess = stock_ret.sub(bench_ret, axis=0)
+
+        if winsorize is not None:
+            excess = excess.clip(-winsorize, winsorize)
+
+        excess_parts.append(excess)
+
+    fused = sum(w * e for w, e in zip(weights, excess_parts))
+
+    label = fused.stack(future_stack=True)
     label.index.names = ["date", "symbol"]
     label.name = "label"
 
-    # Winsorize to reduce impact of extreme returns
-    if winsorize is not None:
-        label = label.clip(-winsorize, winsorize)
-
     # Cross-sectional z-score (Qlib CSZScoreNorm on labels)
     if normalize:
-        import numpy as np
-
         unstacked = label.unstack("symbol")
         cs_mean = unstacked.mean(axis=1)
         cs_std = unstacked.std(axis=1).replace(0.0, np.nan)

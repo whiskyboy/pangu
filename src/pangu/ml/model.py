@@ -348,7 +348,8 @@ def train_walk_forward(
     model_dir: str = "models",
     output_path: str = "data/score_matrix.parquet",
     params: dict | None = None,
-    label_horizon: int = 5,
+    label_horizon: int | list[int] = 5,
+    label_horizon_weights: list[float] | None = None,
     train_months: int = 18,
     val_months: int = 3,
     test_months: int = 3,
@@ -379,6 +380,12 @@ def train_walk_forward(
     normalize_label : bool
         If True, apply Qlib-style cross-sectional z-score to labels
         before training. Disabled by default.
+    label_horizon : int or list[int]
+        Forward return horizon(s) in trading days (default 5).
+        Pass a list (e.g. [5, 10, 20]) for multi-horizon label fusion.
+    label_horizon_weights : list[float] or None
+        Weights for each horizon in multi-horizon fusion.
+        Must match length of ``label_horizon`` list. If None, equal weights.
     mode : str
         Training mode: "regression" (default, MAE objective) or
         "ranking" (LambdaRank NDCG objective). Ranking mode discretizes
@@ -415,11 +422,19 @@ def train_walk_forward(
     global_start = windows[0].train_start
     global_end = windows[-1].test_end
 
+    # Resolve horizon settings
+    horizon_list = label_horizon if isinstance(label_horizon, list) else [label_horizon]
+    max_horizon = max(horizon_list)
+    horizon_desc = (
+        f"multi-horizon {horizon_list}" if len(horizon_list) > 1
+        else f"{horizon_list[0]}-day"
+    )
+
     logger.info(
         "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, "
-        "time_decay_halflife=%dd, test covers %s ~ %s",
+        "time_decay_halflife=%dd, labels=%s, test covers %s ~ %s",
         len(windows), train_months, mode, early_stop_metric,
-        time_decay_halflife, windows[0].test_start, global_end,
+        time_decay_halflife, horizon_desc, windows[0].test_start, global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -444,10 +459,12 @@ def train_walk_forward(
     logger.info("Factor panel: %s rows × %d cols", f"{panel.shape[0]:,}", panel.shape[1])
 
     # 2. Compute labels
-    logger.info("Computing %d-day excess return labels...", label_horizon)
+    logger.info("Computing %s excess return labels...", horizon_desc)
     labels = compute_labels(
         storage, pool, global_start, global_end,
-        horizon=label_horizon, normalize=normalize_label,
+        horizon=label_horizon,
+        horizon_weights=label_horizon_weights,
+        normalize=normalize_label,
     )
     n_valid = labels.notna().sum()
     logger.info("Labels: %s valid / %s total (normalize=%s)",
@@ -464,7 +481,11 @@ def train_walk_forward(
             w.val_start, w.val_end, w.test_start, w.test_end,
         )
 
-        datasets = build_window_datasets(panel, labels, w, storage)
+        # Use max_horizon for leakage prevention: exclude last N days
+        # where N = max horizon (e.g. 20d labels peek 20 days ahead)
+        datasets = build_window_datasets(
+            panel, labels, w, storage, label_horizon=max_horizon,
+        )
         X_train, y_train = datasets["train"]
         X_val, y_val = datasets["val"]
         X_test, y_test = datasets["test"]
