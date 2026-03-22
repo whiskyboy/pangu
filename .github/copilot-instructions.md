@@ -88,6 +88,20 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Determinism:** All set/dict iterations in backtest code must use `sorted()` to ensure reproducible results regardless of PYTHONHASHSEED.
 
+### ML Training & Backtest
+
+**Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
+
+**LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=50`. These are the result of extensive experimentation. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
+
+**Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
+
+**Current baseline:** Sharpe 0.609, annualized return +10.5%, max drawdown -29.1%, mean RankIC 0.066, annual turnover 34x (backtest period 2022-01 ~ 2025-12).
+
+**IC-Sharpe paradox:** In our weak-signal regime (IC~0.03), improving IC/RankIC does NOT improve Sharpe. This is a verified finding across 10+ experiments — higher IC increases noise at the Top-30 selection boundary and causes excess turnover. Do not attempt model-layer optimizations aimed at boosting IC without understanding this tradeoff. See `docs/ml-experiments.md` for full evidence.
+
+**Experiment history:** All optimization experiments (13 total, 3 effective + 10 ineffective) are documented in `docs/ml-experiments.md` with detailed methods, results, and industry comparisons. Consult this document before proposing new optimization approaches — many obvious ideas have already been tried and failed.
+
 ### Code Style & Architecture
 
 **Protocol-driven architecture:** All layers use `typing.Protocol` for interfaces (not ABC). Data providers, strategies, LLM engine, notification — all define Protocol in `protocol.py` and implementations alongside. New implementations must satisfy the Protocol, not inherit from a base class.
