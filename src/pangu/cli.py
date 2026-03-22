@@ -172,12 +172,16 @@ def train() -> None:
               help="Early stopping metric for regression mode: mae (default) or rankic "
               "(daily Spearman rank correlation — aligns stopping with ranking quality). "
               "Ignored in ranking mode.")
+@click.option("--time-decay-halflife", default=0, type=click.IntRange(min=0),
+              help="Half-life in trading days for exponential time-decay sample weights. "
+              "0 = no decay (uniform, default). Typical: 40 (~2mo), 80 (~4mo), 120 (~6mo). "
+              "Recent samples get higher weight; oldest in 18mo window get ~0.12 with halflife=120.")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: int,
                           train_months: int, first_train_start: str,
                           last_test_end: str, params_file: str | None,
                           normalize_label: bool, mode: str, n_bins: int,
-                          early_stop_metric: str) -> None:
+                          early_stop_metric: str, time_decay_halflife: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -212,6 +216,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         mode=mode,
         n_bins=n_bins,
         early_stop_metric=early_stop_metric,
+        time_decay_halflife=time_decay_halflife,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -310,6 +311,47 @@ def compute_groups(index: pd.MultiIndex) -> list[int]:
             "Call .sort_index(level='date') first."
         )
     return dates.value_counts().sort_index().tolist()
+
+
+# ---------------------------------------------------------------------------
+# Sample weighting
+# ---------------------------------------------------------------------------
+
+def compute_time_decay_weights(
+    index: pd.MultiIndex,
+    halflife_days: int,
+) -> pd.Series:
+    """Compute exponential time-decay sample weights.
+
+    Recent samples get higher weight; older samples decay exponentially.
+    Weight formula: w(t) = 2^(-(t_max - t) / halflife_days)
+
+    At t_max (newest sample): weight = 1.0
+    At t_max - halflife: weight = 0.5
+    At t_max - 2*halflife: weight = 0.25
+
+    Parameters
+    ----------
+    index : MultiIndex(date, symbol)
+        Sample index from training data.
+    halflife_days : int
+        Decay half-life in **trading days**. Larger = slower decay.
+        Typical values: 40 (~2 months), 80 (~4 months), 120 (~6 months).
+
+    Returns
+    -------
+    Series with same index, float64 weights in (0, 1].
+    """
+    dates = index.get_level_values("date")
+    if halflife_days <= 0:
+        raise ValueError(f"halflife_days must be positive, got {halflife_days}")
+    unique_dates = np.sort(dates.unique())
+    date_to_ord = {d: i for i, d in enumerate(unique_dates)}
+    max_ord = len(unique_dates) - 1
+    ordinals = np.array([date_to_ord[d] for d in dates])
+    days_ago = (max_ord - ordinals).astype(np.float64)
+    weights = np.power(2.0, -days_ago / halflife_days)
+    return pd.Series(weights, index=index, name="weight")
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from pangu.ml.dataset import (
     build_window_datasets,
     compute_groups,
     compute_labels,
+    compute_time_decay_weights,
     discretize_labels,
     generate_walk_forward_windows,
     load_factor_panel,
@@ -108,12 +109,19 @@ class LGBModel:
         y_train: pd.Series,
         X_val: pd.DataFrame,
         y_val: pd.Series,
+        sample_weight: pd.Series | None = None,
     ) -> dict:
         """Train with early stopping on validation set.
 
         Returns dict with 'best_iteration' and 'val_mse'.
         When early_stop_metric='rankic', early stopping uses daily mean
         Spearman rank correlation instead of MAE.
+
+        Parameters
+        ----------
+        sample_weight : Series or None
+            Per-sample weights for training data (e.g. time-decay).
+            Validation set is always unweighted to keep evaluation objective.
         """
         n_estimators = self.params.pop("n_estimators", 500)
 
@@ -130,6 +138,7 @@ class LGBModel:
 
         self.model.fit(
             X_train, y_train,
+            sample_weight=sample_weight,
             eval_set=[(X_val, y_val)],
             callbacks=[
                 lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False),
@@ -152,6 +161,7 @@ class LGBModel:
             self.model = lgb.LGBMRegressor(n_estimators=MIN_ITERATIONS, **retrain_params)
             self.model.fit(
                 X_train, y_train,
+                sample_weight=sample_weight,
                 eval_set=[(X_val, y_val)],
                 callbacks=[lgb.log_evaluation(period=0)],
                 **fit_kwargs,
@@ -348,6 +358,7 @@ def train_walk_forward(
     mode: str = "regression",
     n_bins: int = 10,
     early_stop_metric: str = "mae",
+    time_decay_halflife: int = 0,
 ) -> pd.DataFrame:
     """Execute full Walk-Forward training.
 
@@ -380,6 +391,11 @@ def train_walk_forward(
         built-in MAE) or "rankic" (custom daily Spearman rank correlation).
         RankIC aligns stopping with ranking quality rather than pointwise error.
         Ignored when mode="ranking".
+    time_decay_halflife : int
+        Half-life in trading days for exponential time-decay sample weights.
+        0 = no decay (uniform weights, default). Typical values:
+        40 (~2 months), 80 (~4 months), 120 (~6 months).
+        Only applied to training samples; validation is always unweighted.
 
     Returns
     -------
@@ -400,9 +416,10 @@ def train_walk_forward(
     global_end = windows[-1].test_end
 
     logger.info(
-        "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, test covers %s ~ %s",
+        "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, "
+        "time_decay_halflife=%dd, test covers %s ~ %s",
         len(windows), train_months, mode, early_stop_metric,
-        windows[0].test_start, global_end,
+        time_decay_halflife, windows[0].test_start, global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -461,6 +478,15 @@ def train_walk_forward(
             len(X_train), len(X_val), len(X_test),
         )
 
+        # Compute sample weights (time decay)
+        train_weights = None
+        if time_decay_halflife > 0:
+            train_weights = compute_time_decay_weights(X_train.index, time_decay_halflife)
+            logger.info(
+                "  Time decay: halflife=%dd, weight range [%.3f, %.3f]",
+                time_decay_halflife, train_weights.min(), train_weights.max(),
+            )
+
         # Train
         if is_ranking:
             # Discretize labels for LambdaRank (per-day percentile → 0..n_bins-1)
@@ -475,7 +501,7 @@ def train_walk_forward(
             )
         else:
             model = LGBModel(params, early_stop_metric=early_stop_metric)
-            fit_info = model.fit(X_train, y_train, X_val, y_val)
+            fit_info = model.fit(X_train, y_train, X_val, y_val, sample_weight=train_weights)
 
         # Predict test (IC always computed against original continuous labels)
         if not X_test.empty:
