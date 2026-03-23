@@ -511,6 +511,25 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
 
     storage = c.market._storage
 
+    # For lgb strategy, load scores early to auto-align backtest date range
+    scores_df: pd.DataFrame | None = None
+    if strategy == "lgb":
+        if not scores_path:
+            click.echo("ERROR: --scores required for lgb strategy "
+                       "(e.g. data/score_matrix_val.parquet for tuning, "
+                       "data/score_matrix_test.parquet for final report)")
+            return
+        scores_df = pd.read_parquet(scores_path)
+        scores_df.index = pd.to_datetime(scores_df.index)
+        score_start = scores_df.index.min()
+        score_end = scores_df.index.max()
+        if score_start > pd.Timestamp(start):
+            start = score_start.strftime("%Y-%m-%d")
+            click.echo(f"WARNING: Aligned backtest start to score matrix start: {start}")
+        if score_end < pd.Timestamp(end):
+            end = score_end.strftime("%Y-%m-%d")
+            click.echo(f"WARNING: Aligned backtest end to score matrix end: {end}")
+
     # Pool: explicit YAML override → constituents union (default)
     if pool_file:
         pool = _load_pool_yaml(pool_file)
@@ -568,25 +587,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
         from pangu.backtest.scoring import compute_baseline_scores
         scores = compute_baseline_scores(all_bars, storage, start, end)
     elif strategy == "lgb":
-        if not scores_path:
-            click.echo("ERROR: --scores required for lgb strategy "
-                       "(e.g. data/score_matrix_val.parquet for tuning, "
-                       "data/score_matrix_test.parquet for final report)")
-            return
-        scores = pd.read_parquet(scores_path)
-        scores.index = pd.to_datetime(scores.index)
-        # Validate score coverage vs backtest range
-        score_start = scores.index.min().strftime("%Y-%m-%d")
-        score_end = scores.index.max().strftime("%Y-%m-%d")
-        if scores.index.min() > pd.Timestamp(start):
-            click.echo(f"WARNING: Score matrix starts at {score_start}, "
-                       f"but backtest starts at {start}. "
-                       f"Days before {score_start} will have no signals.")
-        if scores.index.max() < pd.Timestamp(end):
-            click.echo(f"WARNING: Score matrix ends at {score_end}, "
-                       f"but backtest ends at {end}. "
-                       f"Days after {score_end} will have no signals.")
-        # Filter to backtest date range
+        scores = scores_df
         scores = scores[(scores.index >= start) & (scores.index <= end)]
         click.echo(f"Loaded scores from {scores_path}: {scores.shape}")
     else:
