@@ -23,7 +23,7 @@ for review before proceeding.
 - Working directory: `trading-agent` project root
 - `data/pangu.db` with daily_bars and fundamentals
 - `data/factors.parquet` (compute first if missing)
-- `data/score_matrix_test.parquet` and `models/` (for importance analysis)
+- `data/score_matrix_val.parquet`, `data/score_matrix_test.parquet`, and `models/` (for importance analysis)
 - Package manager: `uv`
 
 ## Workflow A: Factor Analysis

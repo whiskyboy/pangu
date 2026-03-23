@@ -90,12 +90,22 @@ before proceeding to backtest. Ask user whether to continue or fix data first.
 
 ### Step 4: Backtest
 
-Run backtest using the trained model's score matrix.
+Run backtest using the trained model's score matrix. Use **val scores** for
+strategy tuning; test scores only for final reporting.
+
+Val and test score matrices cover different date ranges (determined by
+walk-forward window configuration). Always check the score matrix's time range
+first, then pass matching `--start` and `--end`:
 
 ```bash
+# Check score matrix date range
+python -c "import pandas as pd; s=pd.read_parquet('data/score_matrix_val.parquet'); print(s.index.min(), s.index.max())"
+
+# Strategy tuning (use val, pass matching dates)
 uv run pangu backtest \
   --strategy lgb \
-  --scores data/score_matrix_test.parquet
+  --scores data/score_matrix_val.parquet \
+  --start <val_start> --end <val_end>
 ```
 
 **Expected output:**

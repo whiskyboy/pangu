@@ -92,9 +92,9 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows. Each window trains 5 models with different seeds (``--n-seeds 5``, default) and averages their predictions. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
 
-**Val/Test separation:** Val scores (`score_matrix_val.parquet`) are for strategy selection and hyperparameter tuning. Test scores (`score_matrix_test.parquet`) are for final reporting only — **never use test scores to select strategies or tune hyperparameters**. This prevents overfitting to the test period.
+**Val/Test separation:** Val scores (`score_matrix_val.parquet`) are for strategy selection and hyperparameter tuning. Test scores (`score_matrix_test.parquet`) are for final reporting only — **never use test scores to select strategies or tune hyperparameters**. This prevents overfitting to the test period. Val and test score matrices cover different date ranges (determined by walk-forward window configuration). When backtesting, always check the score matrix's time range first and pass matching `--start` and `--end`. The CLI will auto-align if `--end` exceeds the score matrix, but explicit dates are preferred.
 
-**LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=50`. These are the result of extensive experimentation. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
+**LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=200`. These are the result of extensive experimentation. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
 
 **Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
 
@@ -151,8 +151,8 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 | `pangu backfill index --start 2019-01-01` | Backfill index daily bars (default: CSI300) | <1min |
 | `pangu compute-factors` | Compute 191 Alpha158 factors → `data/factors.parquet` | ~10min |
 | `pangu train walkforward` | Walk-Forward LightGBM training (5 seeds/window) → score matrices | ~2.5h |
-| `pangu backtest --strategy lgb --scores data/score_matrix_val.parquet` | Backtest on val scores (策略调参) | <1min |
-| `pangu backtest --strategy lgb --scores data/score_matrix_test.parquet` | Backtest on test scores (最终报告) | <1min |
+| `pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>` | Backtest on val scores (策略调参) | <1min |
+| `pangu backtest --strategy lgb --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>` | Backtest on test scores (最终报告) | <1min |
 | `pangu evaluate-scores --scores data/score_matrix_val.parquet` | Score quality diagnostics | <10s |
 | `pangu evaluate-models --model-dir models` | Model quality diagnostics (seed-averaged importance) | <10s |
 

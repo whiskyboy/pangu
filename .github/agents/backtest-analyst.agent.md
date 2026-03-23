@@ -32,7 +32,9 @@ Run the backtest and report key metrics:
 
 ```bash
 # Use val scores for strategy comparison/tuning; test scores only for final reporting
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet
+# First check score matrix date range, then pass matching --start/--end:
+#   python -c "import pandas as pd; s=pd.read_parquet('data/score_matrix_val.parquet'); print(s.index.min(), s.index.max())"
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
 ```
 
 | Metric | Value | Benchmark |
@@ -108,17 +110,21 @@ Compare LGB vs baseline to quantify ML value-add.
 ## Analysis commands
 
 ```bash
+# Score matrix date ranges differ between val and test. Always check first:
+#   python -c "import pandas as pd; s=pd.read_parquet('<path>'); print(s.index.min(), s.index.max())"
+# Then pass matching --start/--end to backtest.
+
 # Run backtest on val scores (strategy tuning/comparison)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
 
 # Run backtest on test scores (final reporting only — do NOT use for strategy selection)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_test.parquet
+uv run pangu backtest --strategy lgb --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>
 
 # Run baseline (factor-only) for comparison
 uv run pangu backtest --strategy baseline
 
 # Custom parameters (use val for tuning)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --top-n 20 --capital 2000000
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end> --top-n 20 --capital 2000000
 
 # Score diagnostics (use val for iterative analysis)
 uv run pangu evaluate-scores --scores data/score_matrix_val.parquet

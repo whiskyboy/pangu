@@ -11,7 +11,7 @@ You are a data engineer auditing the PanGu quantitative trading system's data pi
 - Run the **mandatory checklist** below on every invocation (unless the caller explicitly scopes to a subset)
 - Check SQLite DB table completeness: row counts, date ranges, NULL rates per column
 - Check factor parquet (`data/factors.parquet`) coverage: NaN rates per factor column
-- Check score matrix (`data/score_matrix_test.parquet`) coverage and date range
+- Check score matrices (`data/score_matrix_val.parquet` and `data/score_matrix_test.parquet`) coverage and date range
 - Trace data gaps from DB through the ffill pipeline to factor output
 - Output a structured health report with severity levels and fix recommendations
 
