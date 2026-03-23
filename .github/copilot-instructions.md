@@ -96,11 +96,13 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
 
-**Current baseline:** Sharpe 0.609, annualized return +10.5%, max drawdown -29.1%, mean RankIC 0.066, annual turnover 34x (backtest period 2022-01 ~ 2025-12).
+**Current baseline (multi-seed, 5 seeds):** Without time decay: Sharpe 0.447±0.108 (seed=42 gives 0.609 — an outlier). With time decay (halflife=120): Sharpe **0.629±0.043** (p=0.023 vs no-decay). Time decay is recommended but not yet the CLI default — pending val/test separation validation. Use `--time-decay-halflife 120` explicitly. Annual turnover ~34x, max drawdown ~26%.
+
+**Seed sensitivity:** LightGBM with IC~0.03 has CV=24% across seeds. **Always validate experiments with multiple seeds** (5 minimum, paired t-test). Single-seed comparisons are unreliable — they produced 3 false negatives (EMA, overlap ensemble) and 1 underestimate (time decay) in our experiment history.
 
 **IC-Sharpe paradox:** In our weak-signal regime (IC~0.03), improving IC/RankIC does NOT improve Sharpe. This is a verified finding across 10+ experiments — higher IC increases noise at the Top-30 selection boundary and causes excess turnover. Do not attempt model-layer optimizations aimed at boosting IC without understanding this tradeoff. See `docs/ml-experiments.md` for full evidence.
 
-**Experiment history:** All optimization experiments (13 total, 3 effective + 10 ineffective) are documented in `docs/ml-experiments.md` with detailed methods, results, and industry comparisons. Consult this document before proposing new optimization approaches — many obvious ideas have already been tried and failed.
+**Experiment history:** All optimization experiments (15 total across 3 phases + multi-seed validation) are documented in `docs/ml-experiments.md` with detailed methods, results, multi-seed statistical tests, and industry comparisons. Consult this document before proposing new optimization approaches — many obvious ideas have already been tried and validated/invalidated with paired t-tests.
 
 ### Code Style & Architecture
 
