@@ -54,13 +54,13 @@ Train LightGBM across all walk-forward windows (default: 18-month train +
 ```bash
 uv run pangu train walkforward \
   --factors data/factors.parquet \
-  --model-dir models \
+  --model-dir models
 ```
 
 **Expected output:**
-- Model files saved to `models/wf_window_*.txt` (one per window)
-- `data/score_matrix_test.parquet` and `data/score_matrix_val.parquet` created (date × symbol score matrices)
-- Per-window IC and Rank IC metrics printed to console
+- Model files saved to `models/wf_window_*_seed*.txt` (17 windows × 5 seeds = 85 files by default)
+- `data/score_matrix_test.parquet` and `data/score_matrix_val.parquet` created (date × symbol, seed-averaged scores)
+- Per-window IC and Rank IC metrics (computed on seed-averaged predictions) printed to console
 
 **After training, report these metrics to the user:**
 - Mean IC and Rank IC across all windows
@@ -140,6 +140,7 @@ The user may specify custom parameters. Map them to CLI flags:
 | "use custom params" | `--params-file <path>` |
 | "skip factor computation" | Omit Step 1, use existing `data/factors.parquet` |
 | "no plot" | `--no-plot` |
+| "use 5 seeds" | `--n-seeds 5` (CLI default) |
 
 ## Error Handling
 

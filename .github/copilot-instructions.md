@@ -90,7 +90,7 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 ### ML Training & Backtest
 
-**Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
+**Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows. Each window trains 5 models with different seeds (``--n-seeds 5``, default) and averages their predictions. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
 
 **Val/Test separation:** Val scores (`score_matrix_val.parquet`) are for strategy selection and hyperparameter tuning. Test scores (`score_matrix_test.parquet`) are for final reporting only — **never use test scores to select strategies or tune hyperparameters**. This prevents overfitting to the test period.
 
@@ -98,9 +98,9 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
 
-**Current baseline (multi-seed, 5 seeds):** Without time decay: Sharpe 0.447±0.108 (seed=42 gives 0.609 — an outlier). With time decay (halflife=120): Sharpe **0.629±0.043** (p=0.023 vs no-decay). Time decay is recommended but not yet the CLI default — pending val/test separation validation. Use `--time-decay-halflife 120` explicitly. Annual turnover ~34x, max drawdown ~26%.
+**Current baseline (n_seeds=5):** Without time decay: Sharpe 0.447±0.108 (single seed=42 gives 0.609 — an outlier). With time decay (halflife=120): Sharpe **0.629±0.043** (p=0.023 vs no-decay). Time decay is recommended but not yet the CLI default — pending val/test separation validation. Use `--time-decay-halflife 120` explicitly. Annual turnover ~34x, max drawdown ~26%.
 
-**Seed sensitivity:** LightGBM with IC~0.03 has CV=24% across seeds. **Always validate experiments with multiple seeds** (5 minimum, paired t-test). Single-seed comparisons are unreliable — they produced 3 false negatives (EMA, overlap ensemble) and 1 underestimate (time decay) in our experiment history.
+**Multi-seed ensemble:** `--n-seeds 5` (CLI default) trains 5 models per window with seeds 0–4, averaging predictions. This reduces seed variance ~√5 and produces stable, reproducible scores. Use `--n-seeds 1` only for quick experiments. For rigorous A/B testing of strategy changes, compare paired backtest results (both runs with `--n-seeds 5`).
 
 **IC-Sharpe paradox:** In our weak-signal regime (IC~0.03), improving IC/RankIC does NOT improve Sharpe. This is a verified finding across 10+ experiments — higher IC increases noise at the Top-30 selection boundary and causes excess turnover. Do not attempt model-layer optimizations aimed at boosting IC without understanding this tradeoff. See `docs/ml-experiments.md` for full evidence.
 
@@ -156,11 +156,11 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 | `pangu backfill fundamentals --start 2019-01-01` | Backfill quarterly fundamentals + gross_margin + pub_dates (PIT) | ~4-5h |
 | `pangu backfill index --start 2019-01-01` | Backfill index daily bars (default: CSI300) | <1min |
 | `pangu compute-factors` | Compute 191 Alpha158 factors → `data/factors.parquet` | ~10min |
-| `pangu train walkforward` | Walk-Forward LightGBM training → `data/score_matrix_test.parquet` + `score_matrix_val.parquet` | ~30min |
+| `pangu train walkforward` | Walk-Forward LightGBM training (5 seeds/window) → score matrices | ~2.5h |
 | `pangu backtest --strategy lgb --scores data/score_matrix_val.parquet` | Backtest on val scores (策略调参) | <1min |
 | `pangu backtest --strategy lgb --scores data/score_matrix_test.parquet` | Backtest on test scores (最终报告) | <1min |
 | `pangu evaluate-scores --scores data/score_matrix_val.parquet` | Score quality diagnostics | <10s |
-| `pangu evaluate-models --model-dir models` | Model quality diagnostics | <5s |
+| `pangu evaluate-models --model-dir models` | Model quality diagnostics (seed-averaged importance) | <10s |
 
 **Backfill operations:** Backfill is slow (bars ~4-7h, fundamentals ~2h) due to upstream API rate limiting. Use the `@backfill-manager` agent for planning, execution, monitoring, and verification. Key rules: use `screen` sessions (not Copilot `detach: true`), never kill mid-run (BaoStock TCP issues), run `constituents` first to get the full historical pool YAML.
 
@@ -181,4 +181,4 @@ Volumes: `./data:/app/data` (SQLite DB), `./config:/app/config` (settings/watchl
 - `data/factors.parquet` — Pre-computed 191-factor panel (~1.3GB)
 - `data/score_matrix_test.parquet` — Model predictions on test set (date × symbol)
 - `data/score_matrix_val.parquet` — Model predictions on validation set (date × symbol)
-- `models/wf_window_*.txt` — LightGBM model files (17 Walk-Forward windows)
+- `models/wf_window_*_seed*.txt` — LightGBM model files (17 windows × 5 seeds = 85 files by default)

@@ -19,16 +19,16 @@ from pangu.ml.model_evaluator import (
 
 
 @pytest.fixture
-def trained_boosters(tmp_path) -> list[tuple[int, lgb.Booster]]:
+def trained_boosters(tmp_path) -> list[tuple[int, list[lgb.Booster]]]:
     """Train 3 small LightGBM models and save as wf_window files.
 
-    Returns the loaded (window_id, Booster) list and also writes model files
+    Returns the loaded (window_id, [Booster]) list and also writes model files
     to tmp_path for load tests.
     """
     rng = np.random.default_rng(42)
     n_samples, n_features = 200, 10
     feature_names = [f"F{i}" for i in range(n_features)]
-    results: list[tuple[int, lgb.Booster]] = []
+    results: list[tuple[int, list[lgb.Booster]]] = []
 
     for wid in range(1, 4):
         X = rng.normal(size=(n_samples, n_features))
@@ -48,7 +48,7 @@ def trained_boosters(tmp_path) -> list[tuple[int, lgb.Booster]]:
 
         path = tmp_path / f"wf_window_{wid:02d}.txt"
         booster.save_model(str(path))
-        results.append((wid, booster))
+        results.append((wid, [booster]))
 
     return results
 
@@ -89,6 +89,33 @@ class TestLoadWindowBoosters:
         windows = _load_window_boosters(str(tmp_path))
         assert all(wid != 99 for wid, _ in windows)
 
+    def test_multi_seed_grouped(self, model_dir: str, trained_boosters, tmp_path) -> None:
+        """Multi-seed files should be grouped by window, not deduplicated."""
+        import shutil
+        for wid in range(1, 4):
+            src = tmp_path / f"wf_window_{wid:02d}.txt"
+            dst = tmp_path / f"wf_window_{wid:02d}_seed1.txt"
+            shutil.copy(str(src), str(dst))
+        windows = _load_window_boosters(model_dir)
+        assert len(windows) == 3
+        for _wid, boosters in windows:
+            assert len(boosters) == 2  # original + seed1
+
+    def test_seed_only_files(self, trained_boosters, tmp_path) -> None:
+        """When only seed-suffixed files exist, groups by window."""
+        import shutil
+        seed_dir = tmp_path / "seeds_only"
+        seed_dir.mkdir()
+        for wid in range(1, 4):
+            src = tmp_path / f"wf_window_{wid:02d}.txt"
+            for seed in range(3):
+                dst = seed_dir / f"wf_window_{wid:02d}_seed{seed}.txt"
+                shutil.copy(str(src), str(dst))
+        windows = _load_window_boosters(str(seed_dir))
+        assert len(windows) == 3
+        for _wid, boosters in windows:
+            assert len(boosters) == 3
+
 
 class TestGlobalImportance:
     def test_top_n_limit(self, trained_boosters) -> None:
@@ -127,6 +154,14 @@ class TestPerWindowSummary:
         summaries = _compute_per_window_summary(trained_boosters)
         for s in summaries:
             assert s["underfitting"] == (s["num_trees"] < MIN_TREES_THRESHOLD)
+
+    def test_multiseed_tree_range(self, trained_boosters) -> None:
+        """Multi-seed windows should report n_seeds and tree count range."""
+        multiseed = [(wid, boosters * 2) for wid, boosters in trained_boosters]
+        summaries = _compute_per_window_summary(multiseed)
+        for s in summaries:
+            assert s["n_seeds"] == 2
+            assert s["num_trees"] == s["num_trees_max"]  # identical boosters
 
 
 class TestFeatureDrift:

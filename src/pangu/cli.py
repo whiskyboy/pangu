@@ -192,6 +192,11 @@ def train() -> None:
               help="Sliding step between windows in months. "
               "0 = same as test period (default, no overlap). "
               "Set to 1 for overlapping ensemble: each month scored by 3 windows, averaged.")
+@click.option("--n-seeds", default=5, type=click.IntRange(min=1),
+              help="Number of random seeds per window for ensemble averaging. "
+              "Default 5: trains 5 models per window with seeds 0..4, "
+              "combines via simple averaging. Reduces seed variance ~sqrt(N). "
+              "Use 1 for quick experiments.")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: str,
                           label_horizon_weights: str | None,
@@ -199,7 +204,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           last_test_end: str, params_file: str | None,
                           normalize_label: bool, mode: str, n_bins: int,
                           early_stop_metric: str, time_decay_halflife: int,
-                          train_subsample_stride: int, step_months: int) -> None:
+                          train_subsample_stride: int, step_months: int,
+                          n_seeds: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -272,6 +278,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         time_decay_halflife=time_decay_halflife,
         train_subsample_stride=train_subsample_stride or None,
         step_months=step_months or None,
+        n_seeds=n_seeds,
     )
 
     click.echo("\n✅ Walk-Forward training complete")
@@ -280,7 +287,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
     if not score_matrix_val.empty:
         click.echo(f"  Val score matrix:  {score_matrix_val.shape[0]} days × {score_matrix_val.shape[1]} stocks")
     click.echo(f"  Output dir: {output}/")
-    click.echo(f"  Models: {model_dir}/wf_window_*.txt")
+    model_pattern = "wf_window_*_seed*.txt" if n_seeds > 1 else "wf_window_*.txt"
+    click.echo(f"  Models: {model_dir}/{model_pattern}")
 
 
 # ---------------------------------------------------------------------------

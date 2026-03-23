@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from pangu.ml.dataset import compute_groups, discretize_labels
-from pangu.ml.model import MIN_ITERATIONS, LGBModel, LGBRankerModel, _compute_ic
+from pangu.ml.model import MIN_ITERATIONS, LGBModel, LGBRankerModel, _average_seed_scores, _compute_ic
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -294,3 +294,78 @@ class TestLGBRankerModel:
         # Compute Rank IC against continuous labels
         ic_metrics = _compute_ic(y_val_true, preds)
         assert ic_metrics["rank_ic_mean"] > 0.1  # should have meaningful signal
+
+
+# ---------------------------------------------------------------------------
+# Rank-average scores
+# ---------------------------------------------------------------------------
+
+class TestAverageSeedScores:
+    def test_single_series_passthrough(self):
+        """Single series should be returned unchanged."""
+        idx = pd.MultiIndex.from_product(
+            [pd.to_datetime(["2024-01-01", "2024-01-02"]), ["A", "B", "C"]],
+            names=["date", "symbol"],
+        )
+        s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], index=idx, name="score")
+        result = _average_seed_scores([s])
+        pd.testing.assert_series_equal(result, s)
+
+    def test_identical_series_unchanged(self):
+        """Averaging identical series should return the same values."""
+        idx = pd.MultiIndex.from_product(
+            [pd.to_datetime(["2024-01-01"]), ["A", "B", "C"]],
+            names=["date", "symbol"],
+        )
+        s = pd.Series([10.0, 20.0, 30.0], index=idx, name="score")
+        result = _average_seed_scores([s, s])
+        pd.testing.assert_series_equal(result, s)
+
+    def test_simple_average(self):
+        """Two series should be element-wise averaged."""
+        idx = pd.MultiIndex.from_product(
+            [pd.to_datetime(["2024-01-01"]), ["A", "B", "C"]],
+            names=["date", "symbol"],
+        )
+        s1 = pd.Series([1.0, 2.0, 3.0], index=idx, name="score")
+        s2 = pd.Series([3.0, 2.0, 1.0], index=idx, name="score")
+        result = _average_seed_scores([s1, s2])
+        expected = pd.Series([2.0, 2.0, 2.0], index=idx, name="score")
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_preserves_ranking_with_agreement(self):
+        """When seeds agree on ranking, average preserves it."""
+        idx = pd.MultiIndex.from_product(
+            [pd.to_datetime(["2024-01-01", "2024-01-02"]), ["A", "B"]],
+            names=["date", "symbol"],
+        )
+        s1 = pd.Series([3.0, 1.0, 3.0, 1.0], index=idx, name="score")
+        s2 = pd.Series([5.0, 2.0, 4.0, 0.5], index=idx, name="score")
+        result = _average_seed_scores([s1, s2])
+        day1 = result.loc["2024-01-01"]
+        day2 = result.loc["2024-01-02"]
+        assert day1["A"] > day1["B"]
+        assert day2["A"] > day2["B"]
+
+    def test_preserves_index(self):
+        idx = pd.MultiIndex.from_product(
+            [pd.to_datetime(["2024-01-01", "2024-01-02"]), ["X", "Y"]],
+            names=["date", "symbol"],
+        )
+        s1 = pd.Series([1.0, 2.0, 3.0, 4.0], index=idx, name="score")
+        s2 = pd.Series([2.0, 1.0, 4.0, 3.0], index=idx, name="score")
+        result = _average_seed_scores([s1, s2])
+        assert result.index.equals(idx)
+        assert result.name == "score"
+
+    def test_three_seeds(self):
+        """Majority: 2 of 3 seeds rank A > B → average preserves it."""
+        idx = pd.MultiIndex.from_product(
+            [pd.to_datetime(["2024-01-01"]), ["A", "B"]],
+            names=["date", "symbol"],
+        )
+        s1 = pd.Series([10.0, 5.0], index=idx, name="score")  # A > B
+        s2 = pd.Series([10.0, 5.0], index=idx, name="score")  # A > B
+        s3 = pd.Series([5.0, 10.0], index=idx, name="score")  # B > A
+        result = _average_seed_scores([s1, s2, s3])
+        assert result.loc[("2024-01-01", "A")] > result.loc[("2024-01-01", "B")]

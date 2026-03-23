@@ -338,6 +338,20 @@ def _compute_ic(y_true: pd.Series, y_pred: pd.Series) -> dict:
     }
 
 
+def _average_seed_scores(scores_list: list[pd.Series]) -> pd.Series:
+    """Combine multiple seed predictions via simple averaging.
+
+    All seeds share the same model architecture and hyperparameters,
+    so raw scores are on the same scale — simple averaging preserves
+    magnitude (conviction) information while reducing seed variance.
+    """
+    if len(scores_list) == 1:
+        return scores_list[0]
+    combined = pd.concat(scores_list, axis=1).mean(axis=1)
+    combined.name = "score"
+    return combined
+
+
 # ---------------------------------------------------------------------------
 # Walk-Forward orchestrator
 # ---------------------------------------------------------------------------
@@ -362,6 +376,7 @@ def train_walk_forward(
     time_decay_halflife: int = 0,
     train_subsample_stride: int | None = None,
     step_months: int | None = None,
+    n_seeds: int = 1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Execute full Walk-Forward training.
 
@@ -417,6 +432,12 @@ def train_walk_forward(
         Default (None) equals test_months (no overlap).
         Set to 1 for overlapping ensemble: each month is covered by
         ``test_months`` windows and their scores are averaged.
+    n_seeds : int
+        Number of random seeds per window (default 1 = single model,
+        backward compatible).  When > 1, each window trains ``n_seeds``
+        models with ``random_state`` = 0, 1, …, n_seeds−1.  Per-window
+        scores are combined via simple averaging before any cross-window
+        aggregation (overlapping window averaging, etc.).
 
     Returns
     -------
@@ -425,6 +446,8 @@ def train_walk_forward(
     """
     if mode not in ("regression", "ranking"):
         raise ValueError(f"mode must be 'regression' or 'ranking', got '{mode}'")
+    if n_seeds < 1:
+        raise ValueError(f"n_seeds must be >= 1, got {n_seeds}")
 
     is_ranking = mode == "ranking"
     windows = generate_walk_forward_windows(
@@ -446,12 +469,13 @@ def train_walk_forward(
         else f"{horizon_list[0]}-day"
     )
 
+    seeds_desc = f", n_seeds={n_seeds}" if n_seeds > 1 else ""
     logger.info(
         "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, "
-        "time_decay_halflife=%dd, train_subsample_stride=%s, labels=%s, test covers %s ~ %s",
+        "time_decay_halflife=%dd, train_subsample_stride=%s, labels=%s%s, test covers %s ~ %s",
         len(windows), train_months, mode, early_stop_metric,
         time_decay_halflife, train_subsample_stride or "none",
-        horizon_desc, windows[0].test_start, global_end,
+        horizon_desc, seeds_desc, windows[0].test_start, global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -527,50 +551,77 @@ def train_walk_forward(
                 time_decay_halflife, train_weights.min(), train_weights.max(),
             )
 
-        # Train
+        # Pre-compute ranking artifacts (shared across seeds)
         if is_ranking:
-            # Discretize labels for LambdaRank (per-day percentile → 0..n_bins-1)
             y_train_rank = discretize_labels(y_train, n_bins=n_bins)
             y_val_rank = discretize_labels(y_val, n_bins=n_bins)
             groups_train = compute_groups(X_train.index)
             groups_val = compute_groups(X_val.index)
-            model = LGBRankerModel(params)
-            fit_info = model.fit(
-                X_train, y_train_rank, groups_train,
-                X_val, y_val_rank, groups_val,
-            )
-        else:
-            model = LGBModel(params, early_stop_metric=early_stop_metric)
-            fit_info = model.fit(X_train, y_train, X_val, y_val, sample_weight=train_weights)
 
-        # Predict test (IC always computed against original continuous labels)
-        if not X_test.empty:
-            test_scores = model.predict(X_test)
-            all_test_scores.append(test_scores)
-            test_ic = _compute_ic(y_test, test_scores)
+        # --- Train N seeds per window ---
+        seed_test_scores: list[pd.Series] = []
+        seed_val_scores: list[pd.Series] = []
+        seed_fit_infos: list[dict] = []
+
+        for seed in range(n_seeds):
+            seed_params = params
+            if n_seeds > 1:
+                seed_params = {**(params or {}), "random_state": seed}
+
+            if is_ranking:
+                model = LGBRankerModel(seed_params)
+                fit_info = model.fit(
+                    X_train, y_train_rank, groups_train,
+                    X_val, y_val_rank, groups_val,
+                )
+            else:
+                model = LGBModel(seed_params, early_stop_metric=early_stop_metric)
+                fit_info = model.fit(X_train, y_train, X_val, y_val, sample_weight=train_weights)
+
+            seed_fit_infos.append(fit_info)
+
+            if not X_test.empty:
+                seed_test_scores.append(model.predict(X_test))
+            if not X_val.empty:
+                seed_val_scores.append(model.predict(X_val))
+
+            suffix = f"_seed{seed}" if n_seeds > 1 else ""
+            model_path = str(Path(model_dir) / f"wf_window_{w.window_id:02d}{suffix}.txt")
+            model.save(model_path)
+
+            if n_seeds > 1:
+                logger.info("  Seed %d: best_iter=%d", seed, fit_info["best_iteration"])
+
+        # --- Combine seeds (simple average when multi-seed) ---
+        if seed_test_scores:
+            combined_test = _average_seed_scores(seed_test_scores) if n_seeds > 1 else seed_test_scores[0]
+            all_test_scores.append(combined_test)
+            test_ic = _compute_ic(y_test, combined_test)
         else:
             test_ic = {"ic_mean": np.nan, "rank_ic_mean": np.nan}
 
-        # Predict val (for strategy selection on val set)
-        if not X_val.empty:
-            val_scores = model.predict(X_val)
-            all_val_scores.append(val_scores)
-            val_ic = _compute_ic(y_val, val_scores)
+        if seed_val_scores:
+            combined_val = _average_seed_scores(seed_val_scores) if n_seeds > 1 else seed_val_scores[0]
+            all_val_scores.append(combined_val)
+            val_ic = _compute_ic(y_val, combined_val)
         else:
             val_ic = {"ic_mean": np.nan, "rank_ic_mean": np.nan}
 
+        best_iter_min = min(info["best_iteration"] for info in seed_fit_infos)
+        best_iter_max = max(info["best_iteration"] for info in seed_fit_infos)
         metrics = {
             "window": w.window_id,
-            "best_iter": fit_info["best_iteration"],
+            "best_iter_min": best_iter_min,
+            "best_iter_max": best_iter_max,
             "test_ic_mean": test_ic["ic_mean"],
             "test_rank_ic_mean": test_ic["rank_ic_mean"],
             "val_ic_mean": val_ic["ic_mean"],
             "val_rank_ic_mean": val_ic["rank_ic_mean"],
         }
         if is_ranking:
-            metrics["val_ndcg"] = fit_info.get("val_ndcg", float("nan"))
+            metrics["val_ndcg"] = float(np.mean([info.get("val_ndcg", float("nan")) for info in seed_fit_infos]))
         else:
-            metrics["val_mse"] = fit_info.get("val_mse", float("nan"))
+            metrics["val_mse"] = float(np.mean([info.get("val_mse", float("nan")) for info in seed_fit_infos]))
         window_metrics.append(metrics)
 
         val_metric_str = (
@@ -578,16 +629,15 @@ def train_walk_forward(
             if is_ranking else
             f"val_mse={metrics.get('val_mse', float('nan')):.6f}"
         )
+        iter_str = (f"best_iter={best_iter_min}~{best_iter_max}" if best_iter_min != best_iter_max
+                    else f"best_iter={best_iter_min}")
+        seed_label = f"Combined ({n_seeds} seeds): " if n_seeds > 1 else ""
         logger.info(
-            "  best_iter=%d  %s  test IC=%.4f  RankIC=%.4f  val IC=%.4f  RankIC=%.4f",
-            metrics["best_iter"], val_metric_str,
+            "  %s%s  %s  test IC=%.4f  RankIC=%.4f  val IC=%.4f  RankIC=%.4f",
+            seed_label, iter_str, val_metric_str,
             metrics["test_ic_mean"], metrics["test_rank_ic_mean"],
             metrics["val_ic_mean"], metrics["val_rank_ic_mean"],
         )
-
-        # Save model
-        model_path = str(Path(model_dir) / f"wf_window_{w.window_id:02d}.txt")
-        model.save(model_path)
 
     # 4. Assemble score matrices (test + val)
     if not all_test_scores or not all_val_scores:
@@ -622,7 +672,8 @@ def train_walk_forward(
 
     # Summary
     metrics_df = pd.DataFrame(window_metrics)
-    logger.info("\n=== Walk-Forward Summary (%s) ===", mode)
+    seeds_info = f", {n_seeds} seeds" if n_seeds > 1 else ""
+    logger.info("\n=== Walk-Forward Summary (%s%s) ===", mode, seeds_info)
     logger.info("Windows: %d", len(metrics_df))
     logger.info("Test  — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
                 metrics_df["test_ic_mean"].mean(), metrics_df["test_ic_mean"].std(),
