@@ -21,7 +21,7 @@ improvements — all with user review at each decision point.
 
 - Working directory: `trading-agent` project root
 - `data/factors.parquet` (191 factors, up to date)
-- Existing models in `models/` and `data/score_matrix.parquet` (for baseline comparison)
+- Existing models in `models/` and `data/score_matrix_test.parquet` (for baseline comparison)
 - Package manager: `uv`
 
 ## Workflow A: Diagnose Current Models
@@ -40,7 +40,7 @@ uv run pangu evaluate-models --model-dir models
 ### Step 2: Score Matrix Quality
 
 ```bash
-uv run pangu evaluate-scores --scores data/score_matrix.parquet
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 ```
 
 **Report to user:**
@@ -101,7 +101,7 @@ has a chance to learn meaningful patterns.)
 
 ```bash
 uv run pytest tests/ -k "model" -v
-uv run pangu train walkforward --factors data/factors.parquet --output data/score_matrix_v2.parquet
+uv run pangu train walkforward --factors data/factors.parquet --output data
 ```
 
 **Compare:** Per-window tree counts before vs after.
@@ -212,16 +212,16 @@ After any model change, always run this validation:
 # 1. Retrain
 uv run pangu train walkforward \
   --factors data/factors.parquet \
-  --output data/score_matrix_new.parquet
+  --output data
 
 # 2. Evaluate scores
-uv run pangu evaluate-scores --scores data/score_matrix_new.parquet
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 
 # 3. Evaluate models
 uv run pangu evaluate-models --model-dir models
 
 # 4. Backtest comparison
-uv run pangu backtest --strategy lgb --scores data/score_matrix_new.parquet
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet
 ```
 
 **Present comparison table:**
@@ -247,16 +247,16 @@ uv run pangu backtest --strategy lgb --scores data/score_matrix_new.parquet
 
 ```bash
 # Train all windows
-uv run pangu train walkforward --factors data/factors.parquet --output data/score_matrix.parquet
+uv run pangu train walkforward --factors data/factors.parquet --output data
 
 # Evaluate models
 uv run pangu evaluate-models --model-dir models
 
 # Evaluate scores
-uv run pangu evaluate-scores --scores data/score_matrix.parquet
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 
 # Backtest
-uv run pangu backtest --strategy lgb --scores data/score_matrix.parquet
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet
 
 # Run model tests
 uv run pytest tests/ -k "model or dataset" -v

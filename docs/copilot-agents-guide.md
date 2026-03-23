@@ -41,7 +41,7 @@ Skills（主对话中交互，需用户决策）
 - fundamentals 各列覆盖率（daily vs quarterly）
 - adj_factor 异常检测（常量 1.0 = 静默刷新失败）
 - factors.parquet NaN 率（尤其关注 fundamental 因子）
-- score_matrix.parquet 时效性
+- score_matrix_test.parquet / score_matrix_val.parquet 时效性
 - 模型 dead features 检测
 
 **使用时机：**

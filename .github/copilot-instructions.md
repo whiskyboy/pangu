@@ -25,7 +25,7 @@ Production (daily, async):
 Offline (on-demand, sync):
   BaoStock/AkShare → SQLite DB (unadjusted prices + adj_factor + turn/tradestatus/is_st/valuation)
       → Alpha158Engine (191 factors) → LightGBM Walk-Forward (17 windows)
-      → score_matrix.parquet → BacktestEngine (5-step rebalance)
+      → score_matrix_test.parquet + score_matrix_val.parquet → BacktestEngine (5-step rebalance)
 ```
 
 **Two subsystems:**
@@ -92,6 +92,8 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
 
+**Val/Test separation:** Val scores (`score_matrix_val.parquet`) are for strategy selection and hyperparameter tuning. Test scores (`score_matrix_test.parquet`) are for final reporting only — **never use test scores to select strategies or tune hyperparameters**. This prevents overfitting to the test period.
+
 **LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=50`. These are the result of extensive experimentation. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
 
 **Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
@@ -154,9 +156,10 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 | `pangu backfill fundamentals --start 2019-01-01` | Backfill quarterly fundamentals + gross_margin + pub_dates (PIT) | ~4-5h |
 | `pangu backfill index --start 2019-01-01` | Backfill index daily bars (default: CSI300) | <1min |
 | `pangu compute-factors` | Compute 191 Alpha158 factors → `data/factors.parquet` | ~10min |
-| `pangu train walkforward` | Walk-Forward LightGBM training → `data/score_matrix.parquet` | ~30min |
-| `pangu backtest --strategy lgb --scores data/score_matrix.parquet` | Run backtest on score matrix | <1min |
-| `pangu evaluate-scores --scores data/score_matrix.parquet` | Score quality diagnostics | <10s |
+| `pangu train walkforward` | Walk-Forward LightGBM training → `data/score_matrix_test.parquet` + `score_matrix_val.parquet` | ~30min |
+| `pangu backtest --strategy lgb --scores data/score_matrix_val.parquet` | Backtest on val scores (策略调参) | <1min |
+| `pangu backtest --strategy lgb --scores data/score_matrix_test.parquet` | Backtest on test scores (最终报告) | <1min |
+| `pangu evaluate-scores --scores data/score_matrix_val.parquet` | Score quality diagnostics | <10s |
 | `pangu evaluate-models --model-dir models` | Model quality diagnostics | <5s |
 
 **Backfill operations:** Backfill is slow (bars ~4-7h, fundamentals ~2h) due to upstream API rate limiting. Use the `@backfill-manager` agent for planning, execution, monitoring, and verification. Key rules: use `screen` sessions (not Copilot `detach: true`), never kill mid-run (BaoStock TCP issues), run `constituents` first to get the full historical pool YAML.
@@ -176,5 +179,6 @@ Volumes: `./data:/app/data` (SQLite DB), `./config:/app/config` (settings/watchl
 
 - `data/pangu.db` — SQLite database (daily_bars, fundamentals, index_constituents, etc.)
 - `data/factors.parquet` — Pre-computed 191-factor panel (~1.3GB)
-- `data/score_matrix.parquet` — Model predictions (date × symbol)
+- `data/score_matrix_test.parquet` — Model predictions on test set (date × symbol)
+- `data/score_matrix_val.parquet` — Model predictions on validation set (date × symbol)
 - `models/wf_window_*.txt` — LightGBM model files (17 Walk-Forward windows)

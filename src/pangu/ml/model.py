@@ -346,7 +346,7 @@ def train_walk_forward(
     storage: "DataStorage",
     factors_path: str | None = None,
     model_dir: str = "models",
-    output_path: str = "data/score_matrix.parquet",
+    output_dir: str = "data",
     params: dict | None = None,
     label_horizon: int | list[int] = 5,
     label_horizon_weights: list[float] | None = None,
@@ -362,7 +362,7 @@ def train_walk_forward(
     time_decay_halflife: int = 0,
     train_subsample_stride: int | None = None,
     step_months: int | None = None,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Execute full Walk-Forward training.
 
     Steps:
@@ -371,14 +371,17 @@ def train_walk_forward(
     3. For each window:
        a. Build train/val/test datasets (constituent-filtered)
        b. Train LGBModel or LGBRankerModel
-       c. Predict test scores
+       c. Predict val and test scores
        d. Save model
        e. Log metrics (IC, Rank IC, Val MSE)
-    4. Concatenate test scores → score_matrix (date × symbol)
-    5. Save to parquet
+    4. Concatenate val/test scores → score matrices (date × symbol)
+    5. Save to parquet (score_matrix_test.parquet + score_matrix_val.parquet)
 
     Parameters
     ----------
+    output_dir : str
+        Directory for score matrix output (default "data").
+        Produces ``score_matrix_test.parquet`` and ``score_matrix_val.parquet``.
     normalize_label : bool
         If True, apply Qlib-style cross-sectional z-score to labels
         before training. Disabled by default.
@@ -417,7 +420,8 @@ def train_walk_forward(
 
     Returns
     -------
-    score_matrix : DataFrame (date × symbol), values = predicted scores.
+    (test_score_matrix, val_score_matrix) : tuple of DataFrame
+        Both are (date × symbol), values = predicted scores.
     """
     if mode not in ("regression", "ranking"):
         raise ValueError(f"mode must be 'regression' or 'ranking', got '{mode}'")
@@ -485,6 +489,7 @@ def train_walk_forward(
 
     # 3. Walk-Forward training
     all_test_scores: list[pd.Series] = []
+    all_val_scores: list[pd.Series] = []
     window_metrics: list[dict] = []
 
     for w in windows:
@@ -542,16 +547,25 @@ def train_walk_forward(
         if not X_test.empty:
             test_scores = model.predict(X_test)
             all_test_scores.append(test_scores)
-
-            # Metrics
-            ic_metrics = _compute_ic(y_test, test_scores)
+            test_ic = _compute_ic(y_test, test_scores)
         else:
-            ic_metrics = {"ic_mean": np.nan, "rank_ic_mean": np.nan}
+            test_ic = {"ic_mean": np.nan, "rank_ic_mean": np.nan}
+
+        # Predict val (for strategy selection on val set)
+        if not X_val.empty:
+            val_scores = model.predict(X_val)
+            all_val_scores.append(val_scores)
+            val_ic = _compute_ic(y_val, val_scores)
+        else:
+            val_ic = {"ic_mean": np.nan, "rank_ic_mean": np.nan}
 
         metrics = {
             "window": w.window_id,
             "best_iter": fit_info["best_iteration"],
-            **ic_metrics,
+            "test_ic_mean": test_ic["ic_mean"],
+            "test_rank_ic_mean": test_ic["rank_ic_mean"],
+            "val_ic_mean": val_ic["ic_mean"],
+            "val_rank_ic_mean": val_ic["rank_ic_mean"],
         }
         if is_ranking:
             metrics["val_ndcg"] = fit_info.get("val_ndcg", float("nan"))
@@ -565,49 +579,61 @@ def train_walk_forward(
             f"val_mse={metrics.get('val_mse', float('nan')):.6f}"
         )
         logger.info(
-            "  best_iter=%d  %s  IC=%.4f  RankIC=%.4f",
+            "  best_iter=%d  %s  test IC=%.4f  RankIC=%.4f  val IC=%.4f  RankIC=%.4f",
             metrics["best_iter"], val_metric_str,
-            metrics.get("ic_mean", float("nan")),
-            metrics.get("rank_ic_mean", float("nan")),
+            metrics["test_ic_mean"], metrics["test_rank_ic_mean"],
+            metrics["val_ic_mean"], metrics["val_rank_ic_mean"],
         )
 
         # Save model
         model_path = str(Path(model_dir) / f"wf_window_{w.window_id:02d}.txt")
         model.save(model_path)
 
-    # 4. Assemble score matrix
-    if not all_test_scores:
-        raise ValueError("No test scores produced. Check data coverage.")
+    # 4. Assemble score matrices (test + val)
+    if not all_test_scores or not all_val_scores:
+        raise ValueError("No scores produced. Check data coverage.")
 
-    combined = pd.concat(all_test_scores)
+    def _assemble_score_matrix(scores_list: list[pd.Series]) -> pd.DataFrame:
+        combined = pd.concat(scores_list)
+        # When step_months < test_months, the same (date, symbol) may have
+        # predictions from multiple overlapping windows — average them.
+        if combined.index.duplicated().any():
+            combined = combined.groupby(level=["date", "symbol"]).mean()
+        matrix = combined.unstack(level="symbol")
+        matrix.index = pd.to_datetime(matrix.index)
+        return matrix.sort_index()
 
-    # When step_months < test_months, the same (date, symbol) may have
-    # predictions from multiple overlapping windows — average them.
-    if combined.index.duplicated().any():
-        combined = combined.groupby(level=["date", "symbol"]).mean()
-
-    # Pivot to (date × symbol) — compatible with BacktestEngine.run(scores=...)
-    score_matrix = combined.unstack(level="symbol")
-    score_matrix.index = pd.to_datetime(score_matrix.index)
-    score_matrix = score_matrix.sort_index()
+    score_matrix_test = _assemble_score_matrix(all_test_scores)
+    score_matrix_val = _assemble_score_matrix(all_val_scores)
 
     # 5. Save
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    score_matrix.to_parquet(output_path)
-    logger.info("Score matrix saved: %s (%d days × %d stocks)",
-                output_path, score_matrix.shape[0], score_matrix.shape[1])
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    test_path = out / "score_matrix_test.parquet"
+    score_matrix_test.to_parquet(test_path)
+    logger.info("Test score matrix saved: %s (%d days × %d stocks)",
+                test_path, score_matrix_test.shape[0], score_matrix_test.shape[1])
+
+    val_path = out / "score_matrix_val.parquet"
+    score_matrix_val.to_parquet(val_path)
+    logger.info("Val score matrix saved: %s (%d days × %d stocks)",
+                val_path, score_matrix_val.shape[0], score_matrix_val.shape[1])
 
     # Summary
     metrics_df = pd.DataFrame(window_metrics)
     logger.info("\n=== Walk-Forward Summary (%s) ===", mode)
     logger.info("Windows: %d", len(metrics_df))
-    logger.info("Mean IC: %.4f ± %.4f", metrics_df["ic_mean"].mean(), metrics_df["ic_mean"].std())
-    logger.info("Mean Rank IC: %.4f ± %.4f",
-                metrics_df["rank_ic_mean"].mean(), metrics_df["rank_ic_mean"].std())
+    logger.info("Test  — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
+                metrics_df["test_ic_mean"].mean(), metrics_df["test_ic_mean"].std(),
+                metrics_df["test_rank_ic_mean"].mean(), metrics_df["test_rank_ic_mean"].std())
+    logger.info("Val   — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
+                metrics_df["val_ic_mean"].mean(), metrics_df["val_ic_mean"].std(),
+                metrics_df["val_rank_ic_mean"].mean(), metrics_df["val_rank_ic_mean"].std())
     if is_ranking:
         if "val_ndcg" in metrics_df.columns:
             logger.info("Mean Val NDCG: %.6f", metrics_df["val_ndcg"].mean())
     elif "val_mse" in metrics_df.columns:
         logger.info("Mean Val MSE: %.6f", metrics_df["val_mse"].mean())
 
-    return score_matrix
+    return score_matrix_test, score_matrix_val

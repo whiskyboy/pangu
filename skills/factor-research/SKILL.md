@@ -23,7 +23,7 @@ for review before proceeding.
 - Working directory: `trading-agent` project root
 - `data/pangu.db` with daily_bars and fundamentals
 - `data/factors.parquet` (compute first if missing)
-- `data/score_matrix.parquet` and `models/` (for importance analysis)
+- `data/score_matrix_test.parquet` and `models/` (for importance analysis)
 - Package manager: `uv`
 
 ## Workflow A: Factor Analysis
@@ -276,13 +276,13 @@ uv run pangu compute-factors --output data/factors.parquet
 uv run pytest tests/ -k "factor or alpha158"
 
 # Train to evaluate factor impact
-uv run pangu train walkforward --factors data/factors.parquet --output data/score_matrix.parquet
+uv run pangu train walkforward --factors data/factors.parquet --output data
 
 # Evaluate model feature importance
 uv run pangu evaluate-models --model-dir models
 
 # Evaluate score quality
-uv run pangu evaluate-scores --scores data/score_matrix.parquet
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 
 # Lint and format
 uv run ruff check src/pangu/factor/ && uv run ruff format src/pangu/factor/

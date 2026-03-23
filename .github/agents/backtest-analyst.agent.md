@@ -31,7 +31,8 @@ Report each as ✅/🟡/🔴.
 Run the backtest and report key metrics:
 
 ```bash
-uv run pangu backtest --strategy lgb --scores data/score_matrix.parquet
+# Use val scores for strategy comparison/tuning; test scores only for final reporting
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet
 ```
 
 | Metric | Value | Benchmark |
@@ -45,7 +46,7 @@ uv run pangu backtest --strategy lgb --scores data/score_matrix.parquet
 ### 2. Score quality diagnostics
 
 ```bash
-uv run pangu evaluate-scores --scores data/score_matrix.parquet
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 ```
 
 Report: discrimination, stability, rank stability metrics.
@@ -100,23 +101,27 @@ Compare LGB vs baseline to quantify ML value-add.
 - `src/pangu/ml/dataset.py` — Window splitting and label computation
 - `src/pangu/ml/score_evaluator.py` — Score quality diagnostics
 - `src/pangu/ml/model_evaluator.py` — Model quality diagnostics
-- `data/score_matrix.parquet` — Model predictions (date × symbol)
+- `data/score_matrix_test.parquet` — Model predictions on test set (date × symbol)
+- `data/score_matrix_val.parquet` — Model predictions on validation set (date × symbol)
 - `config/settings.toml` — Strategy parameters (top_n, thresholds)
 
 ## Analysis commands
 
 ```bash
-# Run backtest with ML strategy
-uv run pangu backtest --strategy lgb --scores data/score_matrix.parquet
+# Run backtest on val scores (strategy tuning/comparison)
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet
+
+# Run backtest on test scores (final reporting only — do NOT use for strategy selection)
+uv run pangu backtest --strategy lgb --scores data/score_matrix_test.parquet
 
 # Run baseline (factor-only) for comparison
 uv run pangu backtest --strategy baseline
 
-# Custom parameters
-uv run pangu backtest --strategy lgb --scores data/score_matrix.parquet --top-n 20 --capital 2000000
+# Custom parameters (use val for tuning)
+uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --top-n 20 --capital 2000000
 
-# Score diagnostics
-uv run pangu evaluate-scores --scores data/score_matrix.parquet
+# Score diagnostics (use val for iterative analysis)
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 
 # Model diagnostics
 uv run pangu evaluate-models --model-dir models

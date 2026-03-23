@@ -55,12 +55,11 @@ Train LightGBM across all walk-forward windows (default: 18-month train +
 uv run pangu train walkforward \
   --factors data/factors.parquet \
   --model-dir models \
-  --output data/score_matrix.parquet
 ```
 
 **Expected output:**
 - Model files saved to `models/wf_window_*.txt` (one per window)
-- `data/score_matrix.parquet` created (date × symbol score matrix)
+- `data/score_matrix_test.parquet` and `data/score_matrix_val.parquet` created (date × symbol score matrices)
 - Per-window IC and Rank IC metrics printed to console
 
 **After training, report these metrics to the user:**
@@ -78,7 +77,7 @@ Run diagnostics before backtest to catch data/model issues early.
 uv run pangu evaluate-models --model-dir models
 
 # Score quality: discrimination, stability, rank stability
-uv run pangu evaluate-scores --scores data/score_matrix.parquet
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 ```
 
 **Report to user:**
@@ -96,7 +95,7 @@ Run backtest using the trained model's score matrix.
 ```bash
 uv run pangu backtest \
   --strategy lgb \
-  --scores data/score_matrix.parquet
+  --scores data/score_matrix_test.parquet
 ```
 
 **Expected output:**

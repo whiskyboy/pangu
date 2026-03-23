@@ -143,7 +143,8 @@ def train() -> None:
 @click.option("--factors", "factors_path", default=None,
               help="Pre-computed factors.parquet (default: compute from DB)")
 @click.option("--model-dir", default="models", help="Directory to save trained models")
-@click.option("--output", default="data/score_matrix.parquet", help="Score matrix output path")
+@click.option("--output", default="data", help="Output directory for score matrices "
+              "(produces score_matrix_test.parquet and score_matrix_val.parquet)")
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
 @click.option("--label-horizon", default="5", type=str,
               help="Forward return horizon(s) in trading days. Single int (e.g. '5') or "
@@ -253,11 +254,11 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
             params = json.load(f)
         click.echo(f"Loaded custom params from {params_file}: {params}")
 
-    score_matrix = train_walk_forward(
+    score_matrix_test, score_matrix_val = train_walk_forward(
         storage=storage,
         factors_path=factors_path,
         model_dir=model_dir,
-        output_path=output,
+        output_dir=output,
         params=params,
         label_horizon=parsed_horizon,
         label_horizon_weights=parsed_weights,
@@ -274,8 +275,11 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
     )
 
     click.echo("\n✅ Walk-Forward training complete")
-    click.echo(f"  Score matrix: {score_matrix.shape[0]} days × {score_matrix.shape[1]} stocks")
-    click.echo(f"  Output: {output}")
+    if not score_matrix_test.empty:
+        click.echo(f"  Test score matrix: {score_matrix_test.shape[0]} days × {score_matrix_test.shape[1]} stocks")
+    if not score_matrix_val.empty:
+        click.echo(f"  Val score matrix:  {score_matrix_val.shape[0]} days × {score_matrix_val.shape[1]} stocks")
+    click.echo(f"  Output dir: {output}/")
     click.echo(f"  Models: {model_dir}/wf_window_*.txt")
 
 
@@ -557,7 +561,9 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
         scores = compute_baseline_scores(all_bars, storage, start, end)
     elif strategy == "lgb":
         if not scores_path:
-            click.echo("ERROR: --scores required for lgb strategy (e.g. data/score_matrix.parquet)")
+            click.echo("ERROR: --scores required for lgb strategy "
+                       "(e.g. data/score_matrix_val.parquet for tuning, "
+                       "data/score_matrix_test.parquet for final report)")
             return
         scores = pd.read_parquet(scores_path)
         scores.index = pd.to_datetime(scores.index)
@@ -637,8 +643,8 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
 # ---------------------------------------------------------------------------
 
 @main.command("evaluate-scores")
-@click.option("--scores", "scores_path", default="data/score_matrix.parquet",
-              help="Path to score matrix parquet (default: data/score_matrix.parquet)")
+@click.option("--scores", "scores_path", default="data/score_matrix_val.parquet",
+              help="Path to score matrix parquet (default: data/score_matrix_val.parquet)")
 @click.option("--top-n", "top_n_str", default="10,30,50",
               help="Comma-separated Top-N values to evaluate (default: 10,30,50)")
 @click.option("--json", "output_json", is_flag=True, default=False,
