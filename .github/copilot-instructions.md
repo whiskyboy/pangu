@@ -90,7 +90,7 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 ### ML Training & Backtest
 
-**Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows. Each window trains 5 models with different seeds (``--n-seeds 5``, default) and averages their predictions. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
+**Walk-Forward training:** Default 18-month train + 3-month val + 3-month test, stepped by 3 months, producing 17 windows (default `--first-train-start 2020-01-01 --last-test-end 2025-12-31`). Each window trains 5 models with different seeds (``--n-seeds 5``, default) and averages their predictions. Training uses all historical constituents union (~1311 stocks); val/test use point-in-time constituents (~800 stocks). Purged CV removes the last `label_horizon` days from training to prevent label leakage.
 
 **Val/Test separation:** Val scores (`score_matrix_val.parquet`) are for strategy selection and hyperparameter tuning. Test scores (`score_matrix_test.parquet`) are for final reporting only — **never use test scores to select strategies or tune hyperparameters**. This prevents overfitting to the test period. Val and test score matrices cover different date ranges (determined by walk-forward window configuration). When backtesting, always check the score matrix's time range first and pass matching `--start` and `--end`. The CLI will auto-align if `--end` exceeds the score matrix, but explicit dates are preferred.
 

@@ -45,7 +45,8 @@ proceed to Step 2 — ask the user whether to recompute or reuse.
 ### Step 2: Walk-Forward Training
 
 Train LightGBM across all walk-forward windows (default: 18-month train +
-3-month validation + 3-month test, stepped by 3 months).
+3-month validation + 3-month test, stepped by 3 months,
+`--first-train-start 2020-01-01 --last-test-end 2025-12-31`).
 
 **Stock pool filtering per split:**
 - **Train**: union of all constituents during training period — maximizes sample count

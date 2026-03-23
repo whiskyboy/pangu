@@ -23,6 +23,7 @@ improvements — all with user review at each decision point.
 - `data/factors.parquet` (191 factors, up to date)
 - Existing models in `models/` and `data/score_matrix_test.parquet` (for baseline comparison)
 - Package manager: `uv`
+- Walk-forward defaults: `--first-train-start 2020-01-01 --last-test-end 2025-12-31`
 
 ## Workflow A: Diagnose Current Models
 
