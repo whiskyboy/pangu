@@ -98,13 +98,7 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
 
-**Current baseline (n_seeds=5):** Without time decay: Sharpe 0.447±0.108 (single seed=42 gives 0.609 — an outlier). With time decay (halflife=120): Sharpe **0.629±0.043** (p=0.023 vs no-decay). Time decay is recommended but not yet the CLI default — pending val/test separation validation. Use `--time-decay-halflife 120` explicitly. Annual turnover ~34x, max drawdown ~26%.
-
 **Multi-seed ensemble:** `--n-seeds 5` (CLI default) trains 5 models per window with seeds 0–4, averaging predictions. This reduces seed variance ~√5 and produces stable, reproducible scores. Use `--n-seeds 1` only for quick experiments. For rigorous A/B testing of strategy changes, compare paired backtest results (both runs with `--n-seeds 5`).
-
-**IC-Sharpe paradox:** In our weak-signal regime (IC~0.03), improving IC/RankIC does NOT improve Sharpe. This is a verified finding across 10+ experiments — higher IC increases noise at the Top-30 selection boundary and causes excess turnover. Do not attempt model-layer optimizations aimed at boosting IC without understanding this tradeoff. See `docs/ml-experiments.md` for full evidence.
-
-**Experiment history:** All optimization experiments (15 total across 3 phases + multi-seed validation) are documented in `docs/ml-experiments.md` with detailed methods, results, multi-seed statistical tests, and industry comparisons. Consult this document before proposing new optimization approaches — many obvious ideas have already been tried and validated/invalidated with paired t-tests.
 
 ### Code Style & Architecture
 
