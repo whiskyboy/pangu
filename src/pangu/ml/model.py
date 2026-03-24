@@ -96,11 +96,19 @@ def _make_rankic_eval_metric(val_dates: np.ndarray):
 class LGBModel:
     """LightGBM regression model wrapper."""
 
-    def __init__(self, params: dict | None = None, early_stop_metric: str = "mae"):
+    def __init__(
+        self,
+        params: dict | None = None,
+        early_stop_metric: str = "mae",
+        early_stopping_rounds: int = EARLY_STOPPING_ROUNDS,
+        min_iterations: int = MIN_ITERATIONS,
+    ):
         if early_stop_metric not in VALID_EARLY_STOP_METRICS:
             raise ValueError(f"early_stop_metric must be one of {VALID_EARLY_STOP_METRICS}")
         self.params = {**DEFAULT_PARAMS, **(params or {})}
         self.early_stop_metric = early_stop_metric
+        self.early_stopping_rounds = early_stopping_rounds
+        self.min_iterations = min_iterations
         self.model: lgb.LGBMRegressor | None = None
 
     def fit(
@@ -141,7 +149,7 @@ class LGBModel:
             sample_weight=sample_weight,
             eval_set=[(X_val, y_val)],
             callbacks=[
-                lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False),
+                lgb.early_stopping(self.early_stopping_rounds, verbose=False),
                 lgb.log_evaluation(period=0),
             ],
             **fit_kwargs,
@@ -150,15 +158,15 @@ class LGBModel:
         best_iter = self.model.best_iteration_
 
         # Guard against pathological early stopping: if model stopped before
-        # MIN_ITERATIONS, retrain without early stopping using MIN_ITERATIONS.
+        # min_iterations, retrain without early stopping using min_iterations.
         # Only trigger when early stopping fired (best_iter < n_estimators).
-        if best_iter < MIN_ITERATIONS and best_iter < n_estimators:
+        if best_iter < self.min_iterations and best_iter < n_estimators:
             logger.info(
-                "  Early stop at %d < MIN_ITERATIONS=%d, retraining with %d rounds",
-                best_iter, MIN_ITERATIONS, MIN_ITERATIONS,
+                "  Early stop at %d < min_iterations=%d, retraining with %d rounds",
+                best_iter, self.min_iterations, self.min_iterations,
             )
             retrain_params = {k: v for k, v in model_params.items() if k != "n_estimators"}
-            self.model = lgb.LGBMRegressor(n_estimators=MIN_ITERATIONS, **retrain_params)
+            self.model = lgb.LGBMRegressor(n_estimators=self.min_iterations, **retrain_params)
             self.model.fit(
                 X_train, y_train,
                 sample_weight=sample_weight,
@@ -166,7 +174,7 @@ class LGBModel:
                 callbacks=[lgb.log_evaluation(period=0)],
                 **fit_kwargs,
             )
-            best_iter = MIN_ITERATIONS
+            best_iter = self.min_iterations
 
         val_pred = self.model.predict(X_val)
         val_mse = float(np.mean((y_val.values - val_pred) ** 2))
@@ -215,8 +223,15 @@ class LGBRankerModel:
     (produced by ``compute_groups()``).
     """
 
-    def __init__(self, params: dict | None = None):
+    def __init__(
+        self,
+        params: dict | None = None,
+        early_stopping_rounds: int = EARLY_STOPPING_ROUNDS,
+        min_iterations: int = MIN_ITERATIONS,
+    ):
         self.params = {**RANKER_DEFAULT_PARAMS, **(params or {})}
+        self.early_stopping_rounds = early_stopping_rounds
+        self.min_iterations = min_iterations
         self.model: lgb.LGBMRanker | None = None
 
     def fit(
@@ -242,7 +257,7 @@ class LGBRankerModel:
             eval_set=[(X_val, y_val)],
             eval_group=[groups_val],
             callbacks=[
-                lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False),
+                lgb.early_stopping(self.early_stopping_rounds, verbose=False),
                 lgb.log_evaluation(period=0),
             ],
         )
@@ -250,13 +265,13 @@ class LGBRankerModel:
         best_iter = self.model.best_iteration_
 
         # Guard against pathological early stopping
-        if best_iter < MIN_ITERATIONS and best_iter < n_estimators:
+        if best_iter < self.min_iterations and best_iter < n_estimators:
             logger.info(
-                "  Early stop at %d < MIN_ITERATIONS=%d, retraining with %d rounds",
-                best_iter, MIN_ITERATIONS, MIN_ITERATIONS,
+                "  Early stop at %d < min_iterations=%d, retraining with %d rounds",
+                best_iter, self.min_iterations, self.min_iterations,
             )
             retrain_params = {k: v for k, v in self.params.items() if k != "n_estimators"}
-            self.model = lgb.LGBMRanker(n_estimators=MIN_ITERATIONS, **retrain_params)
+            self.model = lgb.LGBMRanker(n_estimators=self.min_iterations, **retrain_params)
             self.model.fit(
                 X_train, y_train,
                 group=groups_train,
@@ -264,7 +279,7 @@ class LGBRankerModel:
                 eval_group=[groups_val],
                 callbacks=[lgb.log_evaluation(period=0)],
             )
-            best_iter = MIN_ITERATIONS
+            best_iter = self.min_iterations
 
         return {"best_iteration": best_iter, "val_ndcg": float("nan")}
 
@@ -377,6 +392,8 @@ def train_walk_forward(
     train_subsample_stride: int | None = None,
     step_months: int | None = None,
     n_seeds: int = 1,
+    early_stopping_rounds: int = EARLY_STOPPING_ROUNDS,
+    min_iterations: int = MIN_ITERATIONS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Execute full Walk-Forward training.
 
@@ -438,6 +455,11 @@ def train_walk_forward(
         models with ``random_state`` = 0, 1, …, n_seeds−1.  Per-window
         scores are combined via simple averaging before any cross-window
         aggregation (overlapping window averaging, etc.).
+    early_stopping_rounds : int
+        Patience for early stopping (default EARLY_STOPPING_ROUNDS=200).
+    min_iterations : int
+        Minimum boosting rounds even if early stopping fires
+        (default MIN_ITERATIONS=50).
 
     Returns
     -------
@@ -569,13 +591,22 @@ def train_walk_forward(
                 seed_params = {**(params or {}), "random_state": seed}
 
             if is_ranking:
-                model = LGBRankerModel(seed_params)
+                model = LGBRankerModel(
+                    seed_params,
+                    early_stopping_rounds=early_stopping_rounds,
+                    min_iterations=min_iterations,
+                )
                 fit_info = model.fit(
                     X_train, y_train_rank, groups_train,
                     X_val, y_val_rank, groups_val,
                 )
             else:
-                model = LGBModel(seed_params, early_stop_metric=early_stop_metric)
+                model = LGBModel(
+                    seed_params,
+                    early_stop_metric=early_stop_metric,
+                    early_stopping_rounds=early_stopping_rounds,
+                    min_iterations=min_iterations,
+                )
                 fit_info = model.fit(X_train, y_train, X_val, y_val, sample_weight=train_weights)
 
             seed_fit_infos.append(fit_info)

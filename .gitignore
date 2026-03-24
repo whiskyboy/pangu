@@ -18,9 +18,11 @@ venv/
 
 # Data
 data/logs/
+data/*/
 data/*.db
 data/*.parquet
 data/*.png
+data/*.json
 
 # Config secrets
 .env

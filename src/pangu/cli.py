@@ -197,6 +197,10 @@ def train() -> None:
               "Default 5: trains 5 models per window with seeds 0..4, "
               "combines via simple averaging. Reduces seed variance ~sqrt(N). "
               "Use 1 for quick experiments.")
+@click.option("--early-stopping-rounds", default=200, type=click.IntRange(min=1),
+              help="Patience for early stopping (default: 200)")
+@click.option("--min-iterations", default=50, type=click.IntRange(min=1),
+              help="Minimum boosting rounds even if early stopping fires (default: 50)")
 def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           pool_file: str | None, label_horizon: str,
                           label_horizon_weights: str | None,
@@ -205,7 +209,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           normalize_label: bool, mode: str, n_bins: int,
                           early_stop_metric: str, time_decay_halflife: int,
                           train_subsample_stride: int, step_months: int,
-                          n_seeds: int) -> None:
+                          n_seeds: int, early_stopping_rounds: int,
+                          min_iterations: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -279,6 +284,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         train_subsample_stride=train_subsample_stride or None,
         step_months=step_months or None,
         n_seeds=n_seeds,
+        early_stopping_rounds=early_stopping_rounds,
+        min_iterations=min_iterations,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

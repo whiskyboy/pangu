@@ -94,7 +94,7 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **Val/Test separation:** Val scores (`score_matrix_val.parquet`) are for strategy selection and hyperparameter tuning. Test scores (`score_matrix_test.parquet`) are for final reporting only — **never use test scores to select strategies or tune hyperparameters**. This prevents overfitting to the test period. Val and test score matrices cover different date ranges (determined by walk-forward window configuration). When backtesting, always check the score matrix's time range first and pass matching `--start` and `--end`. The CLI will auto-align if `--end` exceeds the score matrix, but explicit dates are preferred.
 
-**LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=200`. These are the result of extensive experimentation. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
+**LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=50`. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
 
 **Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
 
