@@ -77,6 +77,59 @@ class TestWalkForwardWindows:
         with pytest.raises(AttributeError):
             w.window_id = 99
 
+    # -- Expanding window tests --
+
+    def test_expanding_same_window_count(self):
+        """Expanding mode produces the same number of windows as fixed."""
+        fixed = generate_walk_forward_windows()
+        expanding = generate_walk_forward_windows(expanding=True)
+        assert len(expanding) == len(fixed)
+
+    def test_expanding_train_start_fixed(self):
+        """All expanding windows have the same train_start."""
+        windows = generate_walk_forward_windows(expanding=True)
+        for w in windows:
+            assert w.train_start == "2020-01-01"
+
+    def test_expanding_train_grows(self):
+        """Training period grows with each window in expanding mode."""
+        windows = generate_walk_forward_windows(expanding=True)
+        prev_end = None
+        for w in windows:
+            if prev_end is not None:
+                assert w.train_end > prev_end
+            prev_end = w.train_end
+
+    def test_expanding_first_window_same_as_fixed(self):
+        """First window is identical in both modes."""
+        fixed = generate_walk_forward_windows()
+        expanding = generate_walk_forward_windows(expanding=True)
+        assert fixed[0] == expanding[0]
+
+    def test_expanding_val_test_match_fixed(self):
+        """Val and test periods should be the same in both modes."""
+        fixed = generate_walk_forward_windows()
+        expanding = generate_walk_forward_windows(expanding=True)
+        for f, e in zip(fixed, expanding):
+            assert f.val_start == e.val_start
+            assert f.val_end == e.val_end
+            assert f.test_start == e.test_start
+            assert f.test_end == e.test_end
+
+    def test_expanding_last_window_train_months(self):
+        """Last expanding window should have much more training data."""
+        windows = generate_walk_forward_windows(expanding=True)
+        last = windows[-1]
+        # Last window: train 2020-01-01 ~ 2025-06-30 = 66 months
+        assert last.train_start == "2020-01-01"
+        assert last.train_end == "2025-06-30"
+
+    def test_expanding_no_train_val_overlap(self):
+        """Train must end before val starts in expanding mode."""
+        for w in generate_walk_forward_windows(expanding=True):
+            assert w.train_end < w.val_start
+            assert w.val_end < w.test_start
+
 
 # ---------------------------------------------------------------------------
 # Label computation

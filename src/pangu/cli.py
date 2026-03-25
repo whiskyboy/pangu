@@ -192,6 +192,11 @@ def train() -> None:
               help="Sliding step between windows in months. "
               "0 = same as test period (default, no overlap). "
               "Set to 1 for overlapping ensemble: each month scored by 3 windows, averaged.")
+@click.option("--expanding/--no-expanding", default=False,
+              help="Use expanding training window: train_start is fixed at --first-train-start "
+              "for all windows, giving later windows progressively more data. "
+              "Combine with --time-decay-halflife to down-weight older data. "
+              "(default: disabled, fixed-length sliding window)")
 @click.option("--n-seeds", default=5, type=click.IntRange(min=1),
               help="Number of random seeds per window for ensemble averaging. "
               "Default 5: trains 5 models per window with seeds 0..4, "
@@ -209,7 +214,8 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
                           normalize_label: bool, mode: str, n_bins: int,
                           early_stop_metric: str, time_decay_halflife: int,
                           train_subsample_stride: int, step_months: int,
-                          n_seeds: int, early_stopping_rounds: int,
+                          expanding: bool, n_seeds: int,
+                          early_stopping_rounds: int,
                           min_iterations: int) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
@@ -286,6 +292,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
         n_seeds=n_seeds,
         early_stopping_rounds=early_stopping_rounds,
         min_iterations=min_iterations,
+        expanding=expanding,
     )
 
     click.echo("\n✅ Walk-Forward training complete")

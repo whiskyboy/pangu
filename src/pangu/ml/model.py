@@ -394,6 +394,7 @@ def train_walk_forward(
     n_seeds: int = 1,
     early_stopping_rounds: int = EARLY_STOPPING_ROUNDS,
     min_iterations: int = MIN_ITERATIONS,
+    expanding: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Execute full Walk-Forward training.
 
@@ -460,6 +461,11 @@ def train_walk_forward(
     min_iterations : int
         Minimum boosting rounds even if early stopping fires
         (default MIN_ITERATIONS=50).
+    expanding : bool
+        If True, use expanding window: training start is fixed at
+        ``first_train_start`` for all windows, giving later windows
+        progressively more data. Combined with time_decay_halflife,
+        older data is down-weighted automatically.
 
     Returns
     -------
@@ -479,6 +485,7 @@ def train_walk_forward(
         step_months=step_months,
         first_train_start=first_train_start,
         last_test_end=last_test_end,
+        expanding=expanding,
     )
     global_start = windows[0].train_start
     global_end = windows[-1].test_end
@@ -492,10 +499,11 @@ def train_walk_forward(
     )
 
     seeds_desc = f", n_seeds={n_seeds}" if n_seeds > 1 else ""
+    window_type = "expanding" if expanding else f"fixed {train_months}mo"
     logger.info(
-        "Walk-Forward: %d windows, train=%dmo, mode=%s, early_stop=%s, "
+        "Walk-Forward: %d windows (%s), mode=%s, early_stop=%s, "
         "time_decay_halflife=%dd, train_subsample_stride=%s, labels=%s%s, test covers %s ~ %s",
-        len(windows), train_months, mode, early_stop_metric,
+        len(windows), window_type, mode, early_stop_metric,
         time_decay_halflife, train_subsample_stride or "none",
         horizon_desc, seeds_desc, windows[0].test_start, global_end,
     )

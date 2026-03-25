@@ -261,3 +261,137 @@ E0 Baseline = 默认参数（train=18mo, step=3, 5 seeds, top_n=30, n_drop=10, t
 - 减少 Optuna trials 数（20-30）以降低 val 过拟合
 - 使用 nested cross-validation（outer loop 换 val period）
 - 在 train_months={15,18} 范围搜索（12 太短）
+
+---
+
+# HPO v2 — 3-Fold Temporal CV（2026-03-24）
+
+## 改进方案
+
+针对 v1 的 67% val-test gap，做了两个核心改进：
+1. **3-Fold Temporal CV**：val 区间 (2022-01 ~ 2025-08) 切成 3 段，objective = mean Sharpe
+   - Fold 1: 2022-01-01 ~ 2023-02-28 (14 个月)
+   - Fold 2: 2023-03-01 ~ 2024-04-30 (14 个月)
+   - Fold 3: 2024-05-01 ~ 2025-08-31 (16 个月)
+2. **恢复完整搜索空间**：rankic eval metric、step_months=1、n_estimators [200,5000]、early_stopping [30,500]
+
+## Phase A: Optuna 3-Fold 探索 (80 trials, n_seeds=1)
+
+**Status**: ✅ Complete (13.5h)
+
+### 参数重要性
+
+| 参数 | 重要性 |
+|------|-------|
+| mode (regression vs ranking) | 71.96% |
+| subsample | 8.34% |
+| early_stopping_rounds | 5.29% |
+| time_decay_halflife | 4.05% |
+| min_iterations | 2.96% |
+| early_stop_metric (mae vs rankic) | 0.02% |
+| step_months | 0.08% |
+
+### Top-5 Trials
+
+| Rank | Trial | mean_Sharpe | F1 | F2 | F3 | Std | Metric | Leaves | LR | Train | Step |
+|------|-------|-----------|------|------|------|------|--------|--------|------|-------|------|
+| 1 | 30 | +0.612 | +0.11 | +0.87 | +0.86 | 0.36 | rankic | 27 | 0.006 | 12mo | 2 |
+| 2 | 41 | +0.589 | -0.49 | +0.91 | +1.34 | 0.78 | mae | 8 | 0.008 | 15mo | 3 |
+| 3 | 2 | +0.577 | +0.09 | +0.64 | +0.99 | 0.37 | rankic | 10 | 0.007 | 24mo | 3 |
+| 4 | 0 | +0.572 | +0.11 | +0.47 | +1.14 | 0.43 | rankic | 9 | 0.006 | 12mo | 2 |
+| 5 | 24 | +0.554 | -0.05 | +1.03 | +0.68 | 0.45 | rankic | 19 | 0.005 | 21mo | 3 |
+
+### 发现
+
+- **rankic eval metric 有竞争力**：Top-5 中 4 个使用 rankic（v1 因速度问题移除了它）
+- **step_months=1 不具竞争力**：最佳 step=1 trial 排名 ~12，且速度慢 2-4x
+- **low LR (~0.005-0.008)** 在所有 top configs 中一致
+- **Fold 1 (2022-01~2023-02) 最难**：所有 trial 的 Fold 1 Sharpe 最低
+
+## Phase B: Top-5 Multi-Seed 验证 (n_seeds=5)
+
+**Status**: ✅ Complete (6h)
+
+| Rank | Config | Phase A mean | **Phase B mean** | F1 | F2 | F3 | Std |
+|------|--------|-------------|-----------------|------|------|------|------|
+| **1** | **config4 (T#0)** | 0.572 | **+0.638** | +0.09 | +0.72 | +1.11 | 0.42 |
+| 2 | config3 (T#2) | 0.577 | +0.536 | -0.10 | +0.86 | +0.85 | 0.45 |
+| 3 | config1 (T#30) | 0.612 | +0.528 | -0.08 | +0.66 | +1.00 | 0.45 |
+| 4 | config2 (T#41) | 0.589 | +0.435 | -0.87 | +0.83 | +1.35 | 0.95 |
+| 5 | config5 (T#24) | 0.554 | +0.314 | -0.65 | +1.00 | +0.59 | 0.70 |
+
+**Phase A winner (#30) 从 #1 降到 #3（seed-lucky）。Trial #0 升至 #1 — 对 seed 方差稳健。**
+
+Phase B winner (config4/Trial #0) 参数：
+```
+num_leaves=9, learning_rate=0.005697, n_estimators=1732
+subsample=0.8654, colsample_bytree=0.9157, min_child_samples=255, max_bin=127
+reg_alpha=1.22e-7, reg_lambda=6.67e-8
+early_stopping_rounds=138, min_iterations=113
+mode=regression, normalize_label=false, time_decay_halflife=160
+train_months=12, step_months=2, train_subsample_stride=2
+label_horizon=5, early_stop_metric=rankic
+```
+
+## Phase C: 组合参数 Grid Search (3-Fold)
+
+**Status**: ✅ Complete
+
+### Top-5 组合 (3-fold mean Sharpe)
+
+| Rank | top_n | n_drop | EMA | mean_Sharpe | F1 | F2 | F3 | Std | full_Sharpe |
+|------|-------|--------|-----|-----------|------|------|------|------|------------|
+| **1** | **20** | **8** | **1** | **+0.806** | +0.22 | +1.10 | +1.09 | 0.41 | +0.831 |
+| 2 | 30 | 5 | 0 | +0.771 | +0.35 | +0.57 | +1.40 | 0.45 | +0.957 |
+| 3 | 30 | 10 | 1 | +0.766 | -0.01 | +1.03 | +1.28 | 0.56 | +0.813 |
+| 4 | 30 | 12 | 3 | +0.762 | +0.40 | +0.89 | +1.00 | 0.26 | +0.783 |
+| 5 | 30 | 12 | 2 | +0.744 | +0.23 | +0.90 | +1.11 | 0.38 | +0.785 |
+
+### 参数敏感度 (marginal mean Sharpe)
+
+| top_n=20: 0.550 | top_n=30: **0.608** | top_n=50: 0.545 |
+| n_drop=5: 0.607 | n_drop=8: **0.645** | n_drop=10: 0.626 |
+| ema=0: 0.531 | ema=1: **0.605** | ema=2: 0.575 |
+
+**注意**：与 v1 不同，v2 中 top_n=30 的 marginal mean 优于 20。但 top_n=20/n_drop=8 的组合胜出。
+
+## Phase D: Test Set 确认
+
+**Status**: ✅ Complete
+
+### Val vs Test 对比 (2022-01-01 ~ 2025-08-31)
+
+| Metric | Val | Test | Gap |
+|--------|-----|------|-----|
+| Sharpe | **+0.831** | **+0.542** | **-34.8%** |
+| Annual Return | +13.6% | +8.8% | -35.5% |
+| Max Drawdown | -17.4% | -22.2% | +27.9% |
+| Win Rate | 51.8% | 51.9% | ≈0% |
+| Turnover | 39.9x | 39.4x | ≈0% |
+
+### 与 v1 和 Baseline 全面对比
+
+| 配置 | Val Sharpe | Test Sharpe | Val-Test Gap |
+|------|-----------|-------------|-------------|
+| E0 + Default (30/10) | 0.201 | 0.353 | — baseline — |
+| E0 + v1 Portfolio (20/5/ema2) | 0.269 | **0.690** | test>val ✅ |
+| HPO v1 Model + v1 Portfolio | 0.857 | 0.285 | -66.7% ❌ |
+| **HPO v2 Model + v2 Portfolio** | **0.831** | **0.542** | **-34.8%** |
+
+### 结论
+
+1. ✅ **3-fold CV 将过拟合 gap 从 67% 降到 35%** — 效果显著
+2. ✅ **HPO v2 test Sharpe (0.542) > HPO v1 (0.285)** — 提升 90%
+3. ✅ **HPO v2 test Sharpe (0.542) > E0 default (0.353)** — 提升 54%
+4. ⚠️ **E0 + v1 Portfolio (0.690) 仍然是 test 上最优** — 模型 HPO 仍未超越简单组合优化
+
+### 综合建议
+
+**推荐配置（兼顾安全和收益）**：
+- **模型**：保留 E0 默认参数（最稳健的 test 表现）
+- **组合**：`top_n=20, n_drop=5`（v1 和 v2 均验证有效）
+- **Score EMA**：不使用（v1 验证 EMA 对 step=1 无效；v2 中 ema=1 有轻微帮助但增加复杂度）
+
+**HPO v2 模型作为备选**：
+- 如果愿意接受更高换手率 (39x vs 26x)，HPO v2 (config4) 可作为替代
+- 其 test Sharpe 0.542 虽低于 E0+portfolio (0.690)，但模型本身确实优于 E0 default (0.353)
