@@ -1,13 +1,21 @@
-"""Optuna Bayesian HPO for LightGBM Walk-Forward training (v2).
+"""Optuna Bayesian HPO for LightGBM Walk-Forward training (v3 — expanding).
 
-19-dimensional joint search over training hyperparameters.
+11-dimensional search with expanding window fixed.
 Objective: 3-Fold Temporal CV mean Sharpe (anti-overfitting).
 
 Folds split the val period (2022-01 ~ 2025-08) into 3 non-overlapping
 sub-periods. Each trial trains once → runs 3 backtests → returns mean Sharpe.
 
+Search space (11 dims):
+  LightGBM (8): num_leaves, lr, subsample, colsample_bytree,
+                 min_child_samples, reg_alpha, reg_lambda, early_stopping_rounds
+  Training (3): time_decay_halflife, early_stop_metric, normalize_label
+
+Fixed: expanding=True, train_months=18, step_months=3, label_horizon=5,
+       mode=regression, n_estimators=2000, min_iterations=50.
+
 Usage:
-    uv run python scripts/optuna_hpo.py                # 80 trials
+    uv run python scripts/optuna_hpo.py                # 50 trials (~11h)
     uv run python scripts/optuna_hpo.py --n-trials 20  # quick test
     uv run python scripts/optuna_hpo.py --resume        # resume from checkpoint
 
@@ -159,64 +167,36 @@ def create_objective(storage: object, bt_data: dict, factors_path: str | None):
     def objective(trial: optuna.Trial) -> float:
         t0 = time.time()
 
-        # --- Sample hyperparameters (19 dims + conditionals) ---
-        num_leaves = trial.suggest_int("num_leaves", 7, 63)
-        learning_rate = trial.suggest_float("learning_rate", 0.005, 0.1, log=True)
-        n_estimators = trial.suggest_int("n_estimators", 200, 5000)
+        # --- Sample hyperparameters (11 dims) ---
+        # LightGBM core (8 dims)
+        num_leaves = trial.suggest_int("num_leaves", 15, 127)
+        learning_rate = trial.suggest_float("learning_rate", 0.005, 0.05, log=True)
         subsample = trial.suggest_float("subsample", 0.5, 1.0)
         colsample_bytree = trial.suggest_float("colsample_bytree", 0.5, 1.0)
         min_child_samples = trial.suggest_int("min_child_samples", 30, 300)
-        max_bin = trial.suggest_categorical("max_bin", [63, 127, 255])
         reg_alpha = trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True)
         reg_lambda = trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True)
-        early_stopping_rounds = trial.suggest_int("early_stopping_rounds", 30, 500)
-        min_iterations = trial.suggest_int("min_iterations", 20, 300)
+        early_stopping_rounds = trial.suggest_int("early_stopping_rounds", 50, 500)
 
-        mode = trial.suggest_categorical("mode", ["regression", "ranking"])
-        normalize_label = trial.suggest_categorical("normalize_label", [True, False])
-        time_decay_halflife = trial.suggest_int("time_decay_halflife", 0, 200)
-        train_months = trial.suggest_categorical("train_months", [12, 15, 18, 21, 24])
-        step_months = trial.suggest_categorical("step_months", [1, 2, 3])
-        train_subsample_stride = trial.suggest_int("train_subsample_stride", 0, 10)
-
-        # label_horizon: single or multi-horizon
-        label_horizon_str = trial.suggest_categorical(
-            "label_horizon", ["5", "10", "5,10", "5,10,20"]
-        )
-        parts = [int(x) for x in label_horizon_str.split(",")]
-        label_horizon: int | list[int] = parts if len(parts) > 1 else parts[0]
-
-        # Conditional: multi-horizon weights
-        label_horizon_weights = None
-        if isinstance(label_horizon, list) and len(label_horizon) == 2:
-            w0 = trial.suggest_float("label_weight_0", 0.2, 0.8)
-            label_horizon_weights = [w0, 1.0 - w0]
-        elif isinstance(label_horizon, list) and len(label_horizon) == 3:
-            w0 = trial.suggest_float("label_weight_0", 0.1, 0.7)
-            w1 = trial.suggest_float("label_weight_1", 0.1, min(0.7, 1.0 - w0))
-            label_horizon_weights = [w0, w1, 1.0 - w0 - w1]
-
-        # Conditional: ranking mode → n_bins
-        n_bins = 10
-        if mode == "ranking":
-            n_bins = trial.suggest_int("n_bins", 5, 20)
-
+        # Training framework (3 dims)
+        time_decay_halflife = trial.suggest_int("time_decay_halflife", 60, 360)
         early_stop_metric = trial.suggest_categorical("early_stop_metric", ["mae", "rankic"])
+        normalize_label = trial.suggest_categorical("normalize_label", [True, False])
 
         # --- Build LightGBM params ---
         lgb_params = {
             "num_leaves": num_leaves,
             "learning_rate": learning_rate,
-            "n_estimators": n_estimators,
+            "n_estimators": 2000,
             "subsample": subsample,
             "colsample_bytree": colsample_bytree,
             "min_child_samples": min_child_samples,
-            "max_bin": max_bin,
+            "max_bin": 255,
             "reg_alpha": reg_alpha,
             "reg_lambda": reg_lambda,
         }
 
-        # --- Train (n_seeds=1 for exploration) ---
+        # --- Train (expanding=True, n_seeds=1 for screening) ---
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
                 _, val_score_matrix = train_walk_forward(
@@ -225,19 +205,17 @@ def create_objective(storage: object, bt_data: dict, factors_path: str | None):
                     model_dir=tmpdir,
                     output_dir=tmpdir,
                     params=lgb_params,
-                    label_horizon=label_horizon,
-                    label_horizon_weights=label_horizon_weights,
-                    train_months=train_months,
+                    label_horizon=5,
+                    train_months=18,
                     normalize_label=normalize_label,
-                    mode=mode,
-                    n_bins=n_bins,
+                    mode="regression",
                     early_stop_metric=early_stop_metric,
                     time_decay_halflife=time_decay_halflife,
-                    train_subsample_stride=train_subsample_stride or None,
-                    step_months=step_months,
+                    step_months=3,
+                    expanding=True,
                     n_seeds=1,
                     early_stopping_rounds=early_stopping_rounds,
-                    min_iterations=min_iterations,
+                    min_iterations=50,
                     **FIXED_TRAIN,
                 )
             except Exception as e:
@@ -277,13 +255,12 @@ def create_objective(storage: object, bt_data: dict, factors_path: str | None):
         elapsed = time.time() - t0
         logger.info(
             "Trial %d: mean_Sharpe=%.4f (folds: %.3f/%.3f/%.3f, std=%.3f) "
-            "full_Sharpe=%.4f (%.0fs, mode=%s, metric=%s, leaves=%d, lr=%.4f, "
-            "train=%dmo, step=%d)",
+            "full_Sharpe=%.4f (%.0fs, metric=%s, leaves=%d, lr=%.4f, td=%d, norm=%s)",
             trial.number, mean_sharpe,
             fold_sharpes[0], fold_sharpes[1], fold_sharpes[2], std_sharpe,
             full_metrics.get("sharpe", float("nan")),
-            elapsed, mode, early_stop_metric, num_leaves, learning_rate,
-            train_months, step_months,
+            elapsed, early_stop_metric, num_leaves, learning_rate,
+            time_decay_halflife, normalize_label,
         )
         trial.set_user_attr("elapsed_seconds", elapsed)
 
@@ -298,8 +275,8 @@ def print_top_trials(study: optuna.Study, n: int = 10) -> str:
     lines = [f"\n{'='*100}", f"Top-{n} Trials (out of {len(study.trials)} total)", f"{'='*100}"]
     lines.append(
         f"{'#':>4} {'Trial':>6} {'MeanS':>7} {'F1':>7} {'F2':>7} {'F3':>7} {'Std':>6} "
-        f"{'FullS':>7} {'Mode':>10} {'Metric':>7} {'Lv':>4} {'LR':>8} "
-        f"{'Train':>5} {'Step':>4} {'Hz':>8}"
+        f"{'FullS':>7} {'Metric':>7} {'Lv':>4} {'LR':>8} {'TD':>5} {'Norm':>5} "
+        f"{'α':>8} {'λ':>8}"
     )
     lines.append("-" * 100)
 
@@ -315,12 +292,13 @@ def print_top_trials(study: optuna.Study, n: int = 10) -> str:
             f"{ua.get('sharpe_fold3', float('nan')):>+7.3f} "
             f"{ua.get('sharpe_std', float('nan')):>6.3f} "
             f"{ua.get('sharpe_full', float('nan')):>+7.3f} "
-            f"{p.get('mode', '?'):>10} "
             f"{p.get('early_stop_metric', '?'):>7} "
             f"{p.get('num_leaves', '?'):>4} "
             f"{p.get('learning_rate', 0):>8.4f} "
-            f"{p.get('train_months', '?'):>5} {p.get('step_months', '?'):>4} "
-            f"{p.get('label_horizon', '?'):>8}"
+            f"{p.get('time_decay_halflife', '?'):>5} "
+            f"{str(p.get('normalize_label', '?')):>5} "
+            f"{p.get('reg_alpha', 0):>8.2e} "
+            f"{p.get('reg_lambda', 0):>8.2e}"
         )
 
     output = "\n".join(lines)
@@ -381,9 +359,9 @@ def save_results_to_json(study: optuna.Study, path: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Optuna HPO for LightGBM Walk-Forward")
-    parser.add_argument("--n-trials", type=int, default=80, help="Number of trials (default: 80)")
-    parser.add_argument("--study-name", default="lgb_hpo_v4", help="Optuna study name")
+    parser = argparse.ArgumentParser(description="Optuna HPO for LightGBM Walk-Forward (expanding)")
+    parser.add_argument("--n-trials", type=int, default=50, help="Number of trials (default: 50)")
+    parser.add_argument("--study-name", default="lgb_hpo_v3_expanding", help="Optuna study name")
     parser.add_argument("--storage", default="sqlite:///data/optuna_study.db",
                         help="Optuna storage URL")
     parser.add_argument("--factors", default="data/factors.parquet",
