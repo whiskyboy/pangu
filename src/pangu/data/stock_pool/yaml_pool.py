@@ -477,6 +477,67 @@ class StockPoolManager:
         )
         return count, all_symbols
 
+    def backfill_sectors(self, symbols: set[str] | None = None) -> int:
+        """Backfill sector classification for historical constituents via AkShare.
+
+        Queries ``stock_individual_info_em`` for each symbol that has no sector
+        in the DB. Updates all historical rows for that symbol.
+
+        Parameters
+        ----------
+        symbols : set[str] or None
+            Symbols to backfill. If None, queries DB for all symbols missing sector.
+
+        Returns the number of DB rows updated.
+        """
+        import akshare as ak
+
+        from pangu.utils import CircuitBreaker, retry_call
+
+        circuit = CircuitBreaker()
+
+        if symbols is None:
+            with self._storage._lock:
+                rows = self._storage._conn.execute(
+                    "SELECT DISTINCT symbol FROM index_constituents "
+                    "WHERE sector IS NULL OR sector = ''"
+                ).fetchall()
+            symbols = {r[0] for r in rows}
+
+        if not symbols:
+            logger.info("backfill_sectors: all symbols already have sector data")
+            return 0
+
+        logger.info("backfill_sectors: %d symbols to process", len(symbols))
+        sector_map: dict[str, str] = {}
+        failed = 0
+
+        for i, symbol in enumerate(sorted(symbols), 1):
+            try:
+                info_df = retry_call(
+                    lambda s=symbol: ak.stock_individual_info_em(symbol=s),
+                    circuit=circuit,
+                )
+                if info_df is not None and not info_df.empty:
+                    info_map = {str(r["item"]): str(r["value"]) for _, r in info_df.iterrows()}
+                    sector = info_map.get("行业", "")
+                    if sector:
+                        sector_map[symbol] = sector
+            except Exception:  # noqa: BLE001
+                failed += 1
+                logger.debug("backfill_sectors: failed for %s", symbol)
+
+            if i % 50 == 0:
+                logger.info("backfill_sectors: %d/%d symbols queried (%d found, %d failed)",
+                            i, len(symbols), len(sector_map), failed)
+
+        updated = self._storage.update_constituent_sectors(sector_map)
+        logger.info(
+            "backfill_sectors: %d symbols queried, %d sectors found, %d DB rows updated, %d failed",
+            len(symbols), len(sector_map), updated, failed,
+        )
+        return updated
+
     def _get_index_stocks(self) -> list[str]:
         """Return constituent symbols from all configured indices (deduplicated)."""
         rows = self._storage.load_all_index_constituents()

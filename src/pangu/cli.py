@@ -337,7 +337,8 @@ def _load_pool_yaml(path: str) -> list[str] | None:
 @click.option("--start", default="2019-01-01", help="Start date for semi-annual sampling")
 @click.option("--end", default=None, help="End date (default: today)")
 @click.option("--output", "-o", default="config/backfill_stock_pool.yaml", help="Output YAML path for stock pool")
-def backfill_constituents(start: str, end: str | None, output: str) -> None:
+@click.option("--with-sector/--no-sector", default=True, help="Backfill sector classification via AkShare")
+def backfill_constituents(start: str, end: str | None, output: str, with_sector: bool) -> None:
     """Backfill historical index constituents (CSI300 + CSI500) semi-annually."""
     from pangu.main import build_components, load_env
     load_env()
@@ -352,6 +353,11 @@ def backfill_constituents(start: str, end: str | None, output: str) -> None:
         for sym in sorted(all_symbols):
             f.write(f'- "{sym}"\n')
     click.echo(f"📄 Exported {len(all_symbols)} symbols to {output}")
+
+    if with_sector:
+        click.echo("\n🏭 Backfilling sector classification...")
+        updated = c.stock_pool.backfill_sectors(all_symbols)
+        click.echo(f"✅ Updated {updated} DB rows with sector data")
 
 
 @backfill.command("bars")
@@ -503,6 +509,8 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
               help="Parquet file with pre-computed scores (for lgb strategy)")
 @click.option("--score-smooth-halflife", default=0, type=click.IntRange(min=0),
               help="EMA halflife (trading days) for temporal score smoothing. 0=disabled (default).")
+@click.option("--max-per-sector", default=None, type=int,
+              help="Max stocks per sector (industry diversification). Requires sector data in DB.")
 @click.option("--plot/--no-plot", default=True,
               help="Generate equity curve chart (default: --plot)")
 @click.option("--plot-output", default=None,
@@ -513,6 +521,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
                  exclude_prefixes: str,
                  pool_file: str | None, scores_path: str | None,
                  score_smooth_halflife: int,
+                 max_per_sector: int | None,
                  plot: bool, plot_output: str | None) -> None:
     """Run local backtest for a given strategy."""
     from pangu.main import build_components, load_env
@@ -627,15 +636,29 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
         p.strip() for p in exclude_prefixes.split(",") if p.strip()
     ) if exclude_prefixes else ()
 
+    # Load sector map if max_per_sector is set
+    sector_data: dict[str, str] | None = None
+    if max_per_sector:
+        with storage._lock:
+            rows = storage._conn.execute(
+                "SELECT symbol, sector FROM index_constituents "
+                "WHERE sector IS NOT NULL AND sector != '' AND sector != '-' "
+                "GROUP BY symbol HAVING date = MAX(date) "
+                "ORDER BY symbol"
+            ).fetchall()
+        sector_data = {r[0]: r[1] for r in rows}
+        click.echo(f"Sector map loaded: {len(sector_data)} symbols, max_per_sector={max_per_sector}")
+
     # Run backtest with dynamic constituents
     engine = BacktestEngine(
         top_n=top_n, n_drop=n_drop, initial_capital=capital,
         stamp_tax=stamp_tax, commission=commission, slippage=slippage,
+        max_per_sector=max_per_sector,
     )
     result = engine.run(scores, open_prices, close_prices, bench_close,
                         start, end, universe_fn=universe_fn, volume=volume_wide,
                         adj_factor=adj_factor_wide, is_st=is_st_wide,
-                        exclude_prefixes=prefixes)
+                        exclude_prefixes=prefixes, sector_map=sector_data)
 
     # Print results
     click.echo(f"\n{'='*60}")

@@ -1195,6 +1195,30 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
+    def update_constituent_sectors(self, sector_map: dict[str, str]) -> int:
+        """Update sector field for all rows matching each symbol.
+
+        Parameters
+        ----------
+        sector_map : dict[str, str]
+            Mapping of symbol → sector (e.g. ``{"600519": "白酒Ⅱ"}``).
+
+        Returns the number of rows updated.
+        """
+        if not sector_map:
+            return 0
+        total = 0
+        with self._lock:
+            for symbol, sector in sector_map.items():
+                cur = self._conn.execute(
+                    "UPDATE index_constituents SET sector = ? "
+                    "WHERE symbol = ? AND (sector IS NULL OR sector = '')",
+                    (sector, symbol),
+                )
+                total += cur.rowcount
+            self._conn.commit()
+        return total
+
     def load_index_constituents(self, index_code: str, date: str | None = None) -> list[dict]:
         """Load constituents for a given index code.
 

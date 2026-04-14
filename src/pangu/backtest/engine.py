@@ -95,6 +95,7 @@ class BacktestEngine:
         commission: float = 0.0003,
         slippage: float = 0.001,
         min_commission: float = 5.0,
+        max_per_sector: int | None = None,
     ) -> None:
         self._top_n = top_n
         self._n_drop = n_drop
@@ -103,6 +104,7 @@ class BacktestEngine:
         self._commission = commission
         self._slippage = slippage
         self._min_commission = min_commission
+        self._max_per_sector = max_per_sector
 
     # ------------------------------------------------------------------
     # Cost helpers
@@ -135,6 +137,7 @@ class BacktestEngine:
         adj_factor: pd.DataFrame | None = None,
         is_st: pd.DataFrame | None = None,
         exclude_prefixes: tuple[str, ...] = ("688", "689"),
+        sector_map: dict[str, str] | None = None,
     ) -> BacktestResult:
         """Run backtest.
 
@@ -166,6 +169,10 @@ class BacktestEngine:
             Stock code prefixes to exclude from selection (default: 688/689
             STAR market stocks which cannot be traded on most platforms).
             Set to () to disable.
+        sector_map : dict[str, str], optional
+            Mapping of symbol → sector classification. Required when
+            ``max_per_sector`` is set. Stocks missing from the map are
+            grouped under "未知" sector with the same cap.
         """
         # Align date range
         dates = close_prices.index.sort_values()
@@ -199,9 +206,10 @@ class BacktestEngine:
         benchmark_close = benchmark_close.sort_index()  # keep pre-start dates for base
 
         logger.info(
-            "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d, n_drop=%d",
+            "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d, n_drop=%d%s",
             dates[0].date(), dates[-1].date(), len(dates),
             len(common_stocks), self._top_n, self._n_drop,
+            f", max_per_sector={self._max_per_sector}" if self._max_per_sector else "",
         )
 
         # Forward-fill close prices so suspended stocks retain last-known value
@@ -210,7 +218,7 @@ class BacktestEngine:
         # Run simulation
         nav_values, rebal_log, holdings_records = self._simulate(
             dates, scores, open_prices, close_prices, universe_fn, volume,
-            adj_factor, is_st,
+            adj_factor, is_st, sector_map,
         )
 
         # Build results
@@ -252,6 +260,7 @@ class BacktestEngine:
         volume: pd.DataFrame | None = None,
         adj_factor: pd.DataFrame | None = None,
         is_st: pd.DataFrame | None = None,
+        sector_map: dict[str, str] | None = None,
     ) -> tuple[list[float], list[dict], list[dict]]:
         """Day-by-day simulation loop."""
         cash = self._capital
@@ -332,6 +341,14 @@ class BacktestEngine:
                 else:
                     target = prev_scores.sort_values(ascending=False).index.tolist()
 
+                # Apply sector cap: trim excess stocks per sector, keeping
+                # highest-scored. This is a hard constraint that overrides
+                # TopkDropout's keep decisions.
+                if self._max_per_sector and sector_map is not None:
+                    target = self._apply_sector_cap(
+                        target, prev_scores, sector_map,
+                    )
+
                 today_open = open_prices.loc[date]
                 prev_close_prices = (close_prices.loc[prev_date]
                                      if prev_date is not None
@@ -371,6 +388,58 @@ class BacktestEngine:
             prev_date = date
 
         return nav_values, rebal_log, holdings_records
+
+    # ------------------------------------------------------------------
+    # Sector cap
+    # ------------------------------------------------------------------
+
+    def _apply_sector_cap(
+        self,
+        target: list[str],
+        scores: pd.Series,
+        sector_map: dict[str, str],
+    ) -> list[str]:
+        """Trim target list so no sector has more than max_per_sector stocks.
+
+        Iterates through candidates ordered by score (descending) and keeps
+        the best stocks per sector.  If removing over-cap stocks leaves
+        room, fills from the next-best candidates in scores (not in target).
+        """
+        cap = self._max_per_sector
+        if not cap:
+            return target
+
+        # Sort target by score descending so we keep the best per sector
+        target_sorted = sorted(target, key=lambda s: scores.get(s, float("-inf")), reverse=True)
+        sector_counts: dict[str, int] = {}
+        result: list[str] = []
+
+        # First pass: pick from target stocks respecting cap
+        for sym in target_sorted:
+            sector = sector_map.get(sym, "未知")
+            cnt = sector_counts.get(sector, 0)
+            if cnt < cap:
+                result.append(sym)
+                sector_counts[sector] = cnt + 1
+            if len(result) >= self._top_n:
+                break
+
+        # Second pass: if underfilled, add non-target candidates by score
+        if len(result) < self._top_n:
+            result_set = set(result)
+            for sym in scores.sort_values(ascending=False).index:
+                if sym in result_set:
+                    continue
+                sector = sector_map.get(sym, "未知")
+                cnt = sector_counts.get(sector, 0)
+                if cnt < cap:
+                    result.append(sym)
+                    result_set.add(sym)
+                    sector_counts[sector] = cnt + 1
+                if len(result) >= self._top_n:
+                    break
+
+        return result
 
     # ------------------------------------------------------------------
     # Rebalance
