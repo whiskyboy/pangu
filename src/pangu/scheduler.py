@@ -67,6 +67,7 @@ class Components:
     notif_manager: NotificationManager
     watchlist_path: str = "config/watchlist.yaml"
     ml_strategy: Any = None  # MLScoringStrategy when ml.enabled = true
+    portfolio_state: Any = None  # PortfolioState (target portfolio JSON)
 
     async def alert(self, msg: str) -> None:
         """Send a plain-text alert via notification channels."""

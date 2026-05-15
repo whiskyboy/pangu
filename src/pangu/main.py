@@ -49,6 +49,7 @@ from pangu.factor.technical import PandasTAFactorEngine  # noqa: E402
 from pangu.ml.scorer import MLScorer  # noqa: E402
 from pangu.notification import NotificationManager  # noqa: E402
 from pangu.notification.feishu import FeishuNotifier  # noqa: E402
+from pangu.portfolio import PortfolioState  # noqa: E402
 from pangu.scheduler import Components, TradingScheduler  # noqa: E402
 from pangu.strategy.factor import MultiFactorStrategy  # noqa: E402
 from pangu.strategy.llm import LLMClient, LLMJudgeEngineImpl  # noqa: E402
@@ -141,12 +142,26 @@ def build_components() -> tuple[Components, str, Settings]:
             ml_strategy = MLScoringStrategy(
                 ml_scorer,
                 top_n=strategy_cfg.get("top_n", 25),
+                buy_candidate_size=ml_cfg.get("buy_candidate_size", 10),
+                sell_candidate_size=ml_cfg.get("sell_candidate_size", 5),
+                n_drop=ml_cfg.get("n_drop", 3),
             )
-            logger.info("ML scoring enabled: model_dir=%s, window=%d, seeds=%d",
-                        model_dir, ml_scorer.window_id, ml_scorer.n_models)
+            logger.info(
+                "ML scoring enabled: model_dir=%s, window=%d, seeds=%d, "
+                "top_n=%d, buy_pool=%d, sell_pool=%d, n_drop=%d",
+                model_dir, ml_scorer.window_id, ml_scorer.n_models,
+                ml_strategy.top_n, ml_strategy.buy_candidate_size,
+                ml_strategy.sell_candidate_size, ml_strategy.n_drop,
+            )
         except FileNotFoundError:
             logger.warning("ML enabled but no models found in %s, falling back to z-score",
                            model_dir)
+
+    # Portfolio state — virtual target portfolio JSON
+    portfolio_cfg = settings.portfolio
+    portfolio_state = PortfolioState(
+        path=portfolio_cfg.get("state_path", "data/target_portfolio.json"),
+    )
 
     # Notification
     notif_manager = NotificationManager()
@@ -184,6 +199,7 @@ def build_components() -> tuple[Components, str, Settings]:
         judge_engine=judge_engine,
         notif_manager=notif_manager,
         ml_strategy=ml_strategy,
+        portfolio_state=portfolio_state,
     )
     return components, tz, settings
 

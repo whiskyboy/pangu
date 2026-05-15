@@ -12,12 +12,19 @@ min_listing_days = 60
 indices = ["000300", "000905"]
 
 [strategy]
-# 因子排名取 Top-N 进入 LLM 综合决策
-top_n = 10
+# Production rebalance: target portfolio holds top_n stocks; weekly rebalance.
+top_n = 25
+# Legacy z-score path only (used when [ml].enabled = false). Under the default
+# LLM-TopkDropout flow these thresholds are inactive — picks come from ML rank
+# + LLM Bull/Bear/Judge debate instead.
 buy_threshold = 0.7
 sell_threshold = 0.3
-# 全球风险指数低于此值时，提高 buy_threshold 0.1 (设 -999 可禁用)
+# 全球风险指数低于此值时，提高 buy_threshold 0.1 (设 -999 可禁用)。同样仅用于经典 z-score 路径。
 risk_dampen_threshold = -1.0
+
+[portfolio]
+# Where the virtual target portfolio state is persisted (atomic JSON write)
+state_path = "data/target_portfolio.json"
 
 [llm]
 # LiteLLM 模型标识符 (支持 $ENV_VAR 替换)
@@ -47,6 +54,10 @@ calendar_sync_day = 1
 # ML 模型打分（替代 z-score 排名作为 T4 候选股来源）
 enabled = true
 model_dir = "models"
+# 两阶段 TopkDropout 候选池规模
+buy_candidate_size = 10       # 非持仓中 ML 顶部 N 只供 LLM 选 BUY
+sell_candidate_size = 5       # 持仓中 ML 底部 N 只供 LLM 选 SELL
+n_drop = 3                    # 每次调仓最多换手数
 # 模型更新参数
 update_day = 1            # 每月第几天自动更新
 update_time = "02:00"

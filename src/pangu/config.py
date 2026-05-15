@@ -46,6 +46,7 @@ class Settings:
     notification: dict[str, Any] = field(default_factory=dict)
     scheduler: dict[str, Any] = field(default_factory=dict)
     ml: dict[str, Any] = field(default_factory=dict)
+    portfolio: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for section in (
@@ -56,6 +57,7 @@ class Settings:
             "notification",
             "scheduler",
             "ml",
+            "portfolio",
         ):
             setattr(self, section, self.raw.get(section, {}))
 
