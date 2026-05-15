@@ -46,11 +46,13 @@ from pangu.data.storage import Database  # noqa: E402
 from pangu.factor.fundamental import FundamentalFactorEngine  # noqa: E402
 from pangu.factor.macro import MacroFactorEngine  # noqa: E402
 from pangu.factor.technical import PandasTAFactorEngine  # noqa: E402
+from pangu.ml.scorer import MLScorer  # noqa: E402
 from pangu.notification import NotificationManager  # noqa: E402
 from pangu.notification.feishu import FeishuNotifier  # noqa: E402
 from pangu.scheduler import Components, TradingScheduler  # noqa: E402
 from pangu.strategy.factor import MultiFactorStrategy  # noqa: E402
 from pangu.strategy.llm import LLMClient, LLMJudgeEngineImpl  # noqa: E402
+from pangu.strategy.ml.ml_strategy import MLScoringStrategy  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -129,6 +131,23 @@ def build_components() -> tuple[Components, str, Settings]:
     )
     judge_engine = LLMJudgeEngineImpl(llm_client)
 
+    # ML scoring strategy (optional, replaces z-score when enabled)
+    ml_strategy = None
+    ml_cfg = settings.ml
+    if ml_cfg.get("enabled", False):
+        model_dir = ml_cfg.get("model_dir", "models")
+        try:
+            ml_scorer = MLScorer(model_dir=model_dir, db=db)
+            ml_strategy = MLScoringStrategy(
+                ml_scorer,
+                top_n=strategy_cfg.get("top_n", 25),
+            )
+            logger.info("ML scoring enabled: model_dir=%s, window=%d, seeds=%d",
+                        model_dir, ml_scorer.window_id, ml_scorer.n_models)
+        except FileNotFoundError:
+            logger.warning("ML enabled but no models found in %s, falling back to z-score",
+                           model_dir)
+
     # Notification
     notif_manager = NotificationManager()
     notif_cfg = settings.notification
@@ -164,6 +183,7 @@ def build_components() -> tuple[Components, str, Settings]:
         factor_strategy=factor_strategy,
         judge_engine=judge_engine,
         notif_manager=notif_manager,
+        ml_strategy=ml_strategy,
     )
     return components, tz, settings
 

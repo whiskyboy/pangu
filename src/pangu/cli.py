@@ -685,6 +685,128 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
 
 
 # ---------------------------------------------------------------------------
+# score command (ML model scoring)
+# ---------------------------------------------------------------------------
+
+@main.command("score")
+@click.option("--date", default=None, help="Target date (default: latest trading day)")
+@click.option("--model-dir", default="models", help="Directory with wf_window_*.txt files")
+@click.option("--top-n", default=25, type=int, help="Number of top stocks to display")
+def score_cmd(date: str | None, model_dir: str, top_n: int) -> None:
+    """Score stocks using ML models (Alpha158 + LightGBM ensemble)."""
+    import logging
+
+    from pangu.main import build_components, load_env
+    from pangu.ml.scorer import MLScorer
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    load_env()
+    c, _, _ = build_components()
+
+    if date is None:
+        date = c.db.get_latest_bar_date()
+        if date is None:
+            click.echo("ERROR: No bar data in DB. Run T3 sync or backfill first.")
+            return
+    click.echo(f"Scoring for date: {date}")
+
+    scorer = MLScorer(model_dir=model_dir, db=c.db)
+    click.echo(f"Loaded {scorer.n_models} models from window {scorer.window_id}")
+
+    pool = c.stock_pool.get_all_symbols()
+    click.echo(f"Scoring {len(pool)} stocks...")
+
+    scores = scorer.score(date, pool)
+    if scores.empty:
+        click.echo("ERROR: No scores returned (factor computation may have failed)")
+        return
+
+    # Rank and display
+    ranked = scores.sort_values(ascending=False)
+    click.echo(f"\n{'Rank':<6} {'Symbol':<12} {'Score':>10}")
+    click.echo("─" * 30)
+    for i, (sym, sc) in enumerate(ranked.head(top_n).items(), 1):
+        click.echo(f"{i:<6} {sym:<12} {sc:>10.4f}")
+    click.echo(f"\n  Total scored: {len(ranked)}")
+    click.echo(f"  Score range: [{ranked.min():.4f}, {ranked.max():.4f}]")
+
+
+# ---------------------------------------------------------------------------
+# train update command (single-window production model update)
+# ---------------------------------------------------------------------------
+
+@train.command("update")
+@click.option("--model-dir", default="models", help="Directory to save trained models")
+@click.option("--n-seeds", default=5, type=click.IntRange(min=1),
+              help="Number of random seeds (default: 5)")
+@click.option("--time-decay-halflife", default=120, type=click.IntRange(min=0),
+              help="Time decay half-life in trading days (default: 120)")
+@click.option("--first-train-start", default="2020-01-01",
+              help="Training start date (fixed, expanding window)")
+@click.option("--factors", "factors_path", default=None,
+              help="Pre-computed factors.parquet (default: compute from DB)")
+@click.option("--val-months", default=3, type=int, help="Validation period months (default: 3)")
+@click.option("--test-months", default=3, type=int, help="Test period months (default: 3)")
+def train_update_cmd(model_dir: str, n_seeds: int, time_decay_halflife: int,
+                     first_train_start: str, factors_path: str | None,
+                     val_months: int, test_months: int) -> None:
+    """Update production model: single expanding window + time decay.
+
+    Trains one window with all data from --first-train-start to latest,
+    using expanding window + TD (experimentally validated optimal config).
+    """
+    import logging
+
+    from pangu.main import build_components, load_env
+    from pangu.ml.model import train_walk_forward
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    load_env()
+    c, _, _ = build_components()
+    storage = c.market._storage
+
+    # Determine latest data date for last_test_end
+    latest_bar = c.db.get_latest_bar_date()
+    if latest_bar is None:
+        click.echo("ERROR: No bar data. Run T3 sync or backfill first.")
+        return
+
+    click.echo(f"Production model update (expanding + TD{time_decay_halflife})")
+    click.echo(f"  Train start:   {first_train_start} (fixed)")
+    click.echo(f"  Latest data:   {latest_bar}")
+    click.echo(f"  Val/test:      {val_months}/{test_months} months")
+    click.echo(f"  Seeds:         {n_seeds}")
+
+    # train_walk_forward with step_months matching test to produce exactly 1 window
+    # expanding=True means train_start is always first_train_start
+    score_matrix_test, score_matrix_val = train_walk_forward(
+        storage=storage,
+        factors_path=factors_path,
+        model_dir=model_dir,
+        output_dir="data",
+        params=None,
+        label_horizon=5,
+        train_months=18,  # ignored when expanding=True
+        first_train_start=first_train_start,
+        last_test_end=latest_bar,
+        expanding=True,
+        time_decay_halflife=time_decay_halflife,
+        n_seeds=n_seeds,
+        val_months=val_months,
+        test_months=test_months,
+    )
+
+    click.echo("\n✅ Model update complete")
+    if not score_matrix_test.empty:
+        click.echo(f"  Test: {score_matrix_test.shape[0]} days × {score_matrix_test.shape[1]} stocks")
+    if not score_matrix_val.empty:
+        click.echo(f"  Val:  {score_matrix_val.shape[0]} days × {score_matrix_val.shape[1]} stocks")
+    click.echo(f"  Models saved to: {model_dir}/")
+
+
+# ---------------------------------------------------------------------------
 # evaluate-scores command
 # ---------------------------------------------------------------------------
 

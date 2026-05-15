@@ -35,7 +35,6 @@ async def _generate_signals_impl(c: Components) -> None:
     """Inner implementation of signal generation pipeline."""
     logger.info("[T4] Generating signals...")
     today = today_str()
-    start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
 
     # 0. Data freshness checks
     await _check_data_freshness(c, today)
@@ -46,43 +45,29 @@ async def _generate_signals_impl(c: Components) -> None:
     logger.info("[T4] Factor universe: %d stocks, watchlist: %d",
                 len(factor_universe), len(watchlist))
 
-    # 2. Compute technical factors for full universe (from DB, T3 synced)
-    tech_df: dict[str, pd.DataFrame] = {}
-    for symbol in factor_universe:
-        try:
-            bars = c.db.load_daily_bars(symbol, start, today)
-            if bars is not None and not bars.empty:
-                tech_df[symbol] = c.tech_engine.compute(bars)
-        except Exception:  # noqa: BLE001
-            logger.warning("[T4] %s: tech failed", symbol, exc_info=True)
-    logger.info("[T4] Tech factors: %d/%d", len(tech_df), len(factor_universe))
-
-    # 3. Compute fundamental factors for full universe (from DB, T3 synced)
-    fund_raw = c.db.load_latest_fundamentals(list(factor_universe))
-    if not fund_raw.empty and "symbol" in fund_raw.columns:
-        fund_raw = fund_raw.set_index("symbol")
-    fund_df = c.fund_engine.compute(fund_raw)
-
-    # 4. Global snapshot + macro (from DB, T1 synced)
-    global_snapshot = c.db.load_latest_global_snapshots()
-    macro_factors = c.macro_engine.compute(global_snapshot)
-
-    # 5. Load telegraph from DB (T2 accumulated 24h news)
-    telegraph = c.db.load_recent_news(hours=24)
-    logger.info("[T4] Telegraph (from DB): %d items", len(telegraph))
-
-    # 6. Factor ranking across full universe
+    # 2. Load previous pool for status tracking
     prev_pool = c.db.load_factor_pool_previous_day()
-    pool_df, _factor_signals = c.factor_strategy.generate_signals(
-        tech_df, fund_df, macro_factors, prev_pool=prev_pool,
-    )
+
+    # 3. Factor ranking — ML or classic z-score
+    tech_df: dict[str, pd.DataFrame] = {}
+    factor_matrix: pd.DataFrame
+    if c.ml_strategy is not None:
+        pool_df, _factor_signals = await _ml_scoring_path(
+            c, today, factor_universe, prev_pool,
+        )
+        factor_matrix = pd.DataFrame()  # populated later from candidate-only computation
+    else:
+        pool_df, _factor_signals, factor_matrix, tech_df = _classic_scoring_path(
+            c, today, factor_universe, prev_pool,
+        )
+
     logger.info("[T4] Factor pool: %d stocks (universe: %d)",
                 len(pool_df), len(factor_universe))
 
     if not pool_df.empty:
         c.db.save_factor_pool(today, pool_df)
 
-    # 6b. Signal status tracking
+    # 4. Signal status tracking
     prev_symbols = set(prev_pool["symbol"]) if not prev_pool.empty else set()
     curr_symbols = set(pool_df["symbol"]) if not pool_df.empty else set()
     status_map: dict[str, tuple[SignalStatus, int, float | None]] = {}
@@ -98,16 +83,10 @@ async def _generate_signals_impl(c: Components) -> None:
         prev_score = float(prev_row["score"].iloc[0]) if not prev_row.empty else None
         status_map[sym] = (SignalStatus.EXIT, 0, prev_score)
 
-    # 7. Load stock metadata (unified from DB + watchlist YAML)
+    # 5. Load stock metadata
     stock_meta = c.stock_pool.get_stock_metadata()
 
-    # 8. Build factor matrix
-    factor_matrix = c.factor_strategy._build_factor_matrix(
-        factor_universe, tech_df, fund_df, macro_factors,
-        {s: stock_meta[s].sector if s in stock_meta else "" for s in factor_universe},
-    )
-
-    # 9. Build LLM candidates (factor-selected signals + watchlist + EXIT)
+    # 6. Build LLM candidates (factor-selected signals + watchlist + EXIT)
     factor_signal_symbols = [s.symbol for s in _factor_signals]
     candidate_symbols = list(dict.fromkeys(
         factor_signal_symbols + watchlist
@@ -135,7 +114,7 @@ async def _generate_signals_impl(c: Components) -> None:
         if sym not in status_map:
             status_map[sym] = (SignalStatus.NEW_ENTRY, 0, None)
 
-    # 9b. Pre-fetch news for candidates (I/O in scheduler, pure data to engine)
+    # 7. Pre-fetch news for candidates
     stock_news_map: dict[str, tuple[list, list]] = {}
     for sym in candidate_symbols:
         try:
@@ -148,6 +127,11 @@ async def _generate_signals_impl(c: Components) -> None:
             s_anns = []
         stock_news_map[sym] = (s_news, s_anns)
 
+    # 8. ML mode: compute tech/fund/factor_matrix for candidates only
+    if c.ml_strategy is not None:
+        tech_df, factor_matrix = _build_candidate_factors(c, today, candidate_symbols)
+
+    # 9. Build evidence pool for LLM
     evidence_pool = c.judge_engine.build_evidence_pool(
         candidate_symbols, pool_df, factor_matrix,
         status_map, tech_df, stock_meta, stock_news_map,
@@ -155,7 +139,12 @@ async def _generate_signals_impl(c: Components) -> None:
     )
     logger.info("[T4] Evidence pool: %d stocks", len(evidence_pool))
 
-    # 10. LLM comprehensive judge
+    # 10. Load global snapshot + telegraph for LLM
+    global_snapshot = c.db.load_latest_global_snapshots()
+    telegraph = c.db.load_recent_news(hours=24)
+    logger.info("[T4] Telegraph (from DB): %d items", len(telegraph))
+
+    # 11. LLM comprehensive judge
     signals: list[TradeSignal] = await c.judge_engine.judge_pool(
         evidence_pool, telegraph=telegraph, global_market=global_snapshot,
         universe_size=len(pool_df),
@@ -180,7 +169,7 @@ async def _generate_signals_impl(c: Components) -> None:
     logger.info("[T4] Signals: %d", len(signals))
     _print_signal_summary(signals)
 
-    # 11. Save signals + push
+    # 12. Save signals + push
     for signal in signals:
         c.db.save_trade_signal(signal)
 
@@ -201,6 +190,128 @@ async def _generate_signals_impl(c: Components) -> None:
             logger.warning("[T4] Push failed for %s", signal.symbol, exc_info=True)
 
     logger.info("[T4] Done — %d signals, %d pushed", len(signals), len(to_push))
+
+
+# ---------------------------------------------------------------------------
+# Scoring paths
+# ---------------------------------------------------------------------------
+
+async def _ml_scoring_path(
+    c: Components,
+    today: str,
+    factor_universe: list[str],
+    prev_pool: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[TradeSignal]]:
+    """ML scoring: Alpha158 + LightGBM → pool_df + signals.
+
+    Note: factor_matrix is built later (for candidates only) by
+    ``_build_candidate_factors``. ML mode does not compute tech indicators
+    for the full 800-stock universe.
+    """
+    pool_df, signals = c.ml_strategy.generate_signals(
+        today, list(factor_universe), prev_pool=prev_pool,
+    )
+    logger.info("[T4/ML] Scored %d stocks, %d signals (window=%d, seeds=%d)",
+                len(pool_df), len(signals),
+                c.ml_strategy._scorer.window_id,
+                c.ml_strategy._scorer.n_models)
+    return pool_df, signals
+
+
+def _build_candidate_factors(
+    c: Components,
+    today: str,
+    candidates: list[str],
+) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """Compute tech indicators + fund factors for candidate stocks only.
+
+    Used by ML mode to give LLM the same rich factor context as classic mode,
+    but at ~30 stocks instead of 800 — much cheaper.
+
+    Returns
+    -------
+    (tech_df, factor_matrix) — same shapes as classic mode output.
+    """
+    if not candidates:
+        return {}, pd.DataFrame()
+
+    start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
+
+    # Technical indicators for candidates only
+    tech_df: dict[str, pd.DataFrame] = {}
+    for symbol in candidates:
+        try:
+            bars = c.db.load_daily_bars(symbol, start, today)
+            if bars is not None and not bars.empty:
+                tech_df[symbol] = c.tech_engine.compute(bars)
+        except Exception:  # noqa: BLE001
+            logger.warning("[T4/ML] %s: tech failed", symbol, exc_info=True)
+    logger.info("[T4/ML] Tech factors for candidates: %d/%d",
+                len(tech_df), len(candidates))
+
+    # Fundamental factors for candidates
+    fund_raw = c.db.load_latest_fundamentals(candidates)
+    if not fund_raw.empty and "symbol" in fund_raw.columns:
+        fund_raw = fund_raw.set_index("symbol")
+    fund_df = c.fund_engine.compute(fund_raw)
+
+    # Macro factors (cheap)
+    global_snapshot = c.db.load_latest_global_snapshots()
+    macro_factors = c.macro_engine.compute(global_snapshot)
+
+    # Build factor matrix (LLM context)
+    stock_meta = c.stock_pool.get_stock_metadata()
+    sector_map = {s: stock_meta[s].sector if s in stock_meta else "" for s in candidates}
+    factor_matrix = c.factor_strategy._build_factor_matrix(
+        candidates, tech_df, fund_df, macro_factors, sector_map,
+    )
+
+    return tech_df, factor_matrix
+
+
+def _classic_scoring_path(
+    c: Components,
+    today: str,
+    factor_universe: list[str],
+    prev_pool: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[TradeSignal], pd.DataFrame, dict[str, pd.DataFrame]]:
+    """Classic z-score path: tech/fund/macro → MultiFactorStrategy."""
+    start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
+
+    # Compute technical factors for full universe
+    tech_df: dict[str, pd.DataFrame] = {}
+    for symbol in factor_universe:
+        try:
+            bars = c.db.load_daily_bars(symbol, start, today)
+            if bars is not None and not bars.empty:
+                tech_df[symbol] = c.tech_engine.compute(bars)
+        except Exception:  # noqa: BLE001
+            logger.warning("[T4] %s: tech failed", symbol, exc_info=True)
+    logger.info("[T4] Tech factors: %d/%d", len(tech_df), len(factor_universe))
+
+    # Compute fundamental factors
+    fund_raw = c.db.load_latest_fundamentals(list(factor_universe))
+    if not fund_raw.empty and "symbol" in fund_raw.columns:
+        fund_raw = fund_raw.set_index("symbol")
+    fund_df = c.fund_engine.compute(fund_raw)
+
+    # Global snapshot + macro
+    global_snapshot = c.db.load_latest_global_snapshots()
+    macro_factors = c.macro_engine.compute(global_snapshot)
+
+    # Factor ranking
+    pool_df, signals = c.factor_strategy.generate_signals(
+        tech_df, fund_df, macro_factors, prev_pool=prev_pool,
+    )
+
+    # Build factor matrix for LLM
+    stock_meta = c.stock_pool.get_stock_metadata()
+    sector_map = {s: stock_meta[s].sector if s in stock_meta else "" for s in factor_universe}
+    factor_matrix = c.factor_strategy._build_factor_matrix(
+        list(factor_universe), tech_df, fund_df, macro_factors, sector_map,
+    )
+
+    return pool_df, signals, factor_matrix, tech_df
 
 
 async def _check_data_freshness(c: Components, today: str) -> None:

@@ -1,12 +1,13 @@
 """PanGu scheduler — APScheduler-based task orchestration.
 
-Registers 6 cron tasks (times configurable via [scheduler] in settings.toml):
+Registers cron tasks (times configurable via [scheduler] in settings.toml):
   T1 sync_global_market   — trading days (default 08:00)
   T2 poll_news             — hourly (default 07:00-20:00)
   T3 sync_domestic_market  — trading days (default 15:30)
   T4 generate_signals      — trading days (default 08:15)
   T5 sync_reference_data   — monthly (default 1st at 06:00)
   T6 verify_signals        — trading days (default 20:00)
+  T7 update_model          — monthly (when ml.enabled, default 1st at 02:00)
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from pangu.tasks import (
     sync_domestic_market,
     sync_global_market,
     sync_reference_data,
+    update_model,
     verify_signals,
 )
 from pangu.tz import now as _now
@@ -64,6 +66,7 @@ class Components:
     judge_engine: LLMJudgeEngineImpl
     notif_manager: NotificationManager
     watchlist_path: str = "config/watchlist.yaml"
+    ml_strategy: Any = None  # MLScoringStrategy when ml.enabled = true
 
     async def alert(self, msg: str) -> None:
         """Send a plain-text alert via notification channels."""
@@ -164,6 +167,19 @@ class TradingScheduler:
             name="T6 信号验证",
         )
 
+        # T7: monthly model update (only when ml.enabled)
+        if self._c.ml_strategy is not None:
+            from pangu.config import get_settings
+            ml_settings = get_settings().ml
+            t7_day = ml_settings.get("update_day", 1)
+            t7_h, t7_m = _parse_time(ml_settings.get("update_time", "02:00"))
+            self._scheduler.add_job(
+                self.update_model, "cron",
+                day=t7_day, hour=t7_h, minute=t7_m,
+                id="t7_update_model",
+                name="T7 模型更新",
+            )
+
     # ------------------------------------------------------------------
     # Trading day gate
     # ------------------------------------------------------------------
@@ -198,6 +214,9 @@ class TradingScheduler:
 
     async def verify_signals(self) -> None:
         await verify_signals(self._c)
+
+    async def update_model(self) -> None:
+        await update_model(self._c)
 
     # ------------------------------------------------------------------
     # Manual trigger (for CLI / first-run)

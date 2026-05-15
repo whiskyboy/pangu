@@ -5,6 +5,7 @@ from pangu.tasks.poll_news import poll_news
 from pangu.tasks.sync_domestic_market import sync_domestic_market
 from pangu.tasks.sync_global_market import sync_global_market
 from pangu.tasks.sync_reference_data import sync_reference_data
+from pangu.tasks.update_model import update_model
 from pangu.tasks.verify_signals import verify_signals
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "generate_signals",
     "sync_reference_data",
     "verify_signals",
+    "update_model",
 ]

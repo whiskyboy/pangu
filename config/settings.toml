@@ -42,3 +42,13 @@ news_poll_end_time = "20:00"
 news_poll_interval_minutes = 60
 # 每月几号同步交易日历和指数成分股
 calendar_sync_day = 1
+
+[ml]
+# ML 模型打分（替代 z-score 排名作为 T4 候选股来源）
+enabled = true
+model_dir = "models"
+# 模型更新参数
+update_day = 1            # 每月第几天自动更新
+update_time = "02:00"
+n_seeds = 5
+time_decay_halflife = 120
