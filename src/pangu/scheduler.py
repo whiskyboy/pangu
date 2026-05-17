@@ -123,6 +123,10 @@ class TradingScheduler:
         cfg = self._sched_cfg
 
         # T1: sync reference data (calendar + index constituents) — monthly
+        # misfire_grace_time=86400: if the monthly trigger is missed (server
+        # restart, network outage, etc.), allow catchup within 24h instead of
+        # waiting a full month. Avoids cross-year trading_calendar gaps that
+        # would freeze T3/T4/T6 via the is_trading_day gate.
         t1_h, t1_m = _parse_time(cfg.get("reference_data_sync_time", "06:00"))
         t1_day = cfg.get("reference_data_sync_day", 1)
         self._scheduler.add_job(
@@ -133,6 +137,7 @@ class TradingScheduler:
             minute=t1_m,
             id="t1_sync_reference_data",
             name="T1 参考数据同步",
+            misfire_grace_time=86400,
         )
 
         # T2: poll news — hourly cycle by default (00:00-23:00)
@@ -185,6 +190,7 @@ class TradingScheduler:
                 minute=t5_m,
                 id="t5_update_model",
                 name="T5 月度模型训练",
+                misfire_grace_time=86400,
             )
 
         # T6: generate signals — trading days
