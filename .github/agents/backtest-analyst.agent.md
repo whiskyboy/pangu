@@ -34,7 +34,7 @@ Run the backtest and report key metrics:
 # Use val scores for strategy comparison/tuning; test scores only for final reporting
 # First check score matrix date range, then pass matching --start/--end:
 #   python -c "import pandas as pd; s=pd.read_parquet('data/score_matrix_val.parquet'); print(s.index.min(), s.index.max())"
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
 ```
 
 | Metric | Value | Benchmark |
@@ -76,13 +76,14 @@ import pandas as pd
 #   - Score quality in that period
 ```
 
-### 5. Strategy comparison (if baseline available)
+### 5. Hyperparameter sensitivity (optional)
 
 ```bash
-uv run pangu backtest --strategy baseline
+# Vary --top-n / --n-drop / --capital to gauge robustness
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end> --top-n 20
 ```
 
-Compare LGB vs baseline to quantify ML value-add.
+Report whether metrics remain stable across reasonable parameter ranges.
 
 ## Domain rules — Backtest mechanics
 
@@ -115,16 +116,13 @@ Compare LGB vs baseline to quantify ML value-add.
 # Then pass matching --start/--end to backtest.
 
 # Run backtest on val scores (strategy tuning/comparison)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
 
 # Run backtest on test scores (final reporting only — do NOT use for strategy selection)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>
-
-# Run baseline (factor-only) for comparison
-uv run pangu backtest --strategy baseline
+uv run pangu backtest --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>
 
 # Custom parameters (use val for tuning)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end> --top-n 20 --capital 2000000
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end> --top-n 20 --capital 2000000
 
 # Score diagnostics (use val for iterative analysis)
 uv run pangu evaluate-scores --scores data/score_matrix_val.parquet

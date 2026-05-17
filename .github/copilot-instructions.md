@@ -167,8 +167,8 @@ Common commands and expected runtimes (800-stock pool, full date range from 2019
 | `pangu compute-factors` | Compute 191 Alpha158 factors → `data/factors.parquet` | ~10min |
 | `pangu train` | Single-window production training (full history, no `train_months` arg) → `models/wf_window_NN_seed*.txt` | ~15-20min |
 | `pangu train walkforward` | Multi-window walk-forward (research / backtest only) → score matrices + 17×5 model files | ~2.5h |
-| `pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>` | Backtest on val scores (策略调参) | <1min |
-| `pangu backtest --strategy lgb --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>` | Backtest on test scores (最终报告) | <1min |
+| `pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>` | Backtest on val scores (策略调参) | <1min |
+| `pangu backtest --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>` | Backtest on test scores (最终报告) | <1min |
 | `pangu replay --start <yyyy-mm-dd> --end <yyyy-mm-dd>` | Replay historical `portfolio_snapshots` through the backtest engine | <1min |
 | `pangu evaluate-scores --scores data/score_matrix_val.parquet` | Score quality diagnostics | <10s |
 | `pangu evaluate-models --model-dir models` | Model quality diagnostics (seed-averaged importance) | <10s |

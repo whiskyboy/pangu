@@ -138,7 +138,7 @@ pangu train                                # Single-window production training (
 pangu train walkforward                    # Multi-window walk-forward (research / backtest only)
 pangu evaluate-scores --scores data/score_matrix_val.parquet
 pangu evaluate-models --model-dir models
-pangu backtest --strategy lgb --scores data/score_matrix_val.parquet \
+pangu backtest --scores data/score_matrix_val.parquet \
     --start <val_start> --end <val_end>
 pangu replay --start 2026-01-01 --end 2026-05-15   # Replay historical decisions
 
@@ -226,7 +226,7 @@ pangu train walkforward --n-seeds 5            # → score_matrix_{val,test}.par
 
 pangu evaluate-scores --scores data/score_matrix_val.parquet
 pangu evaluate-models --model-dir models
-pangu backtest --strategy lgb \
+pangu backtest \
     --scores data/score_matrix_val.parquet \
     --start <val_start> --end <val_end>        # Backtest / tune on the val window
 pangu replay --start 2026-01-01 --end 2026-05-15   # Replay historical decisions through the engine

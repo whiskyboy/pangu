@@ -222,7 +222,7 @@ uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 uv run pangu evaluate-models --model-dir models
 
 # 4. Backtest comparison (check score date range first, pass matching --start/--end)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
 ```
 
 **Present comparison table:**
@@ -257,7 +257,7 @@ uv run pangu evaluate-models --model-dir models
 uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
 
 # Backtest (check score date range first, pass matching --start/--end)
-uv run pangu backtest --strategy lgb --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>
 
 # Run model tests
 uv run pytest tests/ -k "model or dataset" -v

@@ -104,7 +104,6 @@ python -c "import pandas as pd; s=pd.read_parquet('data/score_matrix_val.parquet
 
 # Strategy tuning (use val, pass matching dates)
 uv run pangu backtest \
-  --strategy lgb \
   --scores data/score_matrix_val.parquet \
   --start <val_start> --end <val_end>
 ```
@@ -113,29 +112,21 @@ uv run pangu backtest \
 - Backtest metrics: Sharpe ratio, annual return, max drawdown, win rate, turnover
 - Equity curve chart saved to `data/backtest_lgb_*.png`
 
-### Step 5: Baseline Comparison (Optional but Recommended)
+### Step 5: Summary
 
-Run the baseline (factor-only, no ML) backtest for comparison:
+Present a metrics table to the user:
 
-```bash
-uv run pangu backtest --strategy baseline
-```
-
-### Step 6: Summary
-
-Present a comparison table to the user:
-
-| Metric | LGB Strategy | Baseline | Delta |
-|--------|-------------|----------|-------|
-| Annual Return | | | |
-| Sharpe Ratio | | | |
-| Max Drawdown | | | |
-| Win Rate | | | |
-| Annual Turnover | | | |
+| Metric | LGB Strategy |
+|--------|-------------|
+| Annual Return | |
+| Sharpe Ratio | |
+| Max Drawdown | |
+| Win Rate | |
+| Annual Turnover | |
 
 Also summarize:
 - IC/Rank IC trend across windows (improving, stable, or degrading?)
-- Whether the ML model adds value over baseline
+- Whether the ML model produces tradeable alpha (positive excess return after costs)
 - Dead features and their impact
 - Any concerning patterns (high turnover, drawdown concentration)
 

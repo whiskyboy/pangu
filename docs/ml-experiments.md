@@ -793,7 +793,6 @@ uv run pangu train walkforward \
 
 # 回测
 uv run pangu backtest \
-  --strategy lgb \
   --scores data/score_matrix_val.parquet
 ```
 
@@ -830,7 +829,6 @@ uv run pangu train walkforward \
 
 # 回测
 uv run pangu backtest \
-  --strategy lgb \
   --scores data/score_matrix_val.parquet
 ```
 
@@ -868,7 +866,6 @@ uv run pangu train walkforward \
 
 # 回测
 uv run pangu backtest \
-  --strategy lgb \
   --scores data/score_matrix_val.parquet
 ```
 

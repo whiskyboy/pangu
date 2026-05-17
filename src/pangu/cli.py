@@ -700,7 +700,6 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 
 
 @main.command("backtest")
-@click.option("--strategy", type=click.Choice(["baseline", "lgb"]), default="baseline", help="Strategy to backtest")
 @click.option("--start", default="2022-01-01", help="Start date")
 @click.option("--end", default="2025-12-31", help="End date")
 @click.option("--top-n", default=30, type=int, help="TopN stocks to hold (default: 30)")
@@ -721,7 +720,13 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     help="Comma-separated stock code prefixes to exclude (default: 688,689 STAR market)",
 )
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
-@click.option("--scores", "scores_path", default=None, help="Parquet file with pre-computed scores (for lgb strategy)")
+@click.option(
+    "--scores",
+    "scores_path",
+    required=True,
+    help="Parquet file with pre-computed scores (score_matrix_val.parquet for tuning, "
+    "score_matrix_test.parquet for final report)",
+)
 @click.option(
     "--score-smooth-halflife",
     default=0,
@@ -735,9 +740,8 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     help="Max stocks per sector (industry diversification). Requires sector data in DB.",
 )
 @click.option("--plot/--no-plot", default=True, help="Generate equity curve chart (default: --plot)")
-@click.option("--plot-output", default=None, help="Chart output path (default: data/backtest_{strategy}_{date}.png)")
+@click.option("--plot-output", default=None, help="Chart output path (default: data/backtest_{date}.png)")
 def backtest_cmd(
-    strategy: str,
     start: str,
     end: str,
     top_n: int,
@@ -748,13 +752,13 @@ def backtest_cmd(
     slippage: float,
     exclude_prefixes: str,
     pool_file: str | None,
-    scores_path: str | None,
+    scores_path: str,
     score_smooth_halflife: int,
     max_per_sector: int | None,
     plot: bool,
     plot_output: str | None,
 ) -> None:
-    """Run local backtest for a given strategy."""
+    """Run local backtest with pre-computed LightGBM scores."""
     from pangu.main import build_components, load_env
 
     load_env()
@@ -766,26 +770,17 @@ def backtest_cmd(
 
     storage = c.market._storage
 
-    # For lgb strategy, load scores early to auto-align backtest date range
-    scores_df: pd.DataFrame | None = None
-    if strategy == "lgb":
-        if not scores_path:
-            click.echo(
-                "ERROR: --scores required for lgb strategy "
-                "(e.g. data/score_matrix_val.parquet for tuning, "
-                "data/score_matrix_test.parquet for final report)"
-            )
-            return
-        scores_df = pd.read_parquet(scores_path)
-        scores_df.index = pd.to_datetime(scores_df.index)
-        score_start = scores_df.index.min()
-        score_end = scores_df.index.max()
-        if score_start > pd.Timestamp(start):
-            start = score_start.strftime("%Y-%m-%d")
-            click.echo(f"WARNING: Aligned backtest start to score matrix start: {start}")
-        if score_end < pd.Timestamp(end):
-            end = score_end.strftime("%Y-%m-%d")
-            click.echo(f"WARNING: Aligned backtest end to score matrix end: {end}")
+    # Load scores early to auto-align backtest date range
+    scores_df = pd.read_parquet(scores_path)
+    scores_df.index = pd.to_datetime(scores_df.index)
+    score_start = scores_df.index.min()
+    score_end = scores_df.index.max()
+    if score_start > pd.Timestamp(start):
+        start = score_start.strftime("%Y-%m-%d")
+        click.echo(f"WARNING: Aligned backtest start to score matrix start: {start}")
+    if score_end < pd.Timestamp(end):
+        end = score_end.strftime("%Y-%m-%d")
+        click.echo(f"WARNING: Aligned backtest end to score matrix end: {end}")
 
     # Pool: explicit YAML override → constituents union (default)
     if pool_file:
@@ -840,21 +835,12 @@ def backtest_cmd(
 
     click.echo(f"Data loaded: {close_prices.shape[0]} days × {close_prices.shape[1]} stocks")
 
-    # Compute scores based on strategy (uses full data including warmup)
-    if strategy == "baseline":
-        from pangu.backtest.scoring import compute_baseline_scores
-
-        scores = compute_baseline_scores(all_bars, storage, start, end)
-    elif strategy == "lgb":
-        scores = scores_df
-        scores = scores[(scores.index >= start) & (scores.index <= end)]
-        click.echo(f"Loaded scores from {scores_path}: {scores.shape}")
-    else:
-        click.echo(f"Unknown strategy: {strategy}")
-        return
+    # Slice pre-computed scores to backtest range
+    scores = scores_df[(scores_df.index >= start) & (scores_df.index <= end)]
+    click.echo(f"Loaded scores from {scores_path}: {scores.shape}")
 
     if scores is None or scores.empty:
-        click.echo("ERROR: No scores computed")
+        click.echo("ERROR: No scores in selected date range")
         return
 
     # Temporal EMA smoothing — reduces day-to-day ranking noise
@@ -911,7 +897,7 @@ def backtest_cmd(
     # Print results
     click.echo(f"\n{'=' * 60}")
     dropout_str = f", n_drop={n_drop}" if n_drop > 0 else ""
-    click.echo(f"Backtest Result: {strategy} ({start} ~ {end}, TopN={top_n}{dropout_str})")
+    click.echo(f"Backtest Result: lgb ({start} ~ {end}, TopN={top_n}{dropout_str})")
     click.echo(f"{'=' * 60}")
     for k, v in result.metrics.items():
         if isinstance(v, float):
@@ -927,8 +913,8 @@ def backtest_cmd(
         from pangu.backtest.plot import plot_equity_curve
 
         if plot_output is None:
-            plot_output = f"data/backtest_{strategy}_{datetime.now().strftime('%Y%m%d')}.png"
-        path = plot_equity_curve(result.nav, result.benchmark_nav, strategy, plot_output, initial_capital=capital)
+            plot_output = f"data/backtest_lgb_{datetime.now().strftime('%Y%m%d')}.png"
+        path = plot_equity_curve(result.nav, result.benchmark_nav, "lgb", plot_output, initial_capital=capital)
         click.echo(f"\n📈 Chart saved: {path}")
 
 

@@ -22,7 +22,7 @@
   - 迁移为不复权存储（adjustflag=3）
   - 从 BaoStock `query_adjust_factor(start_date='1990-01-01')` 获取复权因子
   - 需要前复权时在内存中计算：`adj_close = close × adj_factor`
-- **代码**：`src/pangu/data/market/baostock.py`（adjustflag='3'）、`src/pangu/backtest/scoring.py`（内存复权）
+- **代码**：`src/pangu/data/market/baostock.py`（adjustflag='3'）、`src/pangu/factor/alpha158.py`（因子层面内存复权）
 - **注意**：BaoStock 有 5 只股票（1587 条记录，占 0.07%）存在内部精度不一致，adjustflag=2 的价格 ≠ 不复权价 × 复权因子
 
 ### 2. 除权除息完全未处理
