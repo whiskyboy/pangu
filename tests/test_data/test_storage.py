@@ -26,10 +26,8 @@ def db() -> Database:
 
 class TestInitTables:
     def test_tables_created(self, db: Database) -> None:
-        """All seven expected tables must exist after init_tables()."""
-        rows = db._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        ).fetchall()
+        """All expected tables must exist after init_tables()."""
+        rows = db._conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
         names = {r[0] for r in rows}
         expected = {
             "daily_bars",
@@ -40,6 +38,8 @@ class TestInitTables:
             "data_sync_log",
             "trading_calendar",
             "index_constituents",
+            "portfolio_snapshots",
+            "task_runs",
         }
         assert expected.issubset(names)
 
@@ -56,16 +56,18 @@ class TestInitTables:
 class TestDailyBars:
     @staticmethod
     def _sample_df() -> pd.DataFrame:
-        return pd.DataFrame({
-            "date": ["2026-01-02", "2026-01-03"],
-            "open": [10.0, 10.5],
-            "high": [11.0, 11.5],
-            "low": [9.5, 10.0],
-            "close": [10.8, 11.2],
-            "volume": [100000, 120000],
-            "amount": [1_080_000, 1_344_000],
-            "adj_factor": [1.0, 1.0],
-        })
+        return pd.DataFrame(
+            {
+                "date": ["2026-01-02", "2026-01-03"],
+                "open": [10.0, 10.5],
+                "high": [11.0, 11.5],
+                "low": [9.5, 10.0],
+                "close": [10.8, 11.2],
+                "volume": [100000, 120000],
+                "amount": [1_080_000, 1_344_000],
+                "adj_factor": [1.0, 1.0],
+            }
+        )
 
     def test_save_and_load(self, db: Database) -> None:
         df = self._sample_df()
@@ -84,14 +86,16 @@ class TestDailyBars:
         df = self._sample_df()
         db.save_daily_bars("600519", df)
 
-        updated = pd.DataFrame({
-            "date": ["2026-01-02"],
-            "open": [10.0],
-            "high": [12.0],
-            "low": [9.5],
-            "close": [11.9],
-            "volume": [150000],
-        })
+        updated = pd.DataFrame(
+            {
+                "date": ["2026-01-02"],
+                "open": [10.0],
+                "high": [12.0],
+                "low": [9.5],
+                "close": [11.9],
+                "volume": [150000],
+            }
+        )
         db.save_daily_bars("600519", updated)
 
         loaded = db.load_daily_bars("600519", "2026-01-02", "2026-01-02")
@@ -109,27 +113,38 @@ class TestDailyBars:
 
     def test_default_adj_factor(self, db: Database) -> None:
         """Missing adj_factor column should default to 1.0."""
-        df = pd.DataFrame({
-            "date": ["2026-01-02"],
-            "open": [10.0],
-            "high": [11.0],
-            "low": [9.5],
-            "close": [10.8],
-            "volume": [100000],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2026-01-02"],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.5],
+                "close": [10.8],
+                "volume": [100000],
+            }
+        )
         db.save_daily_bars("600519", df)
         loaded = db.load_daily_bars("600519", "2026-01-01", "2026-01-31")
         assert loaded.iloc[0]["adj_factor"] == pytest.approx(1.0)
 
     def test_extended_columns_save_and_load(self, db: Database) -> None:
         """New columns (turn, preclose, tradestatus, is_st) round-trip."""
-        df = pd.DataFrame({
-            "date": ["2026-01-02"],
-            "open": [10.0], "high": [11.0], "low": [9.5], "close": [10.8],
-            "volume": [100000], "amount": [1_080_000], "adj_factor": [1.0],
-            "turn": [0.5], "preclose": [10.5], "tradestatus": ["1"],
-            "is_st": [0],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2026-01-02"],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.5],
+                "close": [10.8],
+                "volume": [100000],
+                "amount": [1_080_000],
+                "adj_factor": [1.0],
+                "turn": [0.5],
+                "preclose": [10.5],
+                "tradestatus": ["1"],
+                "is_st": [0],
+            }
+        )
         db.save_daily_bars("600519", df)
         loaded = db.load_daily_bars("600519", "2026-01-01", "2026-01-31")
         row = loaded.iloc[0]
@@ -167,12 +182,14 @@ class TestSyncLog:
 
     def test_error_msg(self, db: Database) -> None:
         db.update_sync_log(
-            "600519", "daily_bars", "failed", "akshare",
+            "600519",
+            "daily_bars",
+            "failed",
+            "akshare",
             error_msg="connection timeout",
         )
         row = db._conn.execute(
-            "SELECT status, error_msg FROM data_sync_log "
-            "WHERE symbol = ? AND data_type = ?",
+            "SELECT status, error_msg FROM data_sync_log WHERE symbol = ? AND data_type = ?",
             ("600519", "daily_bars"),
         ).fetchone()
         assert row[0] == "failed"
@@ -186,6 +203,7 @@ class TestSyncLog:
 
 def _make_news(title: str = "Test News", source: str = "cls") -> NewsItem:
     from pangu.tz import now as _now
+
     return NewsItem(
         timestamp=_now(),
         title=title,
@@ -281,9 +299,7 @@ class TestNewsItems:
 # ------------------------------------------------------------------
 
 
-def _make_signal(
-    symbol: str = "600519", action: Action = Action.BUY
-) -> TradeSignal:
+def _make_signal(symbol: str = "600519", action: Action = Action.BUY) -> TradeSignal:
     return TradeSignal(
         timestamp=datetime(2026, 2, 16, 10, 0, 0, tzinfo=timezone.utc),
         symbol=symbol,
@@ -371,9 +387,15 @@ class TestTradeSignals:
         sig1 = _make_signal("600519", Action.BUY)
         sig2 = TradeSignal(
             timestamp=datetime(2026, 2, 17, 10, 0, 0, tzinfo=timezone.utc),
-            symbol="600519", name="贵州茅台", action=Action.BUY,
-            signal_status=SignalStatus.NEW_ENTRY, days_in_top_n=0,
-            price=1800.0, confidence=0.85, source="factor", reason="test",
+            symbol="600519",
+            name="贵州茅台",
+            action=Action.BUY,
+            signal_status=SignalStatus.NEW_ENTRY,
+            days_in_top_n=0,
+            price=1800.0,
+            confidence=0.85,
+            source="factor",
+            reason="test",
         )
         db.save_trade_signal(sig1)
         db.save_trade_signal(sig2)
@@ -397,9 +419,7 @@ class TestTradingCalendar:
     def test_idempotent_insert(self, db: Database) -> None:
         assert db.save_trading_calendar(["2026-01-02"]) == 1
         assert db.save_trading_calendar(["2026-01-02"]) == 0
-        count = db._conn.execute(
-            "SELECT COUNT(*) FROM trading_calendar"
-        ).fetchone()[0]
+        count = db._conn.execute("SELECT COUNT(*) FROM trading_calendar").fetchone()[0]
         assert count == 1
 
 
@@ -411,15 +431,17 @@ class TestTradingCalendar:
 class TestFundamentals:
     @staticmethod
     def _sample_df() -> pd.DataFrame:
-        return pd.DataFrame({
-            "date": ["2026-01-02", "2026-01-03"],
-            "pe_ttm": [30.0, 31.0],
-            "pb": [8.0, 8.2],
-            "roe_ttm": [0.25, 0.26],
-            "revenue_yoy": [0.15, 0.16],
-            "profit_yoy": [0.20, 0.21],
-            "market_cap": [2_000_000, 2_050_000],
-        })
+        return pd.DataFrame(
+            {
+                "date": ["2026-01-02", "2026-01-03"],
+                "pe_ttm": [30.0, 31.0],
+                "pb": [8.0, 8.2],
+                "roe_ttm": [0.25, 0.26],
+                "revenue_yoy": [0.15, 0.16],
+                "profit_yoy": [0.20, 0.21],
+                "market_cap": [2_000_000, 2_050_000],
+            }
+        )
 
     def test_save_and_load(self, db: Database) -> None:
         n = db.save_fundamentals("600519", self._sample_df())
@@ -433,28 +455,32 @@ class TestFundamentals:
 
     def test_upsert(self, db: Database) -> None:
         db.save_fundamentals("600519", self._sample_df())
-        updated = pd.DataFrame({
-            "date": ["2026-01-02"],
-            "pe_ttm": [35.0],
-            "pb": [9.0],
-            "roe_ttm": [0.28],
-            "revenue_yoy": [0.18],
-            "profit_yoy": [0.22],
-            "market_cap": [2_100_000],
-        })
+        updated = pd.DataFrame(
+            {
+                "date": ["2026-01-02"],
+                "pe_ttm": [35.0],
+                "pb": [9.0],
+                "roe_ttm": [0.28],
+                "revenue_yoy": [0.18],
+                "profit_yoy": [0.22],
+                "market_cap": [2_100_000],
+            }
+        )
         db.save_fundamentals("600519", updated)
         loaded = db.load_fundamentals("600519", "2026-01-02", "2026-01-02")
         assert loaded.iloc[0]["pe_ttm"] == pytest.approx(35.0)
 
     def test_save_new_columns(self, db: Database) -> None:
         """New fundamental columns (net_profit_margin etc.) can be saved and loaded."""
-        df = pd.DataFrame({
-            "date": ["2024-03-31"],
-            "roe_ttm": [0.15],
-            "net_profit_margin": [0.35],
-            "debt_ratio": [0.42],
-            "current_ratio": [1.8],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2024-03-31"],
+                "roe_ttm": [0.15],
+                "net_profit_margin": [0.35],
+                "debt_ratio": [0.42],
+                "current_ratio": [1.8],
+            }
+        )
         db.save_fundamentals("600519", df)
         loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
         assert loaded.iloc[0]["net_profit_margin"] == pytest.approx(0.35)
@@ -464,30 +490,42 @@ class TestFundamentals:
     def test_upsert_preserves_existing_columns(self, db: Database) -> None:
         """Writing quarterly data (ROE) doesn't overwrite daily data (PE/PB)."""
         # First: daily PE/PB
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-03-31"],
-            "pe_ttm": [25.0],
-            "pb": [3.0],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-03-31"],
+                    "pe_ttm": [25.0],
+                    "pb": [3.0],
+                }
+            ),
+        )
         # Second: quarterly ROE (pe_ttm=None should NOT overwrite 25.0)
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-03-31"],
-            "roe_ttm": [0.15],
-            "net_profit_margin": [0.30],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-03-31"],
+                    "roe_ttm": [0.15],
+                    "net_profit_margin": [0.30],
+                }
+            ),
+        )
         loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
         assert loaded.iloc[0]["pe_ttm"] == pytest.approx(25.0)  # preserved
         assert loaded.iloc[0]["roe_ttm"] == pytest.approx(0.15)  # merged
 
     def test_load_fundamentals_filled_basic(self, db: Database) -> None:
         """Forward fill quarterly columns across daily rows."""
-        rows = pd.DataFrame({
-            "date": ["2024-01-02", "2024-01-03", "2024-03-31", "2024-04-01", "2024-04-02"],
-            "pe_ttm": [25.0, 25.5, 26.0, 26.5, 27.0],
-            "pb": [3.0, 3.1, 3.2, 3.3, 3.4],
-            "roe_ttm": [None, None, 0.15, None, None],
-            "profit_yoy": [None, None, 0.10, None, None],
-        })
+        rows = pd.DataFrame(
+            {
+                "date": ["2024-01-02", "2024-01-03", "2024-03-31", "2024-04-01", "2024-04-02"],
+                "pe_ttm": [25.0, 25.5, 26.0, 26.5, 27.0],
+                "pb": [3.0, 3.1, 3.2, 3.3, 3.4],
+                "roe_ttm": [None, None, 0.15, None, None],
+                "profit_yoy": [None, None, 0.10, None, None],
+            }
+        )
         db.save_fundamentals("600519", rows)
         filled = db.load_fundamentals_filled("600519", "2024-01-02", "2024-04-02")
         # Before Q1 report: ROE should still be None (no seed)
@@ -501,15 +539,25 @@ class TestFundamentals:
     def test_load_fundamentals_filled_seed(self, db: Database) -> None:
         """Seed row from before start date fills first rows."""
         # Q4 2023 report (before our query range)
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2023-12-31"],
-            "roe_ttm": [0.20],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2023-12-31"],
+                    "roe_ttm": [0.20],
+                }
+            ),
+        )
         # Daily PE rows in Jan 2024 (no quarterly data)
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-01-02", "2024-01-03"],
-            "pe_ttm": [25.0, 25.5],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-01-02", "2024-01-03"],
+                    "pe_ttm": [25.0, 25.5],
+                }
+            ),
+        )
         filled = db.load_fundamentals_filled("600519", "2024-01-02", "2024-01-03")
         # Should pick up 2023-12-31 ROE as seed
         assert len(filled) == 2
@@ -540,11 +588,16 @@ class TestFundamentals:
 
     def test_update_gross_margin_batch_preserves_existing(self, db: Database) -> None:
         """Batch gross_margin update does not overwrite existing columns."""
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-03-31"],
-            "pe_ttm": [25.0],
-            "roe_ttm": [0.15],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-03-31"],
+                    "pe_ttm": [25.0],
+                    "roe_ttm": [0.15],
+                }
+            ),
+        )
         db.update_gross_margin_batch("2024-03-31", {"600519": 0.92})
         loaded = db.load_fundamentals("600519", "2024-03-31", "2024-03-31")
         assert loaded.iloc[0]["pe_ttm"] == pytest.approx(25.0)  # preserved
@@ -561,10 +614,15 @@ class TestFundamentals:
 
     def test_update_pub_date_batch(self, db: Database) -> None:
         """Batch pub_date update writes to existing quarterly rows."""
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-03-31", "2024-06-30"],
-            "roe_ttm": [0.15, 0.18],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-03-31", "2024-06-30"],
+                    "roe_ttm": [0.15, 0.18],
+                }
+            ),
+        )
         data = {"2024-03-31": "2024-04-27", "2024-06-30": "2024-08-25"}
         n = db.update_pub_date_batch("600519", data)
         assert n == 2
@@ -579,15 +637,21 @@ class TestFundamentals:
     def test_load_fundamentals_filled_pit_delays_quarterly(self, db: Database) -> None:
         """PIT: quarterly values delayed to pub_date, not available from report date."""
         # Q1 2024 report (period-end 2024-03-31, announced 2024-04-27)
-        rows = pd.DataFrame({
-            "date": [
-                "2024-03-29", "2024-03-31", "2024-04-01", "2024-04-26",
-                "2024-04-27", "2024-04-28",
-            ],
-            "pe_ttm": [25.0, 25.5, 26.0, 27.0, 27.5, 28.0],
-            "roe_ttm": [None, 0.15, None, None, None, None],
-            "pub_date": [None, "2024-04-27", None, None, None, None],
-        })
+        rows = pd.DataFrame(
+            {
+                "date": [
+                    "2024-03-29",
+                    "2024-03-31",
+                    "2024-04-01",
+                    "2024-04-26",
+                    "2024-04-27",
+                    "2024-04-28",
+                ],
+                "pe_ttm": [25.0, 25.5, 26.0, 27.0, 27.5, 28.0],
+                "roe_ttm": [None, 0.15, None, None, None, None],
+                "pub_date": [None, "2024-04-27", None, None, None, None],
+            }
+        )
         db.save_fundamentals("600519", rows)
         filled = db.load_fundamentals_filled("600519", "2024-03-29", "2024-04-28")
 
@@ -604,12 +668,14 @@ class TestFundamentals:
     def test_load_fundamentals_filled_pit_pub_date_not_in_rows(self, db: Database) -> None:
         """PIT: when pub_date falls on a non-trading day, values go to next available row."""
         # pub_date 2024-04-27 is Saturday — next trading day is 2024-04-29
-        rows = pd.DataFrame({
-            "date": ["2024-03-31", "2024-04-26", "2024-04-29"],
-            "pe_ttm": [25.0, 26.0, 27.0],
-            "roe_ttm": [0.15, None, None],
-            "pub_date": ["2024-04-27", None, None],
-        })
+        rows = pd.DataFrame(
+            {
+                "date": ["2024-03-31", "2024-04-26", "2024-04-29"],
+                "pe_ttm": [25.0, 26.0, 27.0],
+                "roe_ttm": [0.15, None, None],
+                "pub_date": ["2024-04-27", None, None],
+            }
+        )
         db.save_fundamentals("600519", rows)
         filled = db.load_fundamentals_filled("600519", "2024-03-31", "2024-04-29")
 
@@ -622,12 +688,14 @@ class TestFundamentals:
 
     def test_load_fundamentals_filled_pit_no_pub_date_falls_back(self, db: Database) -> None:
         """Without pub_date, quarterly ffill works as before (backward compatible)."""
-        rows = pd.DataFrame({
-            "date": ["2024-03-31", "2024-04-01", "2024-04-02"],
-            "pe_ttm": [25.0, 25.5, 26.0],
-            "roe_ttm": [0.15, None, None],
-            # no pub_date column or all NULL
-        })
+        rows = pd.DataFrame(
+            {
+                "date": ["2024-03-31", "2024-04-01", "2024-04-02"],
+                "pe_ttm": [25.0, 25.5, 26.0],
+                "roe_ttm": [0.15, None, None],
+                # no pub_date column or all NULL
+            }
+        )
         db.save_fundamentals("600519", rows)
         filled = db.load_fundamentals_filled("600519", "2024-03-31", "2024-04-02")
 
@@ -638,12 +706,14 @@ class TestFundamentals:
 
     def test_load_fundamentals_filled_pit_same_pub_date(self, db: Database) -> None:
         """PIT: when Q3 and Q4 share the same pub_date, newer quarter wins."""
-        rows = pd.DataFrame({
-            "date": ["2024-09-30", "2024-12-31", "2025-04-27", "2025-04-28"],
-            "pe_ttm": [20.0, 21.0, 22.0, 23.0],
-            "roe_ttm": [0.18, 0.20, None, None],
-            "pub_date": ["2025-04-27", "2025-04-27", None, None],
-        })
+        rows = pd.DataFrame(
+            {
+                "date": ["2024-09-30", "2024-12-31", "2025-04-27", "2025-04-28"],
+                "pe_ttm": [20.0, 21.0, 22.0, 23.0],
+                "roe_ttm": [0.18, 0.20, None, None],
+                "pub_date": ["2025-04-27", "2025-04-27", None, None],
+            }
+        )
         db.save_fundamentals("600519", rows)
         filled = db.load_fundamentals_filled("600519", "2024-09-30", "2025-04-28")
 
@@ -658,16 +728,26 @@ class TestFundamentals:
     def test_load_fundamentals_filled_pit_seed_with_pub_date(self, db: Database) -> None:
         """PIT: seed row from before range is still used correctly."""
         # Old Q4 data with pub_date already passed
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2023-12-31"],
-            "roe_ttm": [0.20],
-            "pub_date": ["2024-04-03"],  # announced before our query range
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2023-12-31"],
+                    "roe_ttm": [0.20],
+                    "pub_date": ["2024-04-03"],  # announced before our query range
+                }
+            ),
+        )
         # Daily rows in May 2024
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-05-01", "2024-05-02"],
-            "pe_ttm": [25.0, 25.5],
-        }))
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-05-01", "2024-05-02"],
+                    "pe_ttm": [25.0, 25.5],
+                }
+            ),
+        )
         filled = db.load_fundamentals_filled("600519", "2024-05-01", "2024-05-02")
 
         # Seed pub_date 2024-04-03 < query start 2024-05-01 → data already available
@@ -695,10 +775,8 @@ class TestLifecycle:
 class TestIndexConstituents:
     def test_save_and_load(self, db: Database) -> None:
         rows = [
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-            {"symbol": "000858", "name": "五粮液", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
+            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300", "sector": "白酒", "date": "2026-02-20"},
+            {"symbol": "000858", "name": "五粮液", "index_code": "000300", "sector": "白酒", "date": "2026-02-20"},
         ]
         n = db.save_index_constituents(rows)
         assert n == 2
@@ -712,26 +790,34 @@ class TestIndexConstituents:
         assert db.save_index_constituents([]) == 0
 
     def test_upsert(self, db: Database) -> None:
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "茅台旧", "index_code": "000300",
-             "sector": "白酒", "date": "2026-01-01"},
-        ])
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "茅台新", "index_code": "000300",
-             "sector": "食品饮料", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {"symbol": "600519", "name": "茅台旧", "index_code": "000300", "sector": "白酒", "date": "2026-01-01"},
+            ]
+        )
+        db.save_index_constituents(
+            [
+                {
+                    "symbol": "600519",
+                    "name": "茅台新",
+                    "index_code": "000300",
+                    "sector": "食品饮料",
+                    "date": "2026-02-20",
+                },
+            ]
+        )
         loaded = db.load_index_constituents("000300")
         assert len(loaded) == 1
         assert loaded[0]["name"] == "茅台新"
         assert loaded[0]["sector"] == "食品饮料"
 
     def test_different_index_codes_isolated(self, db: Database) -> None:
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-            {"symbol": "600519", "name": "茅台", "index_code": "000905",
-             "sector": "白酒", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {"symbol": "600519", "name": "茅台", "index_code": "000300", "sector": "白酒", "date": "2026-02-20"},
+                {"symbol": "600519", "name": "茅台", "index_code": "000905", "sector": "白酒", "date": "2026-02-20"},
+            ]
+        )
         assert len(db.load_index_constituents("000300")) == 1
         assert len(db.load_index_constituents("000905")) == 1
 
@@ -744,14 +830,29 @@ class TestIndexConstituents:
 class TestFactorPoolPreviousDay:
     def test_returns_previous_day_pool(self, db: Database) -> None:
         from pangu.tz import today_str
+
         today = today_str()
 
-        db.save_factor_pool("2026-02-18", pd.DataFrame({
-            "symbol": ["600519"], "score": [0.8], "rank": [1],
-        }))
-        db.save_factor_pool(today, pd.DataFrame({
-            "symbol": ["000858"], "score": [0.9], "rank": [1],
-        }))
+        db.save_factor_pool(
+            "2026-02-18",
+            pd.DataFrame(
+                {
+                    "symbol": ["600519"],
+                    "score": [0.8],
+                    "rank": [1],
+                }
+            ),
+        )
+        db.save_factor_pool(
+            today,
+            pd.DataFrame(
+                {
+                    "symbol": ["000858"],
+                    "score": [0.9],
+                    "rank": [1],
+                }
+            ),
+        )
         prev = db.load_factor_pool_previous_day()
         assert len(prev) == 1
         assert prev.iloc[0]["symbol"] == "600519"
@@ -759,3 +860,169 @@ class TestFactorPoolPreviousDay:
     def test_returns_empty_when_no_previous(self, db: Database) -> None:
         prev = db.load_factor_pool_previous_day()
         assert prev.empty
+
+
+# ------------------------------------------------------------------
+# portfolio_snapshots
+# ------------------------------------------------------------------
+
+
+class TestPortfolioSnapshots:
+    def test_save_and_get_single(self, db: Database) -> None:
+        db.save_portfolio_snapshot(
+            "2026-02-16",
+            ["600519", "000858"],
+            is_rebalance=True,
+        )
+        snap = db.get_portfolio_snapshot("2026-02-16")
+        assert snap is not None
+        assert snap["symbols"] == ["000858", "600519"]  # stored sorted
+        assert snap["is_rebalance"] is True
+
+    def test_save_replaces_existing(self, db: Database) -> None:
+        db.save_portfolio_snapshot("2026-02-16", ["600519"], is_rebalance=False)
+        db.save_portfolio_snapshot(
+            "2026-02-16",
+            ["000858"],
+            is_rebalance=True,
+        )
+        snap = db.get_portfolio_snapshot("2026-02-16")
+        assert snap["symbols"] == ["000858"]
+        assert snap["is_rebalance"] is True
+
+    def test_get_returns_none_when_missing(self, db: Database) -> None:
+        assert db.get_portfolio_snapshot("2099-01-01") is None
+
+    def test_get_snapshots_ordered_by_date(self, db: Database) -> None:
+        for d in ["2026-02-20", "2026-02-09", "2026-02-13"]:
+            db.save_portfolio_snapshot(d, [], is_rebalance=False)
+        rows = db.get_portfolio_snapshots()
+        dates = [r["date"] for r in rows]
+        assert dates == ["2026-02-09", "2026-02-13", "2026-02-20"]
+
+    def test_get_snapshots_filters_date_range(self, db: Database) -> None:
+        for d in ["2026-02-09", "2026-02-13", "2026-02-20"]:
+            db.save_portfolio_snapshot(d, [], is_rebalance=False)
+        rows = db.get_portfolio_snapshots(start="2026-02-10", end="2026-02-15")
+        dates = [r["date"] for r in rows]
+        assert dates == ["2026-02-13"]
+
+    def test_get_latest_returns_max_date(self, db: Database) -> None:
+        for d in ["2026-02-09", "2026-02-20", "2026-02-13"]:
+            db.save_portfolio_snapshot(d, ["X"], is_rebalance=False)
+        latest = db.get_latest_portfolio_snapshot()
+        assert latest is not None
+        assert latest["date"] == "2026-02-20"
+
+    def test_get_latest_returns_none_when_empty(self, db: Database) -> None:
+        assert db.get_latest_portfolio_snapshot() is None
+
+
+# ------------------------------------------------------------------
+# task_runs
+# ------------------------------------------------------------------
+
+
+class TestTaskRuns:
+    def test_record_and_get_recent(self, db: Database) -> None:
+        db.record_task_run(
+            task_id="T1",
+            name="全球行情同步",
+            started_at="2026-02-16 08:00:00",
+            completed_at="2026-02-16 08:00:30",
+            status="success",
+            duration_ms=30000,
+        )
+        rows = db.get_recent_task_runs("T1")
+        assert len(rows) == 1
+        assert rows[0]["task_id"] == "T1"
+        assert rows[0]["status"] == "success"
+        assert rows[0]["duration_ms"] == 30000
+
+    def test_get_recent_filters_by_task_id(self, db: Database) -> None:
+        for tid in ["T1", "T2", "T1"]:
+            db.record_task_run(
+                task_id=tid,
+                name=tid,
+                started_at="2026-02-16 08:00:00",
+                completed_at="2026-02-16 08:00:01",
+                status="success",
+            )
+        t1 = db.get_recent_task_runs("T1")
+        assert len(t1) == 2
+        all_runs = db.get_recent_task_runs()
+        assert len(all_runs) == 3
+
+    def test_get_recent_ordered_desc(self, db: Database) -> None:
+        for ts in ["2026-02-16 08:00:00", "2026-02-16 09:00:00", "2026-02-16 07:00:00"]:
+            db.record_task_run(
+                task_id="T1",
+                name="T1",
+                started_at=ts,
+                completed_at=ts,
+                status="success",
+            )
+        rows = db.get_recent_task_runs("T1")
+        starts = [r["started_at"] for r in rows]
+        assert starts == sorted(starts, reverse=True)
+
+    def test_get_recent_respects_limit(self, db: Database) -> None:
+        for i in range(5):
+            db.record_task_run(
+                task_id="T1",
+                name="T1",
+                started_at=f"2026-02-{16 + i:02d} 08:00:00",
+                completed_at=f"2026-02-{16 + i:02d} 08:00:01",
+                status="success",
+            )
+        assert len(db.get_recent_task_runs("T1", limit=3)) == 3
+
+    def test_get_last_successful_run(self, db: Database) -> None:
+        db.record_task_run(
+            task_id="T1",
+            name="T1",
+            started_at="2026-02-15 08:00:00",
+            completed_at="2026-02-15 08:00:01",
+            status="success",
+        )
+        db.record_task_run(
+            task_id="T1",
+            name="T1",
+            started_at="2026-02-16 08:00:00",
+            completed_at="2026-02-16 08:00:01",
+            status="failed",
+            error_msg="boom",
+        )
+        last = db.get_last_successful_run("T1")
+        assert last == "2026-02-15 08:00:00"
+
+    def test_get_last_successful_run_none_when_no_success(self, db: Database) -> None:
+        db.record_task_run(
+            task_id="T1",
+            name="T1",
+            started_at="2026-02-16 08:00:00",
+            completed_at="2026-02-16 08:00:01",
+            status="failed",
+        )
+        assert db.get_last_successful_run("T1") is None
+
+    def test_cleanup_old_task_runs(self, db: Database) -> None:
+        from datetime import timedelta
+
+        from pangu.tz import now as _now
+
+        recent = _now().strftime("%Y-%m-%d %H:%M:%S")
+        old = (_now() - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
+        for ts in [recent, old]:
+            db.record_task_run(
+                task_id="T1",
+                name="T1",
+                started_at=ts,
+                completed_at=ts,
+                status="success",
+            )
+        deleted = db.cleanup_old_task_runs(days=30)
+        assert deleted == 1
+        remaining = db.get_recent_task_runs("T1")
+        assert len(remaining) == 1
+        assert remaining[0]["started_at"] == recent

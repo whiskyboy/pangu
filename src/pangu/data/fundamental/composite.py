@@ -34,8 +34,12 @@ class CompositeFundamentalProvider:
         self._providers = providers
 
     def get_financial_indicator(
-        self, symbol: str, start: str | None = None, end: str | None = None,
-        *, force: bool = False,
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
+        *,
+        force: bool = False,
     ) -> pd.DataFrame:
         """Return financial indicators with cache + provider chain fallback.
 
@@ -68,7 +72,9 @@ class CompositeFundamentalProvider:
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "%s.get_financial_indicator failed for %s, trying next provider",
-                    type(p).__name__, symbol, exc_info=True,
+                    type(p).__name__,
+                    symbol,
+                    exc_info=True,
                 )
                 df = None
                 continue
@@ -86,7 +92,10 @@ class CompositeFundamentalProvider:
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to save raw fundamentals for %s", symbol)
         self._storage.update_sync_log(
-            symbol, "financial_indicator", "ok", source,
+            symbol,
+            "financial_indicator",
+            "ok",
+            source,
             last_date=tz_now().strftime("%Y-%m-%d"),
         )
 
@@ -97,7 +106,10 @@ class CompositeFundamentalProvider:
     # ------------------------------------------------------------------
 
     def _load_financial_from_db(
-        self, symbol: str, start: str | None, end: str | None,
+        self,
+        symbol: str,
+        start: str | None,
+        end: str | None,
     ) -> pd.DataFrame:
         """Read financial indicators from fundamentals table."""
         try:
@@ -137,7 +149,9 @@ class CompositeFundamentalProvider:
     # ------------------------------------------------------------------
 
     def refresh_gross_margin(
-        self, start: str, end: str,
+        self,
+        start: str,
+        end: str,
     ) -> tuple[int, int]:
         """Backfill gross_margin from ``stock_yjbb_em`` API (per-quarter batch).
 
@@ -183,7 +197,9 @@ class CompositeFundamentalProvider:
     # ------------------------------------------------------------------
 
     def refresh_pub_dates(
-        self, start: str, end: str,
+        self,
+        start: str,
+        end: str,
     ) -> tuple[int, int]:
         """Backfill ``pub_date`` (first announcement date) for quarterly rows.
 

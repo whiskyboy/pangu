@@ -58,10 +58,7 @@ class AkShareMarketDataProvider(ThrottleMixin):
         required = ("date", "open", "high", "low", "close", "volume", "amount")
         missing = [c for c in required if c not in df.columns]
         if missing:
-            raise ValueError(
-                f"AkShare daily bars missing critical columns: {missing}. "
-                f"Available: {list(df.columns)}"
-            )
+            raise ValueError(f"AkShare daily bars missing critical columns: {missing}. Available: {list(df.columns)}")
         if "adj_factor" not in df.columns:
             df["adj_factor"] = 1.0
         df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
@@ -77,8 +74,11 @@ class AkShareMarketDataProvider(ThrottleMixin):
             self._throttle()
             raw = retry_call(
                 lambda: self._ak.stock_zh_a_hist(
-                    symbol=symbol, period="daily",
-                    start_date=ak_start, end_date=ak_end, adjust="qfq",
+                    symbol=symbol,
+                    period="daily",
+                    start_date=ak_start,
+                    end_date=ak_end,
+                    adjust="qfq",
                 ),
                 circuit=self._circuit,
             )
@@ -88,9 +88,7 @@ class AkShareMarketDataProvider(ThrottleMixin):
         except Exception:  # noqa: BLE001
             logger.warning("AkShare get_daily_bars failed for %s", symbol, exc_info=True)
 
-        return pd.DataFrame(
-            columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-        )
+        return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"])
 
     def get_index_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Not supported by AkShare provider."""
@@ -128,9 +126,7 @@ class AkShareMarketDataProvider(ThrottleMixin):
             prev_close = float(prev["close"])
             close = float(last["close"])
             change_pct = (
-                round((close - prev_close) / prev_close * 100, 4)
-                if pd.notna(prev_close) and prev_close != 0
-                else None
+                round((close - prev_close) / prev_close * 100, 4) if pd.notna(prev_close) and prev_close != 0 else None
             )
             return {
                 "symbol": symbol,
@@ -155,9 +151,12 @@ class AkShareMarketDataProvider(ThrottleMixin):
             row = self._fetch_us_index(symbol, ak_sym, name)
             if row:
                 rows.append(row)
-        df = pd.DataFrame(rows) if rows else pd.DataFrame(
-            columns=["symbol", "name", "date", "open", "high", "low",
-                      "close", "volume", "change_pct", "source"]
+        df = (
+            pd.DataFrame(rows)
+            if rows
+            else pd.DataFrame(
+                columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
+            )
         )
         if self._storage is not None and not df.empty:
             self._storage.save_global_snapshots(df)
@@ -174,14 +173,12 @@ class AkShareMarketDataProvider(ThrottleMixin):
             if full is None or full.empty:
                 logger.warning("stock_hk_index_spot_sina returned empty")
                 return pd.DataFrame(
-                    columns=["symbol", "name", "date", "open", "high", "low",
-                              "close", "volume", "change_pct", "source"]
+                    columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
                 )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to fetch HK indices", exc_info=True)
             return pd.DataFrame(
-                columns=["symbol", "name", "date", "open", "high", "low",
-                          "close", "volume", "change_pct", "source"]
+                columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
             )
 
         from pangu.tz import today_str
@@ -194,22 +191,27 @@ class AkShareMarketDataProvider(ThrottleMixin):
                 logger.warning("HK index %s not found in response", code)
                 continue
             r = match.iloc[0]
-            rows.append({
-                "symbol": code,
-                "name": name,
-                "date": today,
-                "open": float(r["今开"]) if pd.notna(r["今开"]) else None,
-                "high": float(r["最高"]) if pd.notna(r["最高"]) else None,
-                "low": float(r["最低"]) if pd.notna(r["最低"]) else None,
-                "close": float(r["最新价"]) if pd.notna(r["最新价"]) else None,
-                "volume": None,  # sina API doesn't provide volume
-                "change_pct": float(r["涨跌幅"]) if pd.notna(r["涨跌幅"]) else None,
-                "source": "hk_index",
-            })
+            rows.append(
+                {
+                    "symbol": code,
+                    "name": name,
+                    "date": today,
+                    "open": float(r["今开"]) if pd.notna(r["今开"]) else None,
+                    "high": float(r["最高"]) if pd.notna(r["最高"]) else None,
+                    "low": float(r["最低"]) if pd.notna(r["最低"]) else None,
+                    "close": float(r["最新价"]) if pd.notna(r["最新价"]) else None,
+                    "volume": None,  # sina API doesn't provide volume
+                    "change_pct": float(r["涨跌幅"]) if pd.notna(r["涨跌幅"]) else None,
+                    "source": "hk_index",
+                }
+            )
 
-        df = pd.DataFrame(rows) if rows else pd.DataFrame(
-            columns=["symbol", "name", "date", "open", "high", "low",
-                      "close", "volume", "change_pct", "source"]
+        df = (
+            pd.DataFrame(rows)
+            if rows
+            else pd.DataFrame(
+                columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
+            )
         )
         if self._storage is not None and not df.empty:
             self._storage.save_global_snapshots(df)
@@ -242,14 +244,12 @@ class AkShareMarketDataProvider(ThrottleMixin):
             if raw is None or raw.empty:
                 logger.warning("futures_foreign_commodity_realtime returned empty")
                 return pd.DataFrame(
-                    columns=["symbol", "name", "date", "open", "high", "low",
-                              "close", "volume", "change_pct", "source"]
+                    columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
                 )
         except Exception:  # noqa: BLE001
             logger.warning("Failed to fetch commodity futures", exc_info=True)
             return pd.DataFrame(
-                columns=["symbol", "name", "date", "open", "high", "low",
-                          "close", "volume", "change_pct", "source"]
+                columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
             )
 
         rows: list[dict] = []
@@ -258,22 +258,27 @@ class AkShareMarketDataProvider(ThrottleMixin):
             if cn_name not in self._COMMODITY_NAME_MAP:
                 continue
             sym, display_name = self._COMMODITY_NAME_MAP[cn_name]
-            rows.append({
-                "symbol": sym,
-                "name": display_name,
-                "date": str(r.get("日期", today_str())),
-                "open": float(r["开盘价"]) if pd.notna(r.get("开盘价")) else None,
-                "high": float(r["最高价"]) if pd.notna(r.get("最高价")) else None,
-                "low": float(r["最低价"]) if pd.notna(r.get("最低价")) else None,
-                "close": float(r["最新价"]) if pd.notna(r.get("最新价")) else None,
-                "volume": None,  # realtime API doesn't provide volume
-                "change_pct": float(r["涨跌幅"]) if pd.notna(r.get("涨跌幅")) else None,
-                "source": "commodity",
-            })
+            rows.append(
+                {
+                    "symbol": sym,
+                    "name": display_name,
+                    "date": str(r.get("日期", today_str())),
+                    "open": float(r["开盘价"]) if pd.notna(r.get("开盘价")) else None,
+                    "high": float(r["最高价"]) if pd.notna(r.get("最高价")) else None,
+                    "low": float(r["最低价"]) if pd.notna(r.get("最低价")) else None,
+                    "close": float(r["最新价"]) if pd.notna(r.get("最新价")) else None,
+                    "volume": None,  # realtime API doesn't provide volume
+                    "change_pct": float(r["涨跌幅"]) if pd.notna(r.get("涨跌幅")) else None,
+                    "source": "commodity",
+                }
+            )
 
-        df = pd.DataFrame(rows) if rows else pd.DataFrame(
-            columns=["symbol", "name", "date", "open", "high", "low",
-                      "close", "volume", "change_pct", "source"]
+        df = (
+            pd.DataFrame(rows)
+            if rows
+            else pd.DataFrame(
+                columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
+            )
         )
         if self._storage is not None and not df.empty:
             self._storage.save_global_snapshots(df)
@@ -284,6 +289,7 @@ class AkShareMarketDataProvider(ThrottleMixin):
         # Check DB cache: if we already have snapshots saved today, return them
         if self._storage is not None:
             from pangu.tz import today_str
+
             today = today_str()
             cached = self._storage.load_latest_global_snapshots()
             if not cached.empty and (cached["date"] >= today).any():
@@ -293,7 +299,6 @@ class AkShareMarketDataProvider(ThrottleMixin):
         frames = [f for f in frames if not f.empty]
         if not frames:
             return pd.DataFrame(
-                columns=["symbol", "name", "date", "open", "high", "low",
-                          "close", "volume", "change_pct", "source"]
+                columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
             )
         return pd.concat(frames, ignore_index=True)

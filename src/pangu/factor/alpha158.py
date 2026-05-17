@@ -74,14 +74,22 @@ _FUNDAMENTAL_COLS = [
 # Factor name registry (deterministic order, 191 total)
 # ---------------------------------------------------------------------------
 
+
 def _build_factor_names() -> list[str]:
     """Return the ordered list of all 191 factor names."""
     names: list[str] = []
 
     # KBar (9)
     names += [
-        "KMID", "KLEN", "KMID2", "KUP", "KUP2",
-        "KLOW", "KLOW2", "KSFT", "KSFT2",
+        "KMID",
+        "KLEN",
+        "KMID2",
+        "KUP",
+        "KUP2",
+        "KLOW",
+        "KLOW2",
+        "KSFT",
+        "KSFT2",
     ]
 
     # Price (5)
@@ -89,14 +97,35 @@ def _build_factor_names() -> list[str]:
 
     # Rolling (29 ops × 5 windows = 145)
     _rolling_ops = [
-        "ROC", "MA", "STD", "BETA", "RSQR", "RESI",
-        "MAX", "MIN", "QTLU", "QTLD", "RANK", "RSV",
-        "IMAX", "IMIN", "IMXD",
-        "CORR", "CORD",
-        "CNTP", "CNTN", "CNTD",
-        "SUMP", "SUMN", "SUMD",
-        "VMA", "VSTD", "WVMA",
-        "VSUMP", "VSUMN", "VSUMD",
+        "ROC",
+        "MA",
+        "STD",
+        "BETA",
+        "RSQR",
+        "RESI",
+        "MAX",
+        "MIN",
+        "QTLU",
+        "QTLD",
+        "RANK",
+        "RSV",
+        "IMAX",
+        "IMIN",
+        "IMXD",
+        "CORR",
+        "CORD",
+        "CNTP",
+        "CNTN",
+        "CNTD",
+        "SUMP",
+        "SUMN",
+        "SUMD",
+        "VMA",
+        "VSTD",
+        "WVMA",
+        "VSUMP",
+        "VSUMN",
+        "VSUMD",
     ]
     for d in _WINDOWS:
         for op in _rolling_ops:
@@ -115,6 +144,7 @@ FACTOR_NAMES: list[str] = _build_factor_names()
 # ---------------------------------------------------------------------------
 # Wide-format pivot helpers
 # ---------------------------------------------------------------------------
+
 
 def _pivot(bars: pd.DataFrame, col: str) -> pd.DataFrame:
     return bars.pivot(index="date", columns="symbol", values=col)
@@ -145,9 +175,15 @@ def _prepare_wide_tables(
     VWAP = (amount / (volume + _EPS)) * adj
 
     return {
-        "O": O, "H": H, "L": L, "C": C,
-        "V": volume, "amount": amount, "VWAP": VWAP,
-        "raw_open": raw_open, "preclose": _pivot(bars, "preclose") if "preclose" in bars.columns else None,
+        "O": O,
+        "H": H,
+        "L": L,
+        "C": C,
+        "V": volume,
+        "amount": amount,
+        "VWAP": VWAP,
+        "raw_open": raw_open,
+        "preclose": _pivot(bars, "preclose") if "preclose" in bars.columns else None,
     }
 
 
@@ -155,14 +191,22 @@ def _prepare_wide_tables(
 # KBar factors (9)
 # ---------------------------------------------------------------------------
 
+
 def _compute_kbar(
-    O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame, C: pd.DataFrame,  # noqa: E741
+    O: pd.DataFrame,  # noqa: E741
+    H: pd.DataFrame,
+    L: pd.DataFrame,
+    C: pd.DataFrame,  # noqa: E741
 ) -> dict[str, pd.DataFrame]:
     oc_max = pd.DataFrame(
-        np.maximum(O.values, C.values), index=O.index, columns=O.columns,
+        np.maximum(O.values, C.values),
+        index=O.index,
+        columns=O.columns,
     )
     oc_min = pd.DataFrame(
-        np.minimum(O.values, C.values), index=O.index, columns=O.columns,
+        np.minimum(O.values, C.values),
+        index=O.index,
+        columns=O.columns,
     )
     hl = H - L + _EPS
     o_safe = O + _EPS  # protect against O=0 (data errors)
@@ -184,9 +228,13 @@ def _compute_kbar(
 # Price factors (4)
 # ---------------------------------------------------------------------------
 
+
 def _compute_price(
-    O: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame,  # noqa: E741
-    C: pd.DataFrame, VWAP: pd.DataFrame,
+    O: pd.DataFrame,  # noqa: E741
+    H: pd.DataFrame,
+    L: pd.DataFrame,  # noqa: E741
+    C: pd.DataFrame,
+    VWAP: pd.DataFrame,
     raw_open: pd.DataFrame | None = None,
     preclose: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
@@ -213,29 +261,34 @@ def _compute_price(
 # Rolling helpers
 # ---------------------------------------------------------------------------
 
+
 def _rolling_rank(s: pd.DataFrame, d: int) -> pd.DataFrame:
     """Percentile rank of current value in rolling window."""
     return s.rolling(d, min_periods=d).apply(
-        lambda x: (x[-1] >= x).mean(), raw=True,
+        lambda x: (x[-1] >= x).mean(),
+        raw=True,
     )
 
 
 def _rolling_idxmax(s: pd.DataFrame, d: int) -> pd.DataFrame:
     """Index of max in window (0=oldest), normalized by d."""
     return s.rolling(d, min_periods=d).apply(
-        lambda x: np.argmax(x) / d, raw=True,
+        lambda x: np.argmax(x) / d,
+        raw=True,
     )
 
 
 def _rolling_idxmin(s: pd.DataFrame, d: int) -> pd.DataFrame:
     """Index of min in window (0=oldest), normalized by d."""
     return s.rolling(d, min_periods=d).apply(
-        lambda x: np.argmin(x) / d, raw=True,
+        lambda x: np.argmin(x) / d,
+        raw=True,
     )
 
 
 def _rolling_slope_rsqr_resi(
-    s: pd.DataFrame, d: int,
+    s: pd.DataFrame,
+    d: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Efficient rolling linear regression using analytical formulas.
 
@@ -245,7 +298,7 @@ def _rolling_slope_rsqr_resi(
     # Pre-computed constants for x = [0, 1, ..., d-1]
     sum_x = d * (d - 1) / 2.0
     sum_x2 = d * (d - 1) * (2 * d - 1) / 6.0
-    denom = d * sum_x2 - sum_x ** 2
+    denom = d * sum_x2 - sum_x**2
 
     # Rolling sum of x*y:
     # sum_xy = sum_{i=0}^{d-1} i * y_{t-d+1+i}
@@ -309,8 +362,12 @@ def _rolling_slope_rsqr_resi(
 # Rolling factors: simple pandas operations (55 factors)
 # ---------------------------------------------------------------------------
 
+
 def _compute_rolling_simple(
-    C: pd.DataFrame, H: pd.DataFrame, L: pd.DataFrame, V: pd.DataFrame,
+    C: pd.DataFrame,
+    H: pd.DataFrame,
+    L: pd.DataFrame,
+    V: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
     """ROC, MA, STD, MAX, MIN, QTLU, QTLD, RSV, VMA, VSTD, WVMA."""
     factors: dict[str, pd.DataFrame] = {}
@@ -343,8 +400,10 @@ def _compute_rolling_simple(
 # Rolling factors: complex operations (75 factors)
 # ---------------------------------------------------------------------------
 
+
 def _compute_rolling_complex(
-    C: pd.DataFrame, V: pd.DataFrame,
+    C: pd.DataFrame,
+    V: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
     """RANK, IMAX, IMIN, IMXD, CORR, CORD, CNT*, SUM*, VSUMP/VSUMN/VSUMD."""
     factors: dict[str, pd.DataFrame] = {}
@@ -414,6 +473,7 @@ def _compute_rolling_complex(
 # Rolling factors: linear regression (15 factors)
 # ---------------------------------------------------------------------------
 
+
 def _compute_rolling_regression(
     C: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
@@ -431,6 +491,7 @@ def _compute_rolling_regression(
 # ---------------------------------------------------------------------------
 # Fundamental factors (8)
 # ---------------------------------------------------------------------------
+
 
 def _compute_fundamentals(
     fundamentals: pd.DataFrame,
@@ -499,7 +560,9 @@ def _compute_fundamentals(
     # LN_MKTCAP = log(market_cap)
     if "market_cap" in fund.columns:
         mktcap_wide = fund.pivot(
-            index="date", columns="symbol", values="market_cap",
+            index="date",
+            columns="symbol",
+            values="market_cap",
         )
         mktcap_aligned = mktcap_wide.reindex(amount.index, method="ffill").astype("float64")
         factors["LN_MKTCAP"] = np.log(mktcap_aligned.clip(lower=_EPS))
@@ -514,6 +577,7 @@ def _compute_fundamentals(
 # ---------------------------------------------------------------------------
 # Alpha158Engine
 # ---------------------------------------------------------------------------
+
 
 class Alpha158Engine:
     """QLib Alpha158 full factor set + fundamental factors, vectorized."""
@@ -559,11 +623,17 @@ class Alpha158Engine:
         factors = _compute_kbar(O, H, L, C)
 
         # 2. Price (5) — includes OVERNIGHT_RET from preclose
-        factors.update(_compute_price(
-            O, H, L, C, VWAP,
-            raw_open=wide.get("raw_open"),
-            preclose=wide.get("preclose"),
-        ))
+        factors.update(
+            _compute_price(
+                O,
+                H,
+                L,
+                C,
+                VWAP,
+                raw_open=wide.get("raw_open"),
+                preclose=wide.get("preclose"),
+            )
+        )
 
         # 3. Rolling — simple (55)
         factors.update(_compute_rolling_simple(C, H, L, V))

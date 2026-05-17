@@ -10,8 +10,18 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 _STD_COLS = [
-    "date", "open", "high", "low", "close", "volume", "amount", "adj_factor",
-    "turn", "preclose", "tradestatus", "is_st",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "adj_factor",
+    "turn",
+    "preclose",
+    "tradestatus",
+    "is_st",
 ]
 
 # Column rename: BaoStock field names → daily_bars DB column names
@@ -76,7 +86,9 @@ class CompositeMarketDataProvider:
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "%s.get_daily_bars failed for %s, trying next provider",
-                    type(p).__name__, symbol, exc_info=True,
+                    type(p).__name__,
+                    symbol,
+                    exc_info=True,
                 )
                 df = None
                 continue
@@ -94,7 +106,10 @@ class CompositeMarketDataProvider:
         if not result.empty:
             self._storage.save_daily_bars(symbol, result)
             self._storage.update_sync_log(
-                symbol, "daily_bars", "ok", source,
+                symbol,
+                "daily_bars",
+                "ok",
+                source,
                 last_date=result["date"].max(),
             )
 
@@ -129,7 +144,9 @@ class CompositeMarketDataProvider:
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "%s.get_index_daily_bars failed for %s, trying next provider",
-                    type(p).__name__, symbol, exc_info=True,
+                    type(p).__name__,
+                    symbol,
+                    exc_info=True,
                 )
                 df = None
                 continue
@@ -140,7 +157,10 @@ class CompositeMarketDataProvider:
         if not df.empty:
             self._storage.save_daily_bars(symbol, df)
             self._storage.update_sync_log(
-                symbol, "daily_bars", "ok", source,
+                symbol,
+                "daily_bars",
+                "ok",
+                source,
                 last_date=df["date"].max(),
             )
 
@@ -158,12 +178,12 @@ class CompositeMarketDataProvider:
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "%s.get_global_snapshot failed, trying next provider",
-                    type(p).__name__, exc_info=True,
+                    type(p).__name__,
+                    exc_info=True,
                 )
                 continue
         return pd.DataFrame(
-            columns=["symbol", "name", "date", "open", "high", "low",
-                      "close", "volume", "change_pct", "source"]
+            columns=["symbol", "name", "date", "open", "high", "low", "close", "volume", "change_pct", "source"]
         )
 
     # ------------------------------------------------------------------
@@ -201,18 +221,20 @@ class CompositeMarketDataProvider:
 
             if pd.isna(pe) and pd.isna(pb) and pd.isna(ps) and pd.isna(pcf) and mktcap is None:
                 continue
-            rows.append({
-                "symbol": symbol,
-                "date": row["date"],
-                "pe_ttm": None if pd.isna(pe) or pe == 0 else round(float(pe), 4),
-                "pb": None if pd.isna(pb) or pb == 0 else round(float(pb), 4),
-                "ps_ttm": None if pd.isna(ps) or ps == 0 else round(float(ps), 4),
-                "pcf_ttm": None if pd.isna(pcf) or pcf == 0 else round(float(pcf), 4),
-                "roe_ttm": None,
-                "revenue_yoy": None,
-                "profit_yoy": None,
-                "market_cap": mktcap,
-            })
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "date": row["date"],
+                    "pe_ttm": None if pd.isna(pe) or pe == 0 else round(float(pe), 4),
+                    "pb": None if pd.isna(pb) or pb == 0 else round(float(pb), 4),
+                    "ps_ttm": None if pd.isna(ps) or ps == 0 else round(float(ps), 4),
+                    "pcf_ttm": None if pd.isna(pcf) or pcf == 0 else round(float(pcf), 4),
+                    "roe_ttm": None,
+                    "revenue_yoy": None,
+                    "profit_yoy": None,
+                    "market_cap": mktcap,
+                }
+            )
         if rows:
             val_df = pd.DataFrame(rows)
             try:

@@ -14,17 +14,12 @@ indices = ["000300", "000905"]
 [strategy]
 # Production rebalance: target portfolio holds top_n stocks; weekly rebalance.
 top_n = 25
-# Legacy z-score path only (used when [ml].enabled = false). Under the default
-# LLM-TopkDropout flow these thresholds are inactive — picks come from ML rank
-# + LLM Bull/Bear/Judge debate instead.
-buy_threshold = 0.7
-sell_threshold = 0.3
-# 全球风险指数低于此值时，提高 buy_threshold 0.1 (设 -999 可禁用)。同样仅用于经典 z-score 路径。
-risk_dampen_threshold = -1.0
 
 [portfolio]
 # Where the virtual target portfolio state is persisted (atomic JSON write)
 state_path = "data/target_portfolio.json"
+# Initial capital for share-size suggestions in T6 rebalance card (cold start全仓买入).
+initial_capital = 100000.0
 
 [llm]
 # LiteLLM 模型标识符 (支持 $ENV_VAR 替换)
@@ -40,26 +35,33 @@ app_secret = "$FEISHU_APP_SECRET"
 
 [scheduler]
 # 时间格式: "HH:MM"
-global_market_sync_time = "08:00"
-signal_generate_time = "08:15"
-domestic_market_sync_time = "18:00"
-signal_verify_time = "20:00"
-news_poll_start_time = "07:00"
-news_poll_end_time = "20:00"
+# T1 参考数据同步：交易日历 + 当前成分股快照（每月第一天 06:00）
+reference_data_sync_time = "06:00"
+reference_data_sync_day = 1
+# T2 新闻轮询：全天 24h 整点抓取（覆盖海外隔夜电报）
+news_poll_start_time = "00:00"
+news_poll_end_time = "23:00"
 news_poll_interval_minutes = 60
-# 每月几号同步交易日历和指数成分股
-calendar_sync_day = 1
+# T3 国内 K 线同步：交易日 18:00（收盘后）
+domestic_kline_sync_time = "18:00"
+# T4 国际交易同步：交易日 07:00（给 T6 留出 75min 缓冲；美股/商品 04-05 时已收盘，HK 09:00 才开盘）
+international_data_sync_time = "07:00"
+# T5 模型训练：每月第一天 02:00
+model_training_time = "02:00"
+model_training_day = 1
+# T6 信号生成与调仓：交易日 08:15
+signal_generation_time = "08:15"
 
 [ml]
-# ML 模型打分（替代 z-score 排名作为 T4 候选股来源）
+# ML 模型打分（T6 候选股来源）
 enabled = true
 model_dir = "models"
 # 两阶段 TopkDropout 候选池规模
 buy_candidate_size = 10       # 非持仓中 ML 顶部 N 只供 LLM 选 BUY
 sell_candidate_size = 5       # 持仓中 ML 底部 N 只供 LLM 选 SELL
 n_drop = 3                    # 每次调仓最多换手数
-# 模型更新参数
-update_day = 1            # 每月第几天自动更新
-update_time = "02:00"
+# 训练参数（生产单窗口 + walk-forward 回测共享）
+first_train_start = "2020-01-01"
+val_months = 3
 n_seeds = 5
 time_decay_halflife = 120

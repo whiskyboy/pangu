@@ -49,23 +49,31 @@ def empty_yaml(tmp_path: Path) -> Path:
 
 def _mock_providers() -> tuple[MagicMock, MagicMock, MagicMock]:
     market = MagicMock()
-    market.get_daily_bars.return_value = pd.DataFrame({
-        "date": ["2026-02-10", "2026-02-11"],
-        "open": [10.0, 10.5],
-        "high": [11.0, 11.5],
-        "low": [9.5, 10.0],
-        "close": [10.5, 11.0],
-        "volume": [1000, 1200],
-    })
+    market.get_daily_bars.return_value = pd.DataFrame(
+        {
+            "date": ["2026-02-10", "2026-02-11"],
+            "open": [10.0, 10.5],
+            "high": [11.0, 11.5],
+            "low": [9.5, 10.0],
+            "close": [10.5, 11.0],
+            "volume": [1000, 1200],
+        }
+    )
 
     news = MagicMock()
     news.get_stock_news.return_value = []
     news.get_announcements.return_value = []
 
     fundamental = MagicMock()
-    fundamental.get_financial_indicator.return_value = pd.DataFrame([{
-        "roe_ttm": 0.15, "revenue_yoy": 0.10, "profit_yoy": 0.12,
-    }])
+    fundamental.get_financial_indicator.return_value = pd.DataFrame(
+        [
+            {
+                "roe_ttm": 0.15,
+                "revenue_yoy": 0.10,
+                "profit_yoy": 0.12,
+            }
+        ]
+    )
 
     return market, news, fundamental
 
@@ -148,9 +156,7 @@ class TestAddToWatchlist:
 
         f.get_financial_indicator.assert_called_once_with("601899")
 
-    def test_init_failure_does_not_block_add(
-        self, empty_yaml: Path, db: Database
-    ) -> None:
+    def test_init_failure_does_not_block_add(self, empty_yaml: Path, db: Database) -> None:
         m, n, f = _mock_providers()
         m.get_daily_bars.side_effect = ConnectionError("network error")
         f.get_financial_indicator.side_effect = ConnectionError("network error")
@@ -191,9 +197,7 @@ class TestRemoveFromWatchlist:
         assert "601899" not in symbols
         assert "600967" in symbols  # other stock remains
 
-    def test_remove_nonexistent_no_error(
-        self, tmp_yaml: Path, db: Database
-    ) -> None:
+    def test_remove_nonexistent_no_error(self, tmp_yaml: Path, db: Database) -> None:
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         pool.remove_from_watchlist("999999")  # no error
@@ -230,10 +234,12 @@ class TestYamlRoundTrip:
 
 def _info_df(name: str = "紫金矿业", ipo_date: str = "20100426") -> pd.DataFrame:
     """Build a fake stock_individual_info_em DataFrame."""
-    return pd.DataFrame({
-        "item": ["股票简称", "上市时间", "总市值", "行业"],
-        "value": [name, ipo_date, "100000000000", "有色金属"],
-    })
+    return pd.DataFrame(
+        {
+            "item": ["股票简称", "上市时间", "总市值", "行业"],
+            "value": [name, ipo_date, "100000000000", "有色金属"],
+        }
+    )
 
 
 class TestFilterStocks:
@@ -279,7 +285,8 @@ class TestFilterStocks:
             "pangu.utils.CircuitBreaker",
             return_value=MagicMock(
                 allow_request=MagicMock(return_value=True),
-                record_success=MagicMock(), record_failure=MagicMock(),
+                record_success=MagicMock(),
+                record_failure=MagicMock(),
             ),
         ):
             result = pool._filter_stocks(["601899"])
@@ -314,9 +321,11 @@ class TestFilterStocks:
 class TestSyncTradingCalendar:
     @patch("akshare.tool_trade_date_hist_sina")
     def test_syncs_dates(self, mock_cal: MagicMock, tmp_yaml: Path, db: Database) -> None:
-        mock_cal.return_value = pd.DataFrame({
-            "trade_date": ["2026-01-02", "2026-01-03", "2026-01-06"],
-        })
+        mock_cal.return_value = pd.DataFrame(
+            {
+                "trade_date": ["2026-01-02", "2026-01-03", "2026-01-06"],
+            }
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         count = pool.sync_trading_calendar()
@@ -342,22 +351,29 @@ class TestIndexConstituents:
     @patch("akshare.stock_individual_info_em")
     @patch("akshare.index_stock_cons")
     def test_sync_index_constituents(
-        self, mock_cons: MagicMock, mock_info: MagicMock,
-        tmp_yaml: Path, db: Database,
+        self,
+        mock_cons: MagicMock,
+        mock_info: MagicMock,
+        tmp_yaml: Path,
+        db: Database,
     ) -> None:
-        mock_cons.return_value = pd.DataFrame({
-            "品种代码": ["600519", "000858"],
-            "品种名称": ["贵州茅台", "五粮液"],
-            "纳入日期": ["2020-01-01", "2020-01-01"],
-        })
-        mock_info.side_effect = lambda symbol: pd.DataFrame({
-            "item": ["股票简称", "上市时间", "行业"],
-            "value": [
-                "茅台" if symbol == "600519" else "五粮液",
-                "20010827",
-                "白酒" if symbol == "600519" else "食品饮料",
-            ],
-        })
+        mock_cons.return_value = pd.DataFrame(
+            {
+                "品种代码": ["600519", "000858"],
+                "品种名称": ["贵州茅台", "五粮液"],
+                "纳入日期": ["2020-01-01", "2020-01-01"],
+            }
+        )
+        mock_info.side_effect = lambda symbol: pd.DataFrame(
+            {
+                "item": ["股票简称", "上市时间", "行业"],
+                "value": [
+                    "茅台" if symbol == "600519" else "五粮液",
+                    "20010827",
+                    "白酒" if symbol == "600519" else "食品饮料",
+                ],
+            }
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         count = pool.sync_index_constituents()
@@ -366,27 +382,38 @@ class TestIndexConstituents:
     @patch("akshare.stock_individual_info_em")
     @patch("akshare.index_stock_cons")
     def test_sync_multi_index(
-        self, mock_cons: MagicMock, mock_info: MagicMock,
-        tmp_yaml: Path, db: Database,
+        self,
+        mock_cons: MagicMock,
+        mock_info: MagicMock,
+        tmp_yaml: Path,
+        db: Database,
     ) -> None:
         """Sync multiple indices — rows from both are saved."""
+
         def fake_cons(symbol: str) -> pd.DataFrame:
             if symbol == "000300":
-                return pd.DataFrame({
-                    "品种代码": ["600519"],
-                    "品种名称": ["贵州茅台"],
-                    "纳入日期": ["2020-01-01"],
-                })
-            return pd.DataFrame({
-                "品种代码": ["002475"],
-                "品种名称": ["立讯精密"],
-                "纳入日期": ["2021-06-01"],
-            })
+                return pd.DataFrame(
+                    {
+                        "品种代码": ["600519"],
+                        "品种名称": ["贵州茅台"],
+                        "纳入日期": ["2020-01-01"],
+                    }
+                )
+            return pd.DataFrame(
+                {
+                    "品种代码": ["002475"],
+                    "品种名称": ["立讯精密"],
+                    "纳入日期": ["2021-06-01"],
+                }
+            )
 
         mock_cons.side_effect = fake_cons
-        mock_info.return_value = pd.DataFrame({
-            "item": ["行业"], "value": ["电子"],
-        })
+        mock_info.return_value = pd.DataFrame(
+            {
+                "item": ["行业"],
+                "value": ["电子"],
+            }
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300", "000905"])
         count = pool.sync_index_constituents()
@@ -397,26 +424,48 @@ class TestIndexConstituents:
     @patch("akshare.stock_individual_info_em")
     @patch("akshare.index_stock_cons")
     def test_sync_removes_unconfigured_index(
-        self, mock_cons: MagicMock, mock_info: MagicMock,
-        tmp_yaml: Path, db: Database,
+        self,
+        mock_cons: MagicMock,
+        mock_info: MagicMock,
+        tmp_yaml: Path,
+        db: Database,
     ) -> None:
         """After removing an index from config, its constituents are cleaned up."""
         # Pre-populate DB with two indices
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-            {"symbol": "002475", "name": "立讯精密", "index_code": "000905",
-             "sector": "电子", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "index_code": "000300",
+                    "sector": "白酒",
+                    "date": "2026-02-20",
+                },
+                {
+                    "symbol": "002475",
+                    "name": "立讯精密",
+                    "index_code": "000905",
+                    "sector": "电子",
+                    "date": "2026-02-20",
+                },
+            ]
+        )
         assert len(db.load_index_constituents("000905")) == 1
 
         # Now create pool with only 000300 configured
-        mock_cons.return_value = pd.DataFrame({
-            "品种代码": ["600519"], "品种名称": ["贵州茅台"], "纳入日期": ["2020-01-01"],
-        })
-        mock_info.return_value = pd.DataFrame({
-            "item": ["行业"], "value": ["白酒"],
-        })
+        mock_cons.return_value = pd.DataFrame(
+            {
+                "品种代码": ["600519"],
+                "品种名称": ["贵州茅台"],
+                "纳入日期": ["2020-01-01"],
+            }
+        )
+        mock_info.return_value = pd.DataFrame(
+            {
+                "item": ["行业"],
+                "value": ["白酒"],
+            }
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300"])
         pool.sync_index_constituents()
@@ -426,12 +475,24 @@ class TestIndexConstituents:
         assert len(db.load_index_constituents("000300")) == 1
 
     def test_get_index_stocks_from_db(self, tmp_yaml: Path, db: Database) -> None:
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-            {"symbol": "000858", "name": "五粮液", "index_code": "000300",
-             "sector": "食品饮料", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "index_code": "000300",
+                    "sector": "白酒",
+                    "date": "2026-02-20",
+                },
+                {
+                    "symbol": "000858",
+                    "name": "五粮液",
+                    "index_code": "000300",
+                    "sector": "食品饮料",
+                    "date": "2026-02-20",
+                },
+            ]
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         stocks = pool._get_index_stocks()
@@ -439,14 +500,31 @@ class TestIndexConstituents:
 
     def test_get_index_stocks_multi_index_dedup(self, tmp_yaml: Path, db: Database) -> None:
         """Same stock in two indices is deduplicated."""
-        db.save_index_constituents([
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000905",
-             "sector": "白酒", "date": "2026-02-20"},
-            {"symbol": "002475", "name": "立讯精密", "index_code": "000905",
-             "sector": "电子", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "index_code": "000300",
+                    "sector": "白酒",
+                    "date": "2026-02-20",
+                },
+                {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "index_code": "000905",
+                    "sector": "白酒",
+                    "date": "2026-02-20",
+                },
+                {
+                    "symbol": "002475",
+                    "name": "立讯精密",
+                    "index_code": "000905",
+                    "sector": "电子",
+                    "date": "2026-02-20",
+                },
+            ]
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f, indices=["000300", "000905"])
         stocks = pool._get_index_stocks()
@@ -455,12 +533,24 @@ class TestIndexConstituents:
 
     def test_get_all_symbols(self, tmp_yaml: Path, db: Database) -> None:
         """All symbols = watchlist + configured indices, deduplicated."""
-        db.save_index_constituents([
-            {"symbol": "601899", "name": "紫金矿业", "index_code": "000300",
-             "sector": "有色金属", "date": "2026-02-20"},
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {
+                    "symbol": "601899",
+                    "name": "紫金矿业",
+                    "index_code": "000300",
+                    "sector": "有色金属",
+                    "date": "2026-02-20",
+                },
+                {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "index_code": "000300",
+                    "sector": "白酒",
+                    "date": "2026-02-20",
+                },
+            ]
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         universe = pool.get_all_symbols()
@@ -470,12 +560,24 @@ class TestIndexConstituents:
 
     def test_get_stock_metadata_unified(self, tmp_yaml: Path, db: Database) -> None:
         """DB provides index names/sectors; YAML fills gaps for watchlist-only stocks."""
-        db.save_index_constituents([
-            {"symbol": "601899", "name": "紫金矿业DB", "index_code": "000300",
-             "sector": "工业金属", "date": "2026-02-20"},
-            {"symbol": "600519", "name": "贵州茅台", "index_code": "000300",
-             "sector": "白酒", "date": "2026-02-20"},
-        ])
+        db.save_index_constituents(
+            [
+                {
+                    "symbol": "601899",
+                    "name": "紫金矿业DB",
+                    "index_code": "000300",
+                    "sector": "工业金属",
+                    "date": "2026-02-20",
+                },
+                {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "index_code": "000300",
+                    "sector": "白酒",
+                    "date": "2026-02-20",
+                },
+            ]
+        )
         m, n, f = _mock_providers()
         pool = StockPoolManager(tmp_yaml, db, m, n, f)
         meta = pool.get_stock_metadata()

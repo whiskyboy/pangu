@@ -1,8 +1,4 @@
-"""LLM client — LiteLLM wrapper with retry and rule-based degradation.
-
-LLMClient: LiteLLM wrapper with retry + rule degradation.
-LLMJudgeEngine: per-stock comprehensive judge (evidence package → BUY/SELL/HOLD).
-"""
+"""LLM client and Protocol — LiteLLM wrapper for pool-level rebalance debate."""
 
 from __future__ import annotations
 
@@ -14,48 +10,25 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from pangu.models import NewsItem, TradeSignal
+from pangu.models import NewsItem
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# LLM Client — LiteLLM wrapper with retry + rule degradation
+# LLM Client — LiteLLM wrapper with retry
 # ---------------------------------------------------------------------------
-
-# Default structured output schema expected from LLM (judge mode)
-_DEFAULT_RESPONSE: dict = {
-    "action": "HOLD",
-    "confidence": 0.0,
-    "bull_reason": "",
-    "bear_reason": "",
-    "judge_conclusion": "",
-    "short_term_outlook": "",
-    "mid_term_outlook": "",
-}
-
-_BULLISH_KEYWORDS: list[str] = [
-    "利好", "增持", "回购", "业绩预增", "业绩大增", "超预期", "突破",
-    "获批", "中标", "战略合作", "订单", "扩产", "涨停", "新高",
-    "重大合同", "并购", "重组", "分红", "买入", "增长",
-]
-
-_BEARISH_KEYWORDS: list[str] = [
-    "利空", "减持", "业绩预减", "业绩下滑", "亏损", "退市", "违规",
-    "处罚", "诉讼", "跌停", "暴跌", "下调", "风险", "警示",
-    "ST", "质押", "爆雷", "卖出", "下降", "萎缩",
-]
 
 
 class LLMClient:
-    """LiteLLM wrapper with retry and rule-based degradation.
+    """LiteLLM wrapper with retry and structured JSON output.
 
-    Fallback order:
-    1. Primary model (retry with exponential backoff)
-    2. Rule-based keyword scoring (no API call)
+    Raises RuntimeError if the model fails to return a parseable JSON object
+    after all retries — callers (e.g. judge_rebalance) wrap this in their own
+    try/except and fall back to deterministic ML ranking when the LLM is down.
     """
 
-    _RETRY_BASE_DELAY = 1.0   # seconds
+    _RETRY_BASE_DELAY = 1.0  # seconds
     _RETRY_ATTEMPTS = 2
 
     def __init__(
@@ -75,20 +48,17 @@ class LLMClient:
         return self._call_count
 
     async def call(self, system_prompt: str, user_prompt: str) -> dict:
-        """Call LLM and return parsed JSON dict.
-
-        Tries primary model with retry → rule-based degradation.
-        """
+        """Call LLM and return parsed JSON dict, or raise RuntimeError."""
         result = await self._try_model(self._model, system_prompt, user_prompt)
         if result is not None:
             return result
+        raise RuntimeError(f"LLM model {self._model} failed after retries")
 
-        logger.warning("LLM provider failed, using rule-based fallback")
-        return self._rule_based_fallback(user_prompt)
+    # ---------------------------------------------------------------------------
+    # LLMJudgeEngine Protocol — pool-level rebalance debate
+    # ---------------------------------------------------------------------------
 
-    async def _try_model(
-        self, model: str, system_prompt: str, user_prompt: str
-    ) -> dict | None:
+    async def _try_model(self, model: str, system_prompt: str, user_prompt: str) -> dict | None:
         """Try a single model with exponential backoff. Returns parsed dict or None."""
         import litellm
 
@@ -111,16 +81,19 @@ class LLMClient:
                     return parsed
                 logger.warning(
                     "Model %s returned unparseable response (attempt %d)",
-                    model, attempt + 1,
+                    model,
+                    attempt + 1,
                 )
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "Model %s failed (attempt %d)",
-                    model, attempt + 1, exc_info=True,
+                    model,
+                    attempt + 1,
+                    exc_info=True,
                 )
             # Exponential backoff before retry (skip after last attempt)
             if attempt < self._RETRY_ATTEMPTS - 1:
-                delay = self._RETRY_BASE_DELAY * (2 ** attempt)
+                delay = self._RETRY_BASE_DELAY * (2**attempt)
                 await asyncio.sleep(delay)
         return None
 
@@ -175,71 +148,27 @@ class LLMClient:
 
         return None
 
-    def _rule_based_fallback(self, user_prompt: str) -> dict:
-        """Keyword-based scoring when all LLM providers fail."""
-        bull_count = sum(1 for kw in _BULLISH_KEYWORDS if kw in user_prompt)
-        bear_count = sum(1 for kw in _BEARISH_KEYWORDS if kw in user_prompt)
-
-        if bull_count > bear_count:
-            action = "BUY"
-            confidence = min(0.5 + bull_count * 0.05, 0.8)
-            bull_reason = f"关键词命中: {bull_count}个利好词"
-            bear_reason = f"关键词命中: {bear_count}个利空词"
-        elif bear_count > bull_count:
-            action = "SELL"
-            confidence = min(0.5 + bear_count * 0.05, 0.8)
-            bull_reason = f"关键词命中: {bull_count}个利好词"
-            bear_reason = f"关键词命中: {bear_count}个利空词"
-        else:
-            action = "HOLD"
-            confidence = 0.3
-            bull_reason = "无明显利好信号"
-            bear_reason = "无明显利空信号"
-
-        return {
-            "action": action,
-            "confidence": confidence,
-            "bull_reason": bull_reason,
-            "bear_reason": bear_reason,
-            "judge_conclusion": f"规则降级 (bull={bull_count}, bear={bear_count})",
-            "short_term_outlook": "规则降级, 无法判断",
-            "mid_term_outlook": "规则降级, 无法判断",
-        }
 
 # ---------------------------------------------------------------------------
-# LLMJudgeEngine — per-stock comprehensive judge (方案C)
+# LLMJudgeEngine Protocol — pool-level rebalance debate
 # ---------------------------------------------------------------------------
+
 
 class LLMJudgeEngine(Protocol):
-    """Interface for per-stock LLM comprehensive judge."""
+    """Interface for pool-level LLM rebalance judge (Bull/Bear/Judge debate)."""
 
-    async def judge_stock(
+    async def judge_rebalance(
         self,
-        symbol: str,
-        name: str,
-        factor_score: float,
-        factor_rank: int,
-        factor_details: dict[str, float],
-        stock_news: list[NewsItem],
-        announcements: list[NewsItem],
+        *,
+        today: str,
+        sell_candidates: list[dict[str, Any]],
+        buy_candidates: list[dict[str, Any]],
         telegraph: list[NewsItem],
         global_market: pd.DataFrame,
-        price: float,
-        *,
-        factor_signal: str = "",
+        top_n: int,
+        n_drop: int,
         universe_size: int = 0,
-    ) -> TradeSignal:
-        """Judge a single stock and return a TradeSignal."""
+        timeout: float = 120.0,
+    ) -> Any:
+        """Judge SELL + BUY candidate pools and return a RebalanceDecision."""
         ...
-
-    async def judge_pool(
-        self,
-        candidates: list[dict[str, Any]],
-        telegraph: list[NewsItem],
-        global_market: pd.DataFrame,
-        *,
-        universe_size: int = 0,
-    ) -> list[TradeSignal]:
-        """Judge a pool of candidates and return signals."""
-        ...
-

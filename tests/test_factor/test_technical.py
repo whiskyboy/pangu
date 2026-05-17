@@ -17,6 +17,7 @@ from pangu.factor.technical import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_bars(n: int = 100) -> pd.DataFrame:
     """Generate deterministic OHLCV data for testing."""
     rng = np.random.default_rng(42)
@@ -229,32 +230,38 @@ class TestBias:
 
 class TestMAAlignment:
     def test_perfect_bull_alignment(self) -> None:
-        df = pd.DataFrame({
-            "ma5": [50.0],
-            "ma10": [40.0],
-            "ma20": [30.0],
-            "ma60": [20.0],
-        })
+        df = pd.DataFrame(
+            {
+                "ma5": [50.0],
+                "ma10": [40.0],
+                "ma20": [30.0],
+                "ma60": [20.0],
+            }
+        )
         score = _compute_ma_alignment_score(df)
         assert score.iloc[0] == 4.0
 
     def test_perfect_bear_alignment(self) -> None:
-        df = pd.DataFrame({
-            "ma5": [20.0],
-            "ma10": [30.0],
-            "ma20": [40.0],
-            "ma60": [50.0],
-        })
+        df = pd.DataFrame(
+            {
+                "ma5": [20.0],
+                "ma10": [30.0],
+                "ma20": [40.0],
+                "ma60": [50.0],
+            }
+        )
         score = _compute_ma_alignment_score(df)
         assert score.iloc[0] == 0.0
 
     def test_partial_alignment(self) -> None:
-        df = pd.DataFrame({
-            "ma5": [50.0],
-            "ma10": [40.0],
-            "ma20": [45.0],  # MA20 > MA10 breaks chain
-            "ma60": [20.0],
-        })
+        df = pd.DataFrame(
+            {
+                "ma5": [50.0],
+                "ma10": [40.0],
+                "ma20": [45.0],  # MA20 > MA10 breaks chain
+                "ma60": [20.0],
+            }
+        )
         score = _compute_ma_alignment_score(df)
         # MA5>MA10=1, MA10>MA20=0, MA20>MA60=1, MA5>MA60=1 → 3
         assert score.iloc[0] == 3.0

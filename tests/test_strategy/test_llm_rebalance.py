@@ -29,15 +29,15 @@ def _no_sleep():
         yield
 
 
-_GLOBAL_DF = pd.DataFrame([
-    {"name": "标普500", "close": 5200.0, "change_pct": 0.35},
-])
+_GLOBAL_DF = pd.DataFrame(
+    [
+        {"name": "标普500", "close": 5200.0, "change_pct": 0.35},
+    ]
+)
 
 
 def _make_completion(content: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-    )
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
 
 def _make_news(title: str = "测试新闻") -> NewsItem:
@@ -51,7 +51,10 @@ def _make_news(title: str = "测试新闻") -> NewsItem:
 
 
 def _make_candidate(
-    symbol: str, *, score: float = 0.5, rank: int = 1,
+    symbol: str,
+    *,
+    score: float = 0.5,
+    rank: int = 1,
     prev_rank: int | None = None,
 ) -> dict:
     return {
@@ -81,10 +84,14 @@ def _ok_response(sells: list[dict] | None = None, buys: list[dict] | None = None
 # Prompt builders
 # ---------------------------------------------------------------------------
 
+
 class TestRebalancePromptBuilders:
     def test_system_prompt_substitutes_pool_sizes(self):
         p = build_rebalance_system_prompt(
-            top_n=25, n_drop=3, sell_pool_size=5, buy_pool_size=10,
+            top_n=25,
+            n_drop=3,
+            sell_pool_size=5,
+            buy_pool_size=10,
         )
         assert "25" in p
         assert "n_drop=3" in p
@@ -94,12 +101,13 @@ class TestRebalancePromptBuilders:
     def test_user_prompt_contains_both_pools(self):
         p = build_rebalance_prompt(
             today="2025-03-10",
-            sell_candidates=[_make_candidate("600519", score=0.1, rank=300,
-                                             prev_rank=50)],
+            sell_candidates=[_make_candidate("600519", score=0.1, rank=300, prev_rank=50)],
             buy_candidates=[_make_candidate("000001", score=0.95, rank=1)],
             telegraph=[_make_news("利好快讯")],
             global_market=_GLOBAL_DF,
-            top_n=25, n_drop=3, universe_size=800,
+            top_n=25,
+            n_drop=3,
+            universe_size=800,
         )
         assert "2025-03-10" in p
         assert "SELL 候选池" in p
@@ -114,9 +122,12 @@ class TestRebalancePromptBuilders:
     def test_user_prompt_empty_pools(self):
         p = build_rebalance_prompt(
             today="2025-03-10",
-            sell_candidates=[], buy_candidates=[],
-            telegraph=[], global_market=_GLOBAL_DF,
-            top_n=25, n_drop=3,
+            sell_candidates=[],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=_GLOBAL_DF,
+            top_n=25,
+            n_drop=3,
         )
         assert "SELL 候选池" in p
         assert "BUY 候选池" in p
@@ -126,6 +137,7 @@ class TestRebalancePromptBuilders:
 # ---------------------------------------------------------------------------
 # judge_rebalance
 # ---------------------------------------------------------------------------
+
 
 class TestJudgeRebalance:
     @pytest.fixture
@@ -143,21 +155,22 @@ class TestJudgeRebalance:
             _make_candidate("601318", score=0.92, rank=2),
         ]
         content = _ok_response(
-            sells=[
-                {"symbol": "600519", "reason": "业绩雷", "evidence": "公告"}
-            ],
+            sells=[{"symbol": "600519", "reason": "业绩雷", "evidence": "公告"}],
             buys=[
                 {"symbol": "000001", "reason": "央行降准受益", "evidence": "央行公告"},
                 {"symbol": "601318", "reason": "估值低", "evidence": "PE 5"},
             ],
         )
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   return_value=_make_completion(content)):
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_completion(content)):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=buys,
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3, universe_size=800,
+                sell_candidates=sells,
+                buy_candidates=buys,
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
+                universe_size=800,
             )
         assert isinstance(decision, RebalanceDecision)
         assert decision.source == "llm_judge"
@@ -179,39 +192,35 @@ class TestJudgeRebalance:
                 {"symbol": "888888", "reason": "未在 buy 池", "evidence": ""},
             ],
         )
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   return_value=_make_completion(content)):
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_completion(content)):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=buys,
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=sells,
+                buy_candidates=buys,
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert decision.sells == []
         assert [p.symbol for p in decision.buys] == ["000001"]
 
     @pytest.mark.asyncio
     async def test_caps_picks_at_n_drop(self, engine):
-        sells = [_make_candidate(f"60000{i}", score=0.1, rank=300 + i)
-                 for i in range(5)]
-        buys = [_make_candidate(f"60001{i}", score=0.95, rank=1 + i)
-                for i in range(10)]
-        sells_resp = [
-            {"symbol": f"60000{i}", "reason": "卖", "evidence": ""}
-            for i in range(5)
-        ]
-        buys_resp = [
-            {"symbol": f"60001{i}", "reason": "买", "evidence": ""}
-            for i in range(10)
-        ]
+        sells = [_make_candidate(f"60000{i}", score=0.1, rank=300 + i) for i in range(5)]
+        buys = [_make_candidate(f"60001{i}", score=0.95, rank=1 + i) for i in range(10)]
+        sells_resp = [{"symbol": f"60000{i}", "reason": "卖", "evidence": ""} for i in range(5)]
+        buys_resp = [{"symbol": f"60001{i}", "reason": "买", "evidence": ""} for i in range(10)]
         content = _ok_response(sells=sells_resp, buys=buys_resp)
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   return_value=_make_completion(content)):
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_completion(content)):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=buys,
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=sells,
+                buy_candidates=buys,
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert len(decision.sells) == 3
         assert len(decision.buys) == 3
@@ -224,13 +233,15 @@ class TestJudgeRebalance:
             sells=[{"symbol": "600519", "reason": "", "evidence": ""}],
             buys=[{"symbol": "000001", "reason": "OK", "evidence": ""}],
         )
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   return_value=_make_completion(content)):
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_completion(content)):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=buys,
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=sells,
+                buy_candidates=buys,
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert decision.sells == []  # empty reason → rejected
         assert len(decision.buys) == 1
@@ -246,13 +257,15 @@ class TestJudgeRebalance:
             ],
             buys=[{"symbol": "000001", "reason": "OK", "evidence": ""}],
         )
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   return_value=_make_completion(content)):
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_completion(content)):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=buys,
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=sells,
+                buy_candidates=buys,
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert len(decision.sells) == 1
         assert decision.sells[0].reason == "first"
@@ -263,13 +276,15 @@ class TestJudgeRebalance:
         # rule-based output has no sells/buys keys, so we expect empty picks.
         sells = [_make_candidate("600519", score=0.1, rank=300)]
         buys = [_make_candidate("000001", score=0.95, rank=1)]
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   side_effect=Exception("API down")):
+        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=Exception("API down")):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=buys,
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=sells,
+                buy_candidates=buys,
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert decision.sells == []
         assert decision.buys == []
@@ -281,6 +296,7 @@ class TestJudgeRebalance:
     async def test_inner_timeout_returns_empty_failed_decision(self, engine):
         async def hanging(*a, **k):
             import asyncio
+
             raise asyncio.TimeoutError()
 
         engine._client.call = hanging
@@ -288,8 +304,10 @@ class TestJudgeRebalance:
             today="2025-03-10",
             sell_candidates=[_make_candidate("600519")],
             buy_candidates=[_make_candidate("000001")],
-            telegraph=[], global_market=_GLOBAL_DF,
-            top_n=25, n_drop=3,
+            telegraph=[],
+            global_market=_GLOBAL_DF,
+            top_n=25,
+            n_drop=3,
         )
         assert decision.source == "llm_failed"
         assert decision.sells == []
@@ -298,13 +316,17 @@ class TestJudgeRebalance:
     @pytest.mark.asyncio
     async def test_empty_pools_short_circuits(self, engine):
         # When both pools are empty, judge_rebalance should not call the LLM
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   side_effect=AssertionError("LLM should not be called")):
+        with patch(
+            "litellm.acompletion", new_callable=AsyncMock, side_effect=AssertionError("LLM should not be called")
+        ):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=[], buy_candidates=[],
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=[],
+                buy_candidates=[],
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert isinstance(decision, RebalanceDecision)
         assert decision.sells == []
@@ -313,17 +335,21 @@ class TestJudgeRebalance:
     @pytest.mark.asyncio
     async def test_missing_debate_yields_default_notes(self, engine):
         sells = [_make_candidate("600519", score=0.1, rank=300)]
-        content = json.dumps({
-            "sells": [{"symbol": "600519", "reason": "OK", "evidence": ""}],
-            "buys": [],
-        })
-        with patch("litellm.acompletion", new_callable=AsyncMock,
-                   return_value=_make_completion(content)):
+        content = json.dumps(
+            {
+                "sells": [{"symbol": "600519", "reason": "OK", "evidence": ""}],
+                "buys": [],
+            }
+        )
+        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_make_completion(content)):
             decision = await engine.judge_rebalance(
                 today="2025-03-10",
-                sell_candidates=sells, buy_candidates=[],
-                telegraph=[], global_market=_GLOBAL_DF,
-                top_n=25, n_drop=3,
+                sell_candidates=sells,
+                buy_candidates=[],
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=3,
             )
         assert isinstance(decision.sell_debate, DebateNotes)
         assert decision.sell_debate.bull == ""
@@ -343,9 +369,12 @@ class TestJudgeRebalance:
         engine._client.call = capture_call
         await engine.judge_rebalance(
             today="2025-03-10",
-            sell_candidates=sells, buy_candidates=[],
-            telegraph=[], global_market=_GLOBAL_DF,
-            top_n=25, n_drop=3,
+            sell_candidates=sells,
+            buy_candidates=[],
+            telegraph=[],
+            global_market=_GLOBAL_DF,
+            top_n=25,
+            n_drop=3,
         )
         assert len(captured_prompt) == 1
         prompt = captured_prompt[0]

@@ -1,4 +1,4 @@
-"""T4: Weekly LLM-TopkDropout rebalance pipeline.
+"""T6: Weekly LLM-TopkDropout rebalance pipeline.
 
 Daily run:
   * Data freshness checks (always).
@@ -6,9 +6,6 @@ Daily run:
   * Otherwise: ML scoring → SELL pool (held bottom) + BUY pool (non-held top)
     → LLM pool-level Bull/Bear/Judge → fallback to ML rank for under-fill
     → write target_portfolio.json → push BUY/SELL signals.
-
-Classic z-score path (when ml.enabled is False) is kept for backward compat;
-it does not implement weekly gating and runs the legacy daily flow.
 """
 
 from __future__ import annotations
@@ -18,8 +15,11 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from pangu.factor.matrix import build_factor_matrix
 from pangu.models import Action, SignalStatus, TradeSignal
 from pangu.portfolio import Portfolio
+from pangu.strategy.ml.ml_strategy import pool_score_rank_maps
+from pangu.tasks._base import scheduled_task
 from pangu.tz import now as _tz_now
 from pangu.tz import today_str
 from pangu.utils import date_str, is_rebalance_day
@@ -32,45 +32,49 @@ logger = logging.getLogger(__name__)
 _ACTION_EMOJI = {Action.BUY: "🟢", Action.SELL: "🔴", Action.HOLD: "⚪"}
 _ACTION_ORDER = {Action.BUY: 0, Action.HOLD: 1, Action.SELL: 2}
 _BARS_LOOKBACK_DAYS = 200
-_LLM_FAIL_THRESHOLD = 0.5
 
 # Factor keys forwarded to LLM rebalance evidence packs (must intersect
 # pangu.strategy.llm.judge._KNOWN_FACTORS).
 _REBAL_FACTOR_KEYS = (
-    "rsi_14", "macd_hist", "bias_20", "obv", "atr_14",
-    "volume_ratio", "pe_ttm", "pb", "roe_ttm",
+    "rsi_14",
+    "macd_hist",
+    "bias_20",
+    "obv",
+    "atr_14",
+    "volume_ratio",
+    "pe_ttm",
+    "pb",
+    "roe_ttm",
 )
 
 
+@scheduled_task("T6", "信号生成与调仓")
 async def generate_signals(c: Components) -> None:
     """Full signal pipeline: data checks → (weekly) ML+LLM rebalance → push."""
-    try:
-        await _generate_signals_impl(c)
-    except Exception:  # noqa: BLE001
-        logger.error("[T4] Signal generation failed", exc_info=True)
-        await c.alert("[T4] 信号生成任务异常，请检查日志")
+    await _generate_signals_impl(c)
 
 
 async def _generate_signals_impl(c: Components) -> None:
     today = today_str()
-    logger.info("[T4] Generating signals for %s ...", today)
+    logger.info("[T6] Generating signals for %s ...", today)
 
     await _check_data_freshness(c, today)
 
-    if c.ml_strategy is not None:
-        if not is_rebalance_day(today, c.db):
-            logger.info("[T4/ML] %s is not a rebalance day (not ISO week start); "
-                        "skipping rebalance, freshness checks only", today)
-            return
-        await _ml_rebalance_path(c, today)
-    else:
-        # Classic z-score path retains the legacy daily flow.
-        await _classic_path(c, today)
+    if c.ml_strategy is None:
+        await c.alert("[T6] ml_strategy 未装配，无法生成信号；请检查 [ml].enabled 配置")
+        return
+    if not is_rebalance_day(today, c.db):
+        logger.info(
+            "[T6/ML] %s is not a rebalance day (not ISO week start); skipping rebalance, freshness checks only", today
+        )
+        return
+    await _ml_rebalance_path(c, today)
 
 
 # ---------------------------------------------------------------------------
 # ML-TopkDropout rebalance path (weekly)
 # ---------------------------------------------------------------------------
+
 
 async def _ml_rebalance_path(c: Components, today: str) -> None:
     ml = c.ml_strategy
@@ -82,17 +86,34 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
     prev_portfolio = ps.load()
     holdings = list(prev_portfolio.symbols) if prev_portfolio else []
     prev_ranks = dict(prev_portfolio.ranks) if prev_portfolio else {}
-    logger.info("[T4/ML] Prev portfolio: %d holdings (%s)",
-                len(holdings), "cold start" if not holdings else f"date={prev_portfolio.date}")
+    logger.info(
+        "[T6/ML] Prev portfolio: %d holdings (%s)",
+        len(holdings),
+        "cold start" if not holdings else f"date={prev_portfolio.date}",
+    )
 
     # 2. Score ML pool
-    factor_universe = c.stock_pool.get_all_symbols()
-    pool_df = ml.score_pool(today, list(factor_universe))
-    if pool_df.empty:
-        await c.alert(f"[T4/ML] ML score_pool returned empty for {today}; aborting rebalance.")
+    #
+    # T6 runs at 08:15 — today's K-line bars don't exist yet (T3 ingests at
+    # 18:00). Use the most recent available bar date (usually T-1) as the
+    # factor reference date, while keeping ``today`` as the rebalance /
+    # snapshot date.
+    factor_date = c.db.get_latest_bar_date()
+    if factor_date is None:
+        await c.alert("[T6/ML] 无 K 线数据，无法生成信号；请检查 T3 是否正常")
         return
-    logger.info("[T4/ML] Scored %d stocks (window=%d, seeds=%d)",
-                len(pool_df), ml._scorer.window_id, ml._scorer.n_models)
+    factor_universe = c.stock_pool.get_all_symbols()
+    pool_df = ml.score_pool(factor_date, list(factor_universe))
+    if pool_df.empty:
+        await c.alert(f"[T6/ML] ML score_pool returned empty for factor_date={factor_date}; aborting rebalance.")
+        return
+    logger.info(
+        "[T6/ML] Scored %d stocks (factor_date=%s, window=%d, seeds=%d)",
+        len(pool_df),
+        factor_date,
+        ml._scorer.window_id,
+        ml._scorer.n_models,
+    )
 
     # Persist pool snapshot to DB (existing behaviour for downstream tools)
     c.db.save_factor_pool(today, pool_df)
@@ -102,21 +123,23 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
     # 3. Cold start: choose top-N as initial portfolio, no LLM call needed
     if not holdings:
         new_symbols = ml.cold_start_portfolio(pool_df)
-        logger.info("[T4/ML] Cold start: initializing portfolio with %d symbols",
-                    len(new_symbols))
+        logger.info("[T6/ML] Cold start: initializing portfolio with %d symbols", len(new_symbols))
         ps.save(_make_portfolio(today, new_symbols, pool_df))
-        signals = _build_cold_start_signals(new_symbols, pool_df)
+        c.db.save_portfolio_snapshot(today, sorted(new_symbols), is_rebalance=True)
+        per_stock = c.initial_capital / max(1, ml.top_n)
+        signals = _build_cold_start_signals(new_symbols, pool_df, c=c, per_stock_capital=per_stock)
         await _persist_and_push(c, signals)
         return
 
     # 4. Build candidate pools
     sell_pool = ml.get_sell_candidate_pool(pool_df, holdings)
     buy_pool = ml.get_buy_candidate_pool(pool_df, holdings)
-    logger.info("[T4/ML] Candidate pools: SELL=%d, BUY=%d", len(sell_pool), len(buy_pool))
+    logger.info("[T6/ML] Candidate pools: SELL=%d, BUY=%d", len(sell_pool), len(buy_pool))
 
     if not sell_pool and not buy_pool:
-        logger.info("[T4/ML] No candidates on either side; portfolio unchanged.")
+        logger.info("[T6/ML] No candidates on either side; portfolio unchanged.")
         ps.save(_make_portfolio(today, holdings, pool_df))
+        c.db.save_portfolio_snapshot(today, sorted(holdings), is_rebalance=True)
         return
 
     # 5. Build evidence packs for LLM
@@ -126,13 +149,19 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
     stock_news_map = _prefetch_news(c, all_syms)
 
     sell_info = _build_pool_info(
-        sell_pool, pool_df, factor_matrix,
-        stock_meta, stock_news_map,
+        sell_pool,
+        pool_df,
+        factor_matrix,
+        stock_meta,
+        stock_news_map,
         prev_ranks=prev_ranks,
     )
     buy_info = _build_pool_info(
-        buy_pool, pool_df, factor_matrix,
-        stock_meta, stock_news_map,
+        buy_pool,
+        pool_df,
+        factor_matrix,
+        stock_meta,
+        stock_news_map,
         prev_ranks=None,
     )
 
@@ -151,11 +180,12 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
         n_drop=ml.n_drop,
         universe_size=universe_size,
     )
-    logger.info("[T4/ML] LLM decision (source=%s): sells=%d, buys=%d",
-                decision.source, len(decision.sells), len(decision.buys))
+    logger.info(
+        "[T6/ML] LLM decision (source=%s): sells=%d, buys=%d", decision.source, len(decision.sells), len(decision.buys)
+    )
 
     if decision.source == "llm_failed":
-        await c.alert("[T4/ML] LLM 调仓决策失败，使用 ML 排名兜底 (经典 TopkDropout 等价)")
+        await c.alert("[T6/ML] LLM 调仓决策失败，使用 ML 排名兜底 (经典 TopkDropout 等价)")
 
     # 8. Apply LLM choices + ML fallback to reach n_drop
     n_drop = ml.n_drop
@@ -165,10 +195,8 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
     llm_sell_syms = list(llm_sell_picks.keys())[:n_drop]
     llm_buy_syms = list(llm_buy_picks.keys())[:n_drop]
 
-    fb_sells = ml.fallback_sells(sell_pool, set(llm_sell_syms), pool_df,
-                                 n_drop - len(llm_sell_syms))
-    fb_buys = ml.fallback_buys(buy_pool, set(llm_buy_syms), pool_df,
-                               n_drop - len(llm_buy_syms))
+    fb_sells = ml.fallback_sells(sell_pool, set(llm_sell_syms), pool_df, n_drop - len(llm_sell_syms))
+    fb_buys = ml.fallback_buys(buy_pool, set(llm_buy_syms), pool_df, n_drop - len(llm_buy_syms))
 
     final_sells = llm_sell_syms + fb_sells
     final_buys = llm_buy_syms + fb_buys
@@ -178,14 +206,15 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
     final_sells = final_sells[:n_turn]
     final_buys = final_buys[:n_turn]
 
-    logger.info("[T4/ML] Final rebalance: SELL %d (llm=%d, fallback=%d), "
-                "BUY %d (llm=%d, fallback=%d)",
-                len(final_sells),
-                sum(1 for s in final_sells if s in llm_sell_picks),
-                sum(1 for s in final_sells if s not in llm_sell_picks),
-                len(final_buys),
-                sum(1 for s in final_buys if s in llm_buy_picks),
-                sum(1 for s in final_buys if s not in llm_buy_picks))
+    logger.info(
+        "[T6/ML] Final rebalance: SELL %d (llm=%d, fallback=%d), BUY %d (llm=%d, fallback=%d)",
+        len(final_sells),
+        sum(1 for s in final_sells if s in llm_sell_picks),
+        sum(1 for s in final_sells if s not in llm_sell_picks),
+        len(final_buys),
+        sum(1 for s in final_buys if s in llm_buy_picks),
+        sum(1 for s in final_buys if s not in llm_buy_picks),
+    )
 
     # 9. Update portfolio
     held_set = set(holdings)
@@ -193,8 +222,10 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
     held_set.update(final_buys)
     new_symbols = sorted(held_set)
     ps.save(_make_portfolio(today, new_symbols, pool_df))
+    c.db.save_portfolio_snapshot(today, new_symbols, is_rebalance=True)
 
     # 10. Build trade signals (BUY/SELL only) and push
+    per_stock = c.initial_capital / max(1, ml.top_n)
     signals = _build_rebalance_signals(
         final_sells=final_sells,
         final_buys=final_buys,
@@ -203,6 +234,8 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
         decision=decision,
         pool_df=pool_df,
         stock_meta=stock_meta,
+        c=c,
+        per_stock_capital=per_stock,
     )
     await _persist_and_push(c, signals)
 
@@ -210,6 +243,7 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
 # ---------------------------------------------------------------------------
 # Pool info builder for LLM
 # ---------------------------------------------------------------------------
+
 
 def _build_pool_info(
     symbols: list[str],
@@ -223,14 +257,7 @@ def _build_pool_info(
     """Build per-symbol evidence dicts consumed by judge_rebalance."""
     if not symbols:
         return []
-    score_map = (
-        dict(zip(pool_df["symbol"], pool_df["score"], strict=False))
-        if not pool_df.empty else {}
-    )
-    rank_map = (
-        dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
-        if not pool_df.empty else {}
-    )
+    score_map, rank_map = pool_score_rank_maps(pool_df)
 
     out: list[dict[str, Any]] = []
     for sym in symbols:
@@ -253,30 +280,38 @@ def _build_pool_info(
                         factor_details[key] = float(val)
 
         news, anns = stock_news_map.get(sym, ([], []))
-        out.append({
-            "symbol": sym,
-            "name": stock_meta[sym].name if sym in stock_meta else sym,
-            "ml_score": ml_score,
-            "ml_rank": ml_rank,
-            "prev_ml_rank": prev_rank,
-            "rank_delta": rank_delta,
-            "factor_details": factor_details,
-            "stock_news": news,
-            "announcements": anns,
-        })
+        out.append(
+            {
+                "symbol": sym,
+                "name": stock_meta[sym].name if sym in stock_meta else sym,
+                "ml_score": ml_score,
+                "ml_rank": ml_rank,
+                "prev_ml_rank": prev_rank,
+                "rank_delta": rank_delta,
+                "factor_details": factor_details,
+                "stock_news": news,
+                "announcements": anns,
+            }
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
-# Candidate-only factor computation (reuse from previous T4)
+# Candidate-only factor computation (reuse from previous version of this task)
 # ---------------------------------------------------------------------------
+
 
 def _build_candidate_factors(
     c: Components,
     today: str,
     candidates: list[str],
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
-    """Compute tech + fund + macro factors for candidate stocks only."""
+    """Compute tech + fund factors for candidate stocks only.
+
+    Returns ``(tech_df_by_symbol, factor_matrix)`` where ``factor_matrix`` is a
+    cross-sectional table indexed by symbol — fed to ``_build_pool_info`` to
+    extract ``_REBAL_FACTOR_KEYS`` for the LLM evidence packs.
+    """
     if not candidates:
         return {}, pd.DataFrame()
 
@@ -288,22 +323,15 @@ def _build_candidate_factors(
             if bars is not None and not bars.empty:
                 tech_df[symbol] = c.tech_engine.compute(bars)
         except Exception:  # noqa: BLE001
-            logger.warning("[T4/ML] %s: tech failed", symbol, exc_info=True)
-    logger.info("[T4/ML] Tech factors for candidates: %d/%d", len(tech_df), len(candidates))
+            logger.warning("[T6/ML] %s: tech failed", symbol, exc_info=True)
+    logger.info("[T6/ML] Tech factors for candidates: %d/%d", len(tech_df), len(candidates))
 
     fund_raw = c.db.load_latest_fundamentals(candidates)
     if not fund_raw.empty and "symbol" in fund_raw.columns:
         fund_raw = fund_raw.set_index("symbol")
     fund_df = c.fund_engine.compute(fund_raw)
 
-    global_snapshot = c.db.load_latest_global_snapshots()
-    macro_factors = c.macro_engine.compute(global_snapshot)
-
-    stock_meta = c.stock_pool.get_stock_metadata()
-    sector_map = {s: stock_meta[s].sector if s in stock_meta else "" for s in candidates}
-    factor_matrix = c.factor_strategy._build_factor_matrix(
-        candidates, tech_df, fund_df, macro_factors, sector_map,
-    )
+    factor_matrix = build_factor_matrix(candidates, tech_df, fund_df)
     return tech_df, factor_matrix
 
 
@@ -326,15 +354,9 @@ def _prefetch_news(c: Components, symbols: list[str]) -> dict[str, tuple[list, l
 # Portfolio + signal builders
 # ---------------------------------------------------------------------------
 
+
 def _make_portfolio(date: str, symbols: list[str], pool_df: pd.DataFrame) -> Portfolio:
-    score_map = (
-        dict(zip(pool_df["symbol"], pool_df["score"], strict=False))
-        if not pool_df.empty else {}
-    )
-    rank_map = (
-        dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
-        if not pool_df.empty else {}
-    )
+    score_map, rank_map = pool_score_rank_maps(pool_df)
     return Portfolio(
         date=date,
         symbols=sorted(symbols),
@@ -343,29 +365,93 @@ def _make_portfolio(date: str, symbols: list[str], pool_df: pd.DataFrame) -> Por
     )
 
 
+def _trade_context(
+    c: Components,
+    sym: str,
+    *,
+    per_stock_capital: float,
+) -> dict:
+    """Compute reference price, suggested shares, and limit warning for *sym*.
+
+    Returns a dict shaped for `TradeSignal.metadata` consumption.
+    Empty dict if we couldn't get T-1 close.
+    """
+    from datetime import datetime, timedelta
+
+    today = today_str()
+    start = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=15)).strftime("%Y-%m-%d")
+    bars = c.db.load_daily_bars(sym, start, today)
+    if bars is None or bars.empty:
+        return {}
+
+    bars = bars.sort_values("date")
+    ref_price = float(bars["close"].iloc[-1])
+    if not (ref_price > 0):
+        return {}
+
+    if sym.startswith("688") or sym.startswith("689"):
+        lot = 200
+    else:
+        lot = 100
+    shares = int(per_stock_capital // (ref_price * lot)) * lot
+    estimated_amount = shares * ref_price
+
+    ctx: dict[str, Any] = {
+        "ref_price": ref_price,
+        "shares": shares,
+        "estimated_amount": estimated_amount,
+        "lot": lot,
+    }
+
+    if len(bars) >= 2:
+        prev_close = float(bars["close"].iloc[-2])
+        if prev_close > 0:
+            pct = (ref_price - prev_close) / prev_close
+            if pct >= 0.098:
+                ctx["limit_warning"] = "⚠️ 昨日触及涨停"
+            elif pct <= -0.098:
+                ctx["limit_warning"] = "⚠️ 昨日触及跌停"
+
+    return ctx
+
+
 def _build_cold_start_signals(
-    symbols: list[str], pool_df: pd.DataFrame,
+    symbols: list[str],
+    pool_df: pd.DataFrame,
+    *,
+    c: Components,
+    per_stock_capital: float,
 ) -> list[TradeSignal]:
     now = _tz_now()
-    score_map = dict(zip(pool_df["symbol"], pool_df["score"], strict=False))
-    rank_map = dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
+    score_map, rank_map = pool_score_rank_maps(pool_df)
     signals: list[TradeSignal] = []
     for sym in sorted(symbols):
         score = float(score_map.get(sym, 0.0))
         rank = int(rank_map.get(sym, 0))
-        signals.append(TradeSignal(
-            timestamp=now,
-            symbol=sym, name=sym,
-            action=Action.BUY,
-            signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0,
-            price=0.0,
-            confidence=score,
-            source="ml_cold_start",
-            reason=f"冷启动 - ML rank {rank}",
-            factor_score=score,
-            metadata={"cold_start": True, "ml_rank": rank, "ml_score": score},
-        ))
+        ctx = _trade_context(c, sym, per_stock_capital=per_stock_capital)
+        ref_price = float(ctx.get("ref_price", 0.0))
+        metadata = {
+            "cold_start": True,
+            "ml_rank": rank,
+            "ml_score": score,
+            **ctx,
+        }
+        signals.append(
+            TradeSignal(
+                timestamp=now,
+                symbol=sym,
+                name=sym,
+                action=Action.BUY,
+                signal_status=SignalStatus.NEW_ENTRY,
+                days_in_top_n=0,
+                price=ref_price,
+                confidence=score,
+                source="ml_cold_start",
+                reason=f"冷启动 - ML rank {rank}",
+                factor_score=score,
+                metadata=metadata,
+            )
+        )
     return signals
 
 
@@ -378,16 +464,22 @@ def _build_rebalance_signals(
     decision,
     pool_df: pd.DataFrame,
     stock_meta: dict,
+    c: Components,
+    per_stock_capital: float,
 ) -> list[TradeSignal]:
     now = _tz_now()
-    score_map = dict(zip(pool_df["symbol"], pool_df["score"], strict=False))
-    rank_map = dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
+    score_map, rank_map = pool_score_rank_maps(pool_df)
     signals: list[TradeSignal] = []
 
     for sym in final_sells:
         pick = llm_sell_picks.get(sym)
         score = float(score_map.get(sym, 0.0))
         rank = int(rank_map.get(sym, 0))
+        # Reference price only — share count is not meaningful for SELL
+        # (we don't know the user's actual held quantity at this layer).
+        ctx = _trade_context(c, sym, per_stock_capital=per_stock_capital)
+        ref_price = float(ctx.get("ref_price", 0.0))
+        sell_ctx = {k: v for k, v in ctx.items() if k in {"ref_price", "limit_warning"}}
         if pick is not None:
             reason = pick.reason
             origin = "llm"
@@ -396,33 +488,38 @@ def _build_rebalance_signals(
             reason = f"ML 排名兜底卖出 (rank={rank})"
             origin = "fallback"
             evidence = ""
-        signals.append(TradeSignal(
-            timestamp=now,
-            symbol=sym,
-            name=stock_meta[sym].name if sym in stock_meta else sym,
-            action=Action.SELL,
-            signal_status=SignalStatus.EXIT,
-            days_in_top_n=0,
-            price=0.0,
-            confidence=1.0 - score,
-            source=f"llm_topkdrop:{origin}",
-            reason=reason,
-            factor_score=score,
-            metadata={
-                "origin": origin,
-                "ml_rank": rank,
-                "ml_score": score,
-                "evidence": evidence,
-                "sell_debate_bull": decision.sell_debate.bull,
-                "sell_debate_bear": decision.sell_debate.bear,
-                "n_drop": len(final_sells),
-            },
-        ))
+        signals.append(
+            TradeSignal(
+                timestamp=now,
+                symbol=sym,
+                name=stock_meta[sym].name if sym in stock_meta else sym,
+                action=Action.SELL,
+                signal_status=SignalStatus.EXIT,
+                days_in_top_n=0,
+                price=ref_price,
+                confidence=1.0 - score,
+                source=f"llm_topkdrop:{origin}",
+                reason=reason,
+                factor_score=score,
+                metadata={
+                    "origin": origin,
+                    "ml_rank": rank,
+                    "ml_score": score,
+                    "evidence": evidence,
+                    "sell_debate_bull": decision.sell_debate.bull,
+                    "sell_debate_bear": decision.sell_debate.bear,
+                    "n_drop": len(final_sells),
+                    **sell_ctx,
+                },
+            )
+        )
 
     for sym in final_buys:
         pick = llm_buy_picks.get(sym)
         score = float(score_map.get(sym, 0.0))
         rank = int(rank_map.get(sym, 0))
+        ctx = _trade_context(c, sym, per_stock_capital=per_stock_capital)
+        ref_price = float(ctx.get("ref_price", 0.0))
         if pick is not None:
             reason = pick.reason
             origin = "llm"
@@ -431,28 +528,31 @@ def _build_rebalance_signals(
             reason = f"ML 排名兜底买入 (rank={rank})"
             origin = "fallback"
             evidence = ""
-        signals.append(TradeSignal(
-            timestamp=now,
-            symbol=sym,
-            name=stock_meta[sym].name if sym in stock_meta else sym,
-            action=Action.BUY,
-            signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0,
-            price=0.0,
-            confidence=score,
-            source=f"llm_topkdrop:{origin}",
-            reason=reason,
-            factor_score=score,
-            metadata={
-                "origin": origin,
-                "ml_rank": rank,
-                "ml_score": score,
-                "evidence": evidence,
-                "buy_debate_bull": decision.buy_debate.bull,
-                "buy_debate_bear": decision.buy_debate.bear,
-                "n_drop": len(final_buys),
-            },
-        ))
+        signals.append(
+            TradeSignal(
+                timestamp=now,
+                symbol=sym,
+                name=stock_meta[sym].name if sym in stock_meta else sym,
+                action=Action.BUY,
+                signal_status=SignalStatus.NEW_ENTRY,
+                days_in_top_n=0,
+                price=ref_price,
+                confidence=score,
+                source=f"llm_topkdrop:{origin}",
+                reason=reason,
+                factor_score=score,
+                metadata={
+                    "origin": origin,
+                    "ml_rank": rank,
+                    "ml_score": score,
+                    "evidence": evidence,
+                    "buy_debate_bull": decision.buy_debate.bull,
+                    "buy_debate_bear": decision.buy_debate.bear,
+                    "n_drop": len(final_buys),
+                    **ctx,
+                },
+            )
+        )
     return signals
 
 
@@ -460,199 +560,107 @@ def _build_rebalance_signals(
 # Persist + push
 # ---------------------------------------------------------------------------
 
+
 async def _persist_and_push(c: Components, signals: list[TradeSignal]) -> None:
     if not signals:
-        logger.info("[T4] No signals to push.")
+        logger.info("[T6] No signals to push.")
         return
     for sig in signals:
         c.db.save_trade_signal(sig)
     _print_signal_summary(signals)
 
     signals.sort(key=lambda s: (_ACTION_ORDER.get(s.action, 9), -(s.factor_score or 0)))
-    pushed = 0
-    for sig in signals:
-        try:
-            result = await c.notif_manager.notify_signal(sig)
-            if result:
-                pushed += 1
-                logger.info("[T4] Pushed %s: %s", sig.symbol, result)
-        except Exception:  # noqa: BLE001
-            logger.warning("[T4] Push failed for %s", sig.symbol, exc_info=True)
-    logger.info("[T4] Done — %d signals saved, %d pushed", len(signals), pushed)
+    title, content = _build_rebalance_card(signals)
+    try:
+        result = await c.notif_manager.notify_markdown(title, content)
+        logger.info("[T6] Done — %d signals saved, push result=%s", len(signals), result)
+    except Exception:  # noqa: BLE001
+        logger.warning("[T6] Push failed", exc_info=True)
 
 
-# ---------------------------------------------------------------------------
-# Classic z-score path (legacy, kept for ml.enabled = false)
-# ---------------------------------------------------------------------------
+def _build_rebalance_card(signals: list[TradeSignal]) -> tuple[str, str]:
+    """Build a single consolidated markdown card for the rebalance batch."""
+    today = signals[0].timestamp.strftime("%Y-%m-%d") if signals else today_str()
+    sells = [s for s in signals if s.action is Action.SELL]
+    buys = [s for s in signals if s.action is Action.BUY]
+    title = f"📋 调仓信号 | {today} | 卖 {len(sells)} / 买 {len(buys)}"
 
-async def _classic_path(c: Components, today: str) -> None:
-    """Legacy daily z-score + per-stock LLM judge pipeline.
+    sections: list[str] = []
+    for label, group in (("🔴 卖出", sells), ("🟢 买入", buys)):
+        if not group:
+            continue
+        sections.append(f"## {label} ({len(group)})")
+        for sig in group:
+            meta = sig.metadata or {}
+            rank = meta.get("ml_rank")
+            score = meta.get("ml_score")
+            rank_str = f"rank={rank}" if rank is not None else ""
+            score_str = f"score={score:.3f}" if isinstance(score, (int, float)) else ""
+            meta_parts = [p for p in (rank_str, score_str) if p]
+            meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
 
-    Kept verbatim from the pre-LLM-TopkDropout implementation for users who
-    explicitly opt out of ML mode by setting ``ml.enabled = false``.
-    """
-    factor_universe = c.stock_pool.get_all_symbols()
-    watchlist = c.stock_pool.get_watchlist()
-    logger.info("[T4/classic] Factor universe: %d stocks, watchlist: %d",
-                len(factor_universe), len(watchlist))
+            warn = meta.get("limit_warning")
+            warn_suffix = f" {warn}" if warn else ""
+            sections.append(f"- **{sig.name} ({sig.symbol})**{meta_suffix}{warn_suffix}")
 
-    prev_pool = c.db.load_factor_pool_previous_day()
-    pool_df, factor_signals, factor_matrix, tech_df = _classic_scoring_path(
-        c, today, list(factor_universe), prev_pool,
-    )
+            ref_price = meta.get("ref_price")
+            shares = meta.get("shares")
+            amt = meta.get("estimated_amount")
+            if isinstance(ref_price, (int, float)) and ref_price > 0:
+                if isinstance(shares, int) and shares > 0 and isinstance(amt, (int, float)):
+                    sections.append(f"  - 参考价 ¥{ref_price:,.2f} × {shares} 股 ≈ ¥{amt:,.0f}")
+                elif sig.action is Action.SELL:
+                    sections.append(f"  - 参考价 ¥{ref_price:,.2f}（按实际持仓数量卖出）")
+                else:
+                    sections.append(f"  - 参考价 ¥{ref_price:,.2f}（资金不足以买入 1 手）")
+            if sig.reason:
+                sections.append(f"  - {sig.reason}")
+        sections.append("")
 
-    if not pool_df.empty:
-        c.db.save_factor_pool(today, pool_df)
-
-    # Signal status tracking
-    prev_symbols = set(prev_pool["symbol"]) if not prev_pool.empty else set()
-    curr_symbols = set(pool_df["symbol"]) if not pool_df.empty else set()
-    status_map: dict[str, tuple[SignalStatus, int, float | None]] = {}
-    for sym in curr_symbols:
-        prev_row = prev_pool[prev_pool["symbol"] == sym] if not prev_pool.empty else pd.DataFrame()
-        prev_score = float(prev_row["score"].iloc[0]) if not prev_row.empty else None
-        if sym in prev_symbols:
-            status_map[sym] = (SignalStatus.SUSTAINED, 0, prev_score)
-        else:
-            status_map[sym] = (SignalStatus.NEW_ENTRY, 0, prev_score)
-    for sym in prev_symbols - curr_symbols:
-        prev_row = prev_pool[prev_pool["symbol"] == sym]
-        prev_score = float(prev_row["score"].iloc[0]) if not prev_row.empty else None
-        status_map[sym] = (SignalStatus.EXIT, 0, prev_score)
-
-    stock_meta = c.stock_pool.get_stock_metadata()
-    factor_signal_symbols = [s.symbol for s in factor_signals]
-    candidate_symbols = list(dict.fromkeys(factor_signal_symbols + watchlist))
-    exit_symbols = [s for s in (prev_symbols - curr_symbols) if s not in candidate_symbols]
-    candidate_symbols.extend(exit_symbols)
-
-    buy_syms = {s.symbol for s in factor_signals if s.action == Action.BUY}
-    exit_set = set(exit_symbols)
-    factor_signal_map: dict[str, str] = {}
-    for sym in candidate_symbols:
-        if sym in buy_syms:
-            factor_signal_map[sym] = "BUY"
-        elif sym in exit_set:
-            factor_signal_map[sym] = "EXIT"
-        else:
-            factor_signal_map[sym] = "WATCHLIST"
-
-    for sym in candidate_symbols:
-        if sym not in status_map:
-            status_map[sym] = (SignalStatus.NEW_ENTRY, 0, None)
-
-    stock_news_map = _prefetch_news(c, candidate_symbols)
-
-    evidence_pool = c.judge_engine.build_evidence_pool(
-        candidate_symbols, pool_df, factor_matrix,
-        status_map, tech_df, stock_meta, stock_news_map,
-        factor_signal_map=factor_signal_map,
-    )
-    global_snapshot = c.db.load_latest_global_snapshots()
-    telegraph = c.db.load_recent_news(hours=24)
-
-    signals = await c.judge_engine.judge_pool(
-        evidence_pool, telegraph=telegraph, global_market=global_snapshot,
-        universe_size=len(pool_df),
-    )
-
-    if not signals and evidence_pool:
-        await c.alert(f"[T4] LLM 判断全部失败，{len(evidence_pool)} 只候选股无信号生成")
-    elif evidence_pool and len(signals) < len(evidence_pool) * (1 - _LLM_FAIL_THRESHOLD):
-        failed = len(evidence_pool) - len(signals)
-        await c.alert(f"[T4] LLM 判断部分失败: {failed}/{len(evidence_pool)} 只股票失败")
-
-    for sig in signals:
-        st_info = status_map.get(sig.symbol)
-        if st_info:
-            sig.signal_status = st_info[0]
-            sig.days_in_top_n = st_info[1]
-            sig.prev_factor_score = st_info[2]
-
-    logger.info("[T4/classic] Signals: %d", len(signals))
-    _print_signal_summary(signals)
-
-    for sig in signals:
-        c.db.save_trade_signal(sig)
-
-    actionable = [s for s in signals if s.action != Action.HOLD]
-    if not actionable and signals:
-        await c.alert("[T4] 今日无买卖信号，所有股票建议持有观望")
-
-    watchlist_set = set(watchlist)
-    to_push = [s for s in signals if s.action != Action.HOLD or s.symbol in watchlist_set]
-    to_push.sort(key=lambda s: (_ACTION_ORDER.get(s.action, 9), -(s.factor_score or 0)))
-    for sig in to_push:
-        try:
-            result = await c.notif_manager.notify_signal(sig)
-            if result:
-                logger.info("[T4/classic] Pushed %s: %s", sig.symbol, result)
-        except Exception:  # noqa: BLE001
-            logger.warning("[T4/classic] Push failed for %s", sig.symbol, exc_info=True)
-
-
-def _classic_scoring_path(
-    c: Components,
-    today: str,
-    factor_universe: list[str],
-    prev_pool: pd.DataFrame,
-) -> tuple[pd.DataFrame, list[TradeSignal], pd.DataFrame, dict[str, pd.DataFrame]]:
-    """Classic z-score path: tech/fund/macro → MultiFactorStrategy."""
-    start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
-    tech_df: dict[str, pd.DataFrame] = {}
-    for symbol in factor_universe:
-        try:
-            bars = c.db.load_daily_bars(symbol, start, today)
-            if bars is not None and not bars.empty:
-                tech_df[symbol] = c.tech_engine.compute(bars)
-        except Exception:  # noqa: BLE001
-            logger.warning("[T4] %s: tech failed", symbol, exc_info=True)
-    logger.info("[T4] Tech factors: %d/%d", len(tech_df), len(factor_universe))
-
-    fund_raw = c.db.load_latest_fundamentals(list(factor_universe))
-    if not fund_raw.empty and "symbol" in fund_raw.columns:
-        fund_raw = fund_raw.set_index("symbol")
-    fund_df = c.fund_engine.compute(fund_raw)
-
-    global_snapshot = c.db.load_latest_global_snapshots()
-    macro_factors = c.macro_engine.compute(global_snapshot)
-
-    pool_df, signals = c.factor_strategy.generate_signals(
-        tech_df, fund_df, macro_factors, prev_pool=prev_pool,
-    )
-
-    stock_meta = c.stock_pool.get_stock_metadata()
-    sector_map = {s: stock_meta[s].sector if s in stock_meta else "" for s in factor_universe}
-    factor_matrix = c.factor_strategy._build_factor_matrix(
-        list(factor_universe), tech_df, fund_df, macro_factors, sector_map,
-    )
-    return pool_df, signals, factor_matrix, tech_df
+    content = "\n".join(sections).rstrip()
+    return title, content
 
 
 # ---------------------------------------------------------------------------
 # Data freshness + display helpers
 # ---------------------------------------------------------------------------
 
+
 async def _check_data_freshness(c: Components, today: str) -> None:
     """Alert if key data sources are stale."""
     from datetime import datetime, timedelta
 
     latest_bar = c.db.get_latest_bar_date()
-    if latest_bar is not None:
-        missed = c.db.has_trading_day_between(latest_bar, today)
-        if missed is True:
-            await c.alert(f"[T4] K线数据可能过期: 最新日期 {latest_bar}，请检查 T3 是否正常")
+    if latest_bar is None:
+        await c.alert("[T6] 数据库中无 K 线数据，请检查 T3 是否正常")
+    else:
+        # T6 runs at 08:15 before T3's 18:00 sync, so today's bar legitimately
+        # doesn't exist yet. Compare ``latest_bar`` against the *previous*
+        # trading day instead of ``today`` to avoid a daily false positive.
+        prev_td = c.db.get_trading_day_offset(today, 1)
+        if prev_td is not None and latest_bar < prev_td:
+            await c.alert(f"[T6] K线数据可能过期: 最新日期 {latest_bar}，期望 {prev_td}，请检查 T3 是否正常")
 
     latest_news = c.db.get_latest_news_timestamp()
     if latest_news is None:
-        await c.alert("[T4] 数据库中无新闻数据，请检查 T2 是否正常")
+        await c.alert("[T6] 数据库中无新闻数据，请检查 T2 是否正常")
     else:
         try:
             news_dt = datetime.fromisoformat(latest_news)
             if _tz_now() - news_dt > timedelta(hours=24):
-                await c.alert("[T4] 24小时内无新闻更新，请检查 T2 是否正常")
+                await c.alert("[T6] 24小时内无新闻更新，请检查 T2 是否正常")
         except (ValueError, TypeError):
             pass
+
+    snapshots = c.db.load_latest_global_snapshots()
+    if snapshots.empty:
+        await c.alert("[T6] 数据库中无全球行情快照，请检查 T4 是否正常")
+    else:
+        latest_snap = snapshots["date"].max()
+        if isinstance(latest_snap, str) and latest_snap < today:
+            await c.alert(
+                f"[T6] 全球行情快照不是今日数据 (latest={latest_snap})，T4 可能尚未完成或失败，LLM 将使用上次快照"
+            )
 
 
 def _print_signal_summary(signals: list[TradeSignal]) -> None:

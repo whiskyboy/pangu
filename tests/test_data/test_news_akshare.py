@@ -38,12 +38,14 @@ def _fake_telegraph_df(n: int = 3) -> pd.DataFrame:
     ]
     rows = []
     for i in range(min(n, len(templates))):
-        rows.append({
-            "标题": templates[i][0],
-            "内容": templates[i][1],
-            "发布日期": today,
-            "发布时间": f"10:{i:02d}:00",
-        })
+        rows.append(
+            {
+                "标题": templates[i][0],
+                "内容": templates[i][1],
+                "发布日期": today,
+                "发布时间": f"10:{i:02d}:00",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -54,14 +56,16 @@ def _fake_stock_news_df(n: int = 2) -> pd.DataFrame:
     today = datetime.now().strftime("%Y-%m-%d")
     rows = []
     for i in range(n):
-        rows.append({
-            "关键词": "600519",
-            "新闻标题": f"茅台新闻{i}",
-            "新闻内容": f"贵州茅台相关内容{i}。",
-            "发布时间": f"{today} 09:{i:02d}:00",
-            "文章来源": "东财快讯",
-            "新闻链接": f"http://example.com/news/{i}",
-        })
+        rows.append(
+            {
+                "关键词": "600519",
+                "新闻标题": f"茅台新闻{i}",
+                "新闻内容": f"贵州茅台相关内容{i}。",
+                "发布时间": f"{today} 09:{i:02d}:00",
+                "文章来源": "东财快讯",
+                "新闻链接": f"http://example.com/news/{i}",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -99,6 +103,7 @@ class TestGetLatestNews:
         mock_cls.side_effect = ConnectionError("network error")
         provider = AkShareNewsDataProvider(request_interval=0)
         from pangu.utils import CircuitBreaker
+
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         assert provider.get_latest_news() == []
 
@@ -118,6 +123,7 @@ class TestGetLatestNews:
         provider = AkShareNewsDataProvider(request_interval=0)
         items = provider.get_latest_news(limit=1)
         from datetime import datetime
+
         assert items[0].timestamp.year == datetime.now().year
         assert items[0].timestamp.hour == 10
 
@@ -151,6 +157,7 @@ class TestGetStockNews:
         mock_news.side_effect = ConnectionError("down")
         provider = AkShareNewsDataProvider(request_interval=0)
         from pangu.utils import CircuitBreaker
+
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         assert provider.get_stock_news("600519") == []
 
@@ -212,6 +219,7 @@ class TestParseTimestamp:
         ts = AkShareNewsDataProvider._parse_timestamp("bad", "data")
         # Should be close to now (timezone-aware)
         from pangu.tz import now
+
         diff = abs((now().replace(tzinfo=None) - ts.replace(tzinfo=None)).total_seconds())
         assert diff < 5
 
@@ -228,13 +236,15 @@ def _fake_announcement_df(n: int = 3) -> pd.DataFrame:
     today = datetime.now().strftime("%Y-%m-%d")
     rows = []
     for i in range(n):
-        rows.append({
-            "代码": "601899",
-            "简称": "紫金矿业",
-            "公告标题": f"紫金矿业关于测试公告{i}",
-            "公告时间": today,
-            "公告链接": f"http://www.cninfo.com.cn/announcement/{i}",
-        })
+        rows.append(
+            {
+                "代码": "601899",
+                "简称": "紫金矿业",
+                "公告标题": f"紫金矿业关于测试公告{i}",
+                "公告时间": today,
+                "公告链接": f"http://www.cninfo.com.cn/announcement/{i}",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -273,6 +283,7 @@ class TestGetAnnouncements:
         mock_api.side_effect = ConnectionError("network error")
         provider = AkShareNewsDataProvider(request_interval=0)
         from pangu.utils import CircuitBreaker
+
         provider._circuit = CircuitBreaker(threshold=100, cooldown=0)
         assert provider.get_announcements("601899") == []
 
@@ -293,6 +304,7 @@ class TestGetAnnouncements:
         provider = AkShareNewsDataProvider(request_interval=0)
         items = provider.get_announcements("601899", limit=1)
         from datetime import datetime
+
         assert items[0].timestamp.year == datetime.now().year
         assert items[0].timestamp.month == datetime.now().month
 

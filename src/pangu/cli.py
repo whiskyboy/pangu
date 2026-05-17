@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import sys
 
 import click
@@ -10,6 +11,7 @@ import click
 # ---------------------------------------------------------------------------
 # Root group
 # ---------------------------------------------------------------------------
+
 
 @click.group()
 def main() -> None:
@@ -20,6 +22,7 @@ def main() -> None:
 # pool commands
 # ---------------------------------------------------------------------------
 
+
 @main.group()
 def pool() -> None:
     """Manage the watchlist stock pool."""
@@ -29,6 +32,7 @@ def pool() -> None:
 def pool_list() -> None:
     """List all stocks in the watchlist."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -54,6 +58,7 @@ def pool_list() -> None:
 def pool_add(input_str: str, name: str, sector: str) -> None:
     """Add a stock to the watchlist (by symbol or name)."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -89,6 +94,7 @@ def pool_add(input_str: str, name: str, sector: str) -> None:
 def pool_remove(input_str: str) -> None:
     """Remove a stock from the watchlist (by symbol or name)."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -104,119 +110,319 @@ def pool_remove(input_str: str) -> None:
 # run commands
 # ---------------------------------------------------------------------------
 
+
 @main.group()
 def run() -> None:
     """Run trading tasks."""
 
 
 @run.command("init")
-def run_init() -> None:
-    """First-time initialization: sync reference data + domestic market."""
+@click.option("--force", is_flag=True, help="Skip all skip-checks and re-run every step")
+def run_init(force: bool) -> None:
+    """First-time cold-start initialization (idempotent unless --force).
+
+    Executes the full bootstrap sequence:
+      1. Backfill index constituents
+      2. Backfill daily bars
+      3. Backfill fundamentals (with pub_dates for PIT)
+      4. Compute Alpha158 factor panel
+      5. Train production model (single window, all history)
+      6. Initialize portfolio_state (empty)
+
+    Each step is skipped if its output already looks fresh; use --force to
+    re-run everything from scratch.
+    """
     from pangu.main import _run_init
-    asyncio.run(_run_init())
+
+    asyncio.run(_run_init(force=force))
 
 
-@run.command("once")
-def run_once() -> None:
-    """Run all tasks once and exit."""
-    from pangu.main import _run_once
-    asyncio.run(_run_once())
+@run.command("signals")
+@click.option(
+    "--initial-capital",
+    type=float,
+    default=None,
+    help="Override [portfolio].initial_capital for this run (defaults to settings value).",
+)
+def run_signals(initial_capital: float | None) -> None:
+    """Manually trigger T6 signal generation (and T4 if today's snapshot is missing).
+
+    Useful when you want to see today's rebalance recommendation without
+    waiting for the 08:15 cron run, or when the daemon is not currently
+    running. Idempotent — re-running won't cause duplicate snapshots.
+    """
+    from pangu.main import _run_signals
+
+    asyncio.run(_run_signals(initial_capital=initial_capital))
 
 
 @run.command("start")
-def run_start() -> None:
+@click.option(
+    "--initial-capital",
+    default=None,
+    type=float,
+    help="Override [portfolio].initial_capital (CNY; default from settings.toml)",
+)
+def run_start(initial_capital: float | None) -> None:
     """Start the scheduler (daemon mode)."""
     from pangu.main import _run_scheduler
-    asyncio.run(_run_scheduler())
+
+    asyncio.run(_run_scheduler(initial_capital=initial_capital))
 
 
 # ---------------------------------------------------------------------------
 # train commands
 # ---------------------------------------------------------------------------
 
-@main.group()
-def train() -> None:
-    """Train ML models."""
+
+@main.group(invoke_without_command=True)
+@click.option(
+    "--model-dir",
+    default="models",
+    help="Directory to save trained models (default: models/)",
+)
+@click.option(
+    "--first-train-start",
+    default="2020-01-01",
+    help="Training start date (fixed); always uses ALL data from this date through validation cutoff",
+)
+@click.option(
+    "--val-months",
+    default=3,
+    type=click.IntRange(min=1),
+    help="Validation period months (default: 3)",
+)
+@click.option(
+    "--time-decay-halflife",
+    default=120,
+    type=click.IntRange(min=0),
+    help="Time decay half-life in trading days (default: 120, 0 to disable)",
+)
+@click.option(
+    "--n-seeds",
+    default=5,
+    type=click.IntRange(min=1),
+    help="Number of random seeds for ensemble (default: 5)",
+)
+@click.option(
+    "--factors",
+    "factors_path",
+    default=None,
+    help="Pre-computed factors.parquet (default: compute from DB)",
+)
+@click.pass_context
+def train(
+    ctx: click.Context,
+    model_dir: str,
+    first_train_start: str,
+    val_months: int,
+    time_decay_halflife: int,
+    n_seeds: int,
+    factors_path: str | None,
+) -> None:
+    """Train ML models.
+
+    Default (no subcommand): production single-window training. Uses ALL
+    historical data from --first-train-start through the latest available
+    bar, holding out the last --val-months for validation. There is no
+    ``--train-months`` parameter by design — production training always
+    uses all history.
+
+    For research / backtest use ``pangu train walkforward``.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    import logging
+
+    from pangu.main import build_components, load_env
+    from pangu.ml.model import train as _train
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    load_env()
+    c, _, _ = build_components()
+    storage = c.market._storage
+
+    latest_bar = c.db.get_latest_bar_date()
+    if latest_bar is None:
+        click.echo("ERROR: No bar data. Run T3 sync or backfill first.")
+        sys.exit(1)
+
+    click.echo("Production training (single window, all history)")
+    click.echo(f"  Train start: {first_train_start}")
+    click.echo(f"  Latest bar:  {latest_bar}")
+    click.echo(f"  Val months:  {val_months}")
+    click.echo(f"  Seeds:       {n_seeds}")
+    click.echo(f"  TD halflife: {time_decay_halflife}d")
+
+    result = _train(
+        storage=storage,
+        factors_path=factors_path,
+        model_dir=model_dir,
+        first_train_start=first_train_start,
+        val_months=val_months,
+        time_decay_halflife=time_decay_halflife,
+        n_seeds=n_seeds,
+    )
+
+    click.echo("\n✅ Production training complete")
+    click.echo(f"  Window id:   {result['window_id']}")
+    click.echo(
+        f"  Train:       {result['train_start']} ~ {result['train_end']} ({result['n_samples_train']:,} samples)"
+    )
+    click.echo(f"  Val:         {result['val_start']} ~ {result['val_end']} ({result['n_samples_val']:,} samples)")
+    click.echo(f"  Val IC:      {result['val_ic_mean']:.4f}  (RankIC {result['val_rank_ic_mean']:.4f})")
+    click.echo(f"  Models:      {model_dir}/wf_window_{result['window_id']:02d}_seed*.txt")
 
 
 @train.command("walkforward")
-@click.option("--factors", "factors_path", default=None,
-              help="Pre-computed factors.parquet (default: compute from DB)")
+@click.option("--factors", "factors_path", default=None, help="Pre-computed factors.parquet (default: compute from DB)")
 @click.option("--model-dir", default="models", help="Directory to save trained models")
-@click.option("--output", default="data", help="Output directory for score matrices "
-              "(produces score_matrix_test.parquet and score_matrix_val.parquet)")
+@click.option(
+    "--output",
+    default="data",
+    help="Output directory for score matrices (produces score_matrix_test.parquet and score_matrix_val.parquet)",
+)
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
-@click.option("--label-horizon", default="5", type=str,
-              help="Forward return horizon(s) in trading days. Single int (e.g. '5') or "
-              "comma-separated for multi-horizon fusion (e.g. '5,10,20'). "
-              "Multi-horizon fuses raw excess returns across horizons, "
-              "aligning with TopkDropout strategies where holding periods vary.")
-@click.option("--label-horizon-weights", default=None, type=str,
-              help="Weights for multi-horizon fusion: comma-separated floats, e.g. '0.5,0.3,0.2'. "
-              "Must match --label-horizon length. Default: equal weights.")
-@click.option("--train-months", default=18, type=int,
-              help="Training window length in months (default: 18)")
-@click.option("--first-train-start", default="2020-01-01",
-              help="First window training start date (default: 2020-01-01)")
-@click.option("--last-test-end", default="2025-12-31",
-              help="Last window test end date; windows are generated until test_end ≤ this date "
-              "(default: 2025-12-31)")
-@click.option("--params-file", default=None, type=click.Path(exists=True),
-              help="LightGBM params JSON file (overrides defaults). "
-              "Default params when not set: objective=mae, num_leaves=31, "
-              "learning_rate=0.02, n_estimators=2000, subsample=0.8, "
-              "colsample_bytree=0.7, min_child_samples=100, early_stopping=200")
-@click.option("--normalize-label/--no-normalize-label", default=False,
-              help="Cross-sectional z-score on labels (Qlib CSZScoreNorm). "
-              "Model learns relative outperformance instead of absolute excess returns. "
-              "(default: disabled)")
-@click.option("--mode", type=click.Choice(["regression", "ranking"]), default="regression",
-              help="Training mode: regression (MAE, default) or ranking (LambdaRank NDCG)")
-@click.option("--n-bins", default=10, type=int,
-              help="Number of relevance bins for ranking mode (default: 10 = decile). "
-              "Ignored in regression mode.")
-@click.option("--early-stop-metric", type=click.Choice(["mae", "rankic"]), default="mae",
-              help="Early stopping metric for regression mode: mae (default) or rankic "
-              "(daily Spearman rank correlation — aligns stopping with ranking quality). "
-              "Ignored in ranking mode.")
-@click.option("--time-decay-halflife", default=0, type=click.IntRange(min=0),
-              help="Half-life in trading days for exponential time-decay sample weights. "
-              "0 = no decay (uniform, default). Typical: 40 (~2mo), 80 (~4mo), 120 (~6mo). "
-              "Recent samples get higher weight; oldest in 18mo window get ~0.12 with halflife=120.")
-@click.option("--train-subsample-stride", default=0, type=click.IntRange(min=0),
-              help="Random block subsampling stride for training data. "
-              "0 = no subsampling (default). Divides training dates into blocks of this size "
-              "and randomly selects one date per block. Reduces label overlap redundancy. "
-              "Typically set equal to label horizon (e.g. 5 for 5-day labels).")
-@click.option("--step-months", default=0, type=click.IntRange(min=0),
-              help="Sliding step between windows in months. "
-              "0 = same as test period (default, no overlap). "
-              "Set to 1 for overlapping ensemble: each month scored by 3 windows, averaged.")
-@click.option("--expanding/--no-expanding", default=False,
-              help="Use expanding training window: train_start is fixed at --first-train-start "
-              "for all windows, giving later windows progressively more data. "
-              "Combine with --time-decay-halflife to down-weight older data. "
-              "(default: disabled, fixed-length sliding window)")
-@click.option("--n-seeds", default=5, type=click.IntRange(min=1),
-              help="Number of random seeds per window for ensemble averaging. "
-              "Default 5: trains 5 models per window with seeds 0..4, "
-              "combines via simple averaging. Reduces seed variance ~sqrt(N). "
-              "Use 1 for quick experiments.")
-@click.option("--early-stopping-rounds", default=200, type=click.IntRange(min=1),
-              help="Patience for early stopping (default: 200)")
-@click.option("--min-iterations", default=50, type=click.IntRange(min=1),
-              help="Minimum boosting rounds even if early stopping fires (default: 50)")
-def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
-                          pool_file: str | None, label_horizon: str,
-                          label_horizon_weights: str | None,
-                          train_months: int, first_train_start: str,
-                          last_test_end: str, params_file: str | None,
-                          normalize_label: bool, mode: str, n_bins: int,
-                          early_stop_metric: str, time_decay_halflife: int,
-                          train_subsample_stride: int, step_months: int,
-                          expanding: bool, n_seeds: int,
-                          early_stopping_rounds: int,
-                          min_iterations: int) -> None:
+@click.option(
+    "--label-horizon",
+    default="5",
+    type=str,
+    help="Forward return horizon(s) in trading days. Single int (e.g. '5') or "
+    "comma-separated for multi-horizon fusion (e.g. '5,10,20'). "
+    "Multi-horizon fuses raw excess returns across horizons, "
+    "aligning with TopkDropout strategies where holding periods vary.",
+)
+@click.option(
+    "--label-horizon-weights",
+    default=None,
+    type=str,
+    help="Weights for multi-horizon fusion: comma-separated floats, e.g. '0.5,0.3,0.2'. "
+    "Must match --label-horizon length. Default: equal weights.",
+)
+@click.option("--train-months", default=18, type=int, help="Training window length in months (default: 18)")
+@click.option(
+    "--first-train-start", default="2020-01-01", help="First window training start date (default: 2020-01-01)"
+)
+@click.option(
+    "--last-test-end",
+    default="2025-12-31",
+    help="Last window test end date; windows are generated until test_end ≤ this date (default: 2025-12-31)",
+)
+@click.option(
+    "--params-file",
+    default=None,
+    type=click.Path(exists=True),
+    help="LightGBM params JSON file (overrides defaults). "
+    "Default params when not set: objective=mae, num_leaves=31, "
+    "learning_rate=0.02, n_estimators=2000, subsample=0.8, "
+    "colsample_bytree=0.7, min_child_samples=100, early_stopping=200",
+)
+@click.option(
+    "--normalize-label/--no-normalize-label",
+    default=False,
+    help="Cross-sectional z-score on labels (Qlib CSZScoreNorm). "
+    "Model learns relative outperformance instead of absolute excess returns. "
+    "(default: disabled)",
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["regression", "ranking"]),
+    default="regression",
+    help="Training mode: regression (MAE, default) or ranking (LambdaRank NDCG)",
+)
+@click.option(
+    "--n-bins",
+    default=10,
+    type=int,
+    help="Number of relevance bins for ranking mode (default: 10 = decile). Ignored in regression mode.",
+)
+@click.option(
+    "--early-stop-metric",
+    type=click.Choice(["mae", "rankic"]),
+    default="mae",
+    help="Early stopping metric for regression mode: mae (default) or rankic "
+    "(daily Spearman rank correlation — aligns stopping with ranking quality). "
+    "Ignored in ranking mode.",
+)
+@click.option(
+    "--time-decay-halflife",
+    default=0,
+    type=click.IntRange(min=0),
+    help="Half-life in trading days for exponential time-decay sample weights. "
+    "0 = no decay (uniform, default). Typical: 40 (~2mo), 80 (~4mo), 120 (~6mo). "
+    "Recent samples get higher weight; oldest in 18mo window get ~0.12 with halflife=120.",
+)
+@click.option(
+    "--train-subsample-stride",
+    default=0,
+    type=click.IntRange(min=0),
+    help="Random block subsampling stride for training data. "
+    "0 = no subsampling (default). Divides training dates into blocks of this size "
+    "and randomly selects one date per block. Reduces label overlap redundancy. "
+    "Typically set equal to label horizon (e.g. 5 for 5-day labels).",
+)
+@click.option(
+    "--step-months",
+    default=0,
+    type=click.IntRange(min=0),
+    help="Sliding step between windows in months. "
+    "0 = same as test period (default, no overlap). "
+    "Set to 1 for overlapping ensemble: each month scored by 3 windows, averaged.",
+)
+@click.option(
+    "--expanding/--no-expanding",
+    default=False,
+    help="Use expanding training window: train_start is fixed at --first-train-start "
+    "for all windows, giving later windows progressively more data. "
+    "Combine with --time-decay-halflife to down-weight older data. "
+    "(default: disabled, fixed-length sliding window)",
+)
+@click.option(
+    "--n-seeds",
+    default=5,
+    type=click.IntRange(min=1),
+    help="Number of random seeds per window for ensemble averaging. "
+    "Default 5: trains 5 models per window with seeds 0..4, "
+    "combines via simple averaging. Reduces seed variance ~sqrt(N). "
+    "Use 1 for quick experiments.",
+)
+@click.option(
+    "--early-stopping-rounds",
+    default=200,
+    type=click.IntRange(min=1),
+    help="Patience for early stopping (default: 200)",
+)
+@click.option(
+    "--min-iterations",
+    default=50,
+    type=click.IntRange(min=1),
+    help="Minimum boosting rounds even if early stopping fires (default: 50)",
+)
+def train_walkforward_cmd(
+    factors_path: str | None,
+    model_dir: str,
+    output: str,
+    pool_file: str | None,
+    label_horizon: str,
+    label_horizon_weights: str | None,
+    train_months: int,
+    first_train_start: str,
+    last_test_end: str,
+    params_file: str | None,
+    normalize_label: bool,
+    mode: str,
+    n_bins: int,
+    early_stop_metric: str,
+    time_decay_halflife: int,
+    train_subsample_stride: int,
+    step_months: int,
+    expanding: bool,
+    n_seeds: int,
+    early_stopping_rounds: int,
+    min_iterations: int,
+) -> None:
     """Run Walk-Forward LightGBM training."""
     import json
     import logging
@@ -309,6 +515,7 @@ def train_walkforward_cmd(factors_path: str | None, model_dir: str, output: str,
 # backfill commands
 # ---------------------------------------------------------------------------
 
+
 @main.group()
 def backfill() -> None:
     """Backfill historical data from upstream providers."""
@@ -317,6 +524,7 @@ def backfill() -> None:
 def _load_pool_yaml(path: str) -> list[str] | None:
     """Load stock list from YAML file (key: ``symbols``). Returns None on error."""
     import yaml
+
     try:
         with open(path) as f:
             data = yaml.safe_load(f) or {}
@@ -341,6 +549,7 @@ def _load_pool_yaml(path: str) -> list[str] | None:
 def backfill_constituents(start: str, end: str | None, output: str, with_sector: bool) -> None:
     """Backfill historical index constituents (CSI300 + CSI500) semi-annually."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -367,6 +576,7 @@ def backfill_constituents(start: str, end: str | None, output: str, with_sector:
 def backfill_bars(start: str, force: bool, pool_file: str | None) -> None:
     """Backfill daily OHLCV + PE/PB for all pool stocks."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -408,6 +618,7 @@ def backfill_bars(start: str, force: bool, pool_file: str | None) -> None:
 def backfill_index(start: str, symbol: str, force: bool) -> None:
     """Backfill index daily bars (default: CSI300)."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -426,6 +637,7 @@ def backfill_index(start: str, symbol: str, force: bool) -> None:
 def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> None:
     """Backfill quarterly financial indicators."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -458,6 +670,7 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
         # Network recovery: pause on consecutive failures
         if consecutive_fails >= 5:
             import time
+
             click.echo(f"  ⚠️ {consecutive_fails} consecutive failures, waiting 60s...")
             time.sleep(60)
             consecutive_fails = 0
@@ -469,6 +682,7 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
 
     # Gross margin supplement via stock_yjbb_em (per-quarter batch API)
     from pangu.tz import now as tz_now
+
     today = tz_now().strftime("%Y-%m-%d")
     click.echo(f"\nBackfilling gross_margin ({start} → {today})...")
     gm_ok, gm_fail = c.fundamental.refresh_gross_margin(start, today)
@@ -480,51 +694,69 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     click.echo(f"✅ pub_dates done: {pd_ok} quarters ok, {pd_fail} failed")
 
 
-
-
 # ---------------------------------------------------------------------------
 # backtest command
 # ---------------------------------------------------------------------------
 
+
 @main.command("backtest")
-@click.option("--strategy", type=click.Choice(["baseline", "lgb"]), default="baseline",
-              help="Strategy to backtest")
+@click.option("--strategy", type=click.Choice(["baseline", "lgb"]), default="baseline", help="Strategy to backtest")
 @click.option("--start", default="2022-01-01", help="Start date")
 @click.option("--end", default="2025-12-31", help="End date")
 @click.option("--top-n", default=30, type=int, help="TopN stocks to hold (default: 30)")
-@click.option("--n-drop", default=10, type=int,
-              help="TopkDropout: stocks to drop and replace each rebalance (default: 10). "
-              "Set to 0 to disable dropout and use pure top-N replacement.")
+@click.option(
+    "--n-drop",
+    default=10,
+    type=int,
+    help="TopkDropout: stocks to drop and replace each rebalance (default: 10). "
+    "Set to 0 to disable dropout and use pure top-N replacement.",
+)
 @click.option("--capital", default=1_000_000, type=float, help="Initial capital (CNY)")
-@click.option("--stamp-tax", default=0.001, type=float,
-              help="Sell stamp tax rate (default: 0.001)")
-@click.option("--commission", default=0.0003, type=float,
-              help="Broker commission rate (default: 0.0003)")
-@click.option("--slippage", default=0.001, type=float,
-              help="Slippage rate (default: 0.001)")
-@click.option("--exclude-prefixes", default="688,689",
-              help="Comma-separated stock code prefixes to exclude (default: 688,689 STAR market)")
+@click.option("--stamp-tax", default=0.001, type=float, help="Sell stamp tax rate (default: 0.001)")
+@click.option("--commission", default=0.0003, type=float, help="Broker commission rate (default: 0.0003)")
+@click.option("--slippage", default=0.001, type=float, help="Slippage rate (default: 0.001)")
+@click.option(
+    "--exclude-prefixes",
+    default="688,689",
+    help="Comma-separated stock code prefixes to exclude (default: 688,689 STAR market)",
+)
 @click.option("--pool", "pool_file", default=None, help="YAML file with symbols list (overrides default)")
-@click.option("--scores", "scores_path", default=None,
-              help="Parquet file with pre-computed scores (for lgb strategy)")
-@click.option("--score-smooth-halflife", default=0, type=click.IntRange(min=0),
-              help="EMA halflife (trading days) for temporal score smoothing. 0=disabled (default).")
-@click.option("--max-per-sector", default=None, type=int,
-              help="Max stocks per sector (industry diversification). Requires sector data in DB.")
-@click.option("--plot/--no-plot", default=True,
-              help="Generate equity curve chart (default: --plot)")
-@click.option("--plot-output", default=None,
-              help="Chart output path (default: data/backtest_{strategy}_{date}.png)")
-def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
-                 capital: float,
-                 stamp_tax: float, commission: float, slippage: float,
-                 exclude_prefixes: str,
-                 pool_file: str | None, scores_path: str | None,
-                 score_smooth_halflife: int,
-                 max_per_sector: int | None,
-                 plot: bool, plot_output: str | None) -> None:
+@click.option("--scores", "scores_path", default=None, help="Parquet file with pre-computed scores (for lgb strategy)")
+@click.option(
+    "--score-smooth-halflife",
+    default=0,
+    type=click.IntRange(min=0),
+    help="EMA halflife (trading days) for temporal score smoothing. 0=disabled (default).",
+)
+@click.option(
+    "--max-per-sector",
+    default=None,
+    type=int,
+    help="Max stocks per sector (industry diversification). Requires sector data in DB.",
+)
+@click.option("--plot/--no-plot", default=True, help="Generate equity curve chart (default: --plot)")
+@click.option("--plot-output", default=None, help="Chart output path (default: data/backtest_{strategy}_{date}.png)")
+def backtest_cmd(
+    strategy: str,
+    start: str,
+    end: str,
+    top_n: int,
+    n_drop: int,
+    capital: float,
+    stamp_tax: float,
+    commission: float,
+    slippage: float,
+    exclude_prefixes: str,
+    pool_file: str | None,
+    scores_path: str | None,
+    score_smooth_halflife: int,
+    max_per_sector: int | None,
+    plot: bool,
+    plot_output: str | None,
+) -> None:
     """Run local backtest for a given strategy."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
 
@@ -538,9 +770,11 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
     scores_df: pd.DataFrame | None = None
     if strategy == "lgb":
         if not scores_path:
-            click.echo("ERROR: --scores required for lgb strategy "
-                       "(e.g. data/score_matrix_val.parquet for tuning, "
-                       "data/score_matrix_test.parquet for final report)")
+            click.echo(
+                "ERROR: --scores required for lgb strategy "
+                "(e.g. data/score_matrix_val.parquet for tuning, "
+                "data/score_matrix_test.parquet for final report)"
+            )
             return
         scores_df = pd.read_parquet(scores_path)
         scores_df.index = pd.to_datetime(scores_df.index)
@@ -568,6 +802,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
 
     # Load price data with 120-day warmup for factor computation
     from datetime import datetime, timedelta
+
     warmup_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=120)).strftime("%Y-%m-%d")
 
     bars_list = []
@@ -608,6 +843,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
     # Compute scores based on strategy (uses full data including warmup)
     if strategy == "baseline":
         from pangu.backtest.scoring import compute_baseline_scores
+
         scores = compute_baseline_scores(all_bars, storage, start, end)
     elif strategy == "lgb":
         scores = scores_df
@@ -632,9 +868,7 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
     universe_fn = make_universe_fn(storage)
 
     # Parse exclude_prefixes
-    prefixes = tuple(
-        p.strip() for p in exclude_prefixes.split(",") if p.strip()
-    ) if exclude_prefixes else ()
+    prefixes = tuple(p.strip() for p in exclude_prefixes.split(",") if p.strip()) if exclude_prefixes else ()
 
     # Load sector map if max_per_sector is set
     sector_data: dict[str, str] | None = None
@@ -651,20 +885,34 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
 
     # Run backtest with dynamic constituents
     engine = BacktestEngine(
-        top_n=top_n, n_drop=n_drop, initial_capital=capital,
-        stamp_tax=stamp_tax, commission=commission, slippage=slippage,
+        top_n=top_n,
+        n_drop=n_drop,
+        initial_capital=capital,
+        stamp_tax=stamp_tax,
+        commission=commission,
+        slippage=slippage,
         max_per_sector=max_per_sector,
     )
-    result = engine.run(scores, open_prices, close_prices, bench_close,
-                        start, end, universe_fn=universe_fn, volume=volume_wide,
-                        adj_factor=adj_factor_wide, is_st=is_st_wide,
-                        exclude_prefixes=prefixes, sector_map=sector_data)
+    result = engine.run(
+        scores,
+        open_prices,
+        close_prices,
+        bench_close,
+        start,
+        end,
+        universe_fn=universe_fn,
+        volume=volume_wide,
+        adj_factor=adj_factor_wide,
+        is_st=is_st_wide,
+        exclude_prefixes=prefixes,
+        sector_map=sector_data,
+    )
 
     # Print results
-    click.echo(f"\n{'='*60}")
+    click.echo(f"\n{'=' * 60}")
     dropout_str = f", n_drop={n_drop}" if n_drop > 0 else ""
     click.echo(f"Backtest Result: {strategy} ({start} ~ {end}, TopN={top_n}{dropout_str})")
-    click.echo(f"{'='*60}")
+    click.echo(f"{'=' * 60}")
     for k, v in result.metrics.items():
         if isinstance(v, float):
             click.echo(f"  {k:20s}: {v:+.4f}" if abs(v) < 10 else f"  {k:20s}: {v:.1f}")
@@ -677,16 +925,177 @@ def backtest_cmd(strategy: str, start: str, end: str, top_n: int, n_drop: int,
         from datetime import datetime
 
         from pangu.backtest.plot import plot_equity_curve
+
         if plot_output is None:
             plot_output = f"data/backtest_{strategy}_{datetime.now().strftime('%Y%m%d')}.png"
-        path = plot_equity_curve(result.nav, result.benchmark_nav, strategy, plot_output,
-                                initial_capital=capital)
+        path = plot_equity_curve(result.nav, result.benchmark_nav, strategy, plot_output, initial_capital=capital)
+        click.echo(f"\n📈 Chart saved: {path}")
+
+
+# ---------------------------------------------------------------------------
+# replay command (production decision replay)
+# ---------------------------------------------------------------------------
+
+
+@main.command("replay")
+@click.option("--start", required=True, help="Replay start date (YYYY-MM-DD)")
+@click.option("--end", required=True, help="Replay end date (YYYY-MM-DD)")
+@click.option("--initial-capital", default=None, type=float, help="Override [portfolio].initial_capital")
+@click.option("--benchmark", default="000300", help="Benchmark index symbol (default: 000300)")
+@click.option("--top-n", default=None, type=int, help="Used only to construct the engine (default: avg holdings)")
+@click.option(
+    "--exclude-prefixes",
+    default="688,689",
+    help="Stock code prefixes to exclude (default: 688,689 STAR market)",
+)
+@click.option("--plot/--no-plot", default=True, help="Generate equity curve chart")
+@click.option("--plot-output", default=None, help="Chart output path (default: data/replay_{date}.png)")
+def replay_cmd(
+    start: str,
+    end: str,
+    initial_capital: float | None,
+    benchmark: str,
+    top_n: int | None,
+    exclude_prefixes: str,
+    plot: bool,
+    plot_output: str | None,
+) -> None:
+    """Replay historical rebalance decisions from ``portfolio_snapshots``.
+
+    Re-runs the engine over recorded production decisions (BUY/SELL pool
+    after LLM judge) to estimate paper PnL — independent of any score
+    matrix.  Useful for comparing "what the production line did" vs.
+    "what the strategy would have done" via ``pangu backtest``.
+    """
+    from datetime import datetime, timedelta
+
+    import pandas as pd
+
+    from pangu.backtest.engine import BacktestEngine
+    from pangu.backtest.target_provider import ReplayProvider
+    from pangu.main import build_components, load_env
+
+    load_env()
+    components, _, settings = build_components()
+    storage = components.db
+
+    capital = initial_capital
+    if capital is None:
+        capital = float(settings.portfolio.get("initial_capital", 100_000.0))
+
+    snaps = storage.get_portfolio_snapshots(start=start, end=end)
+    rebalance_snaps = [s for s in snaps if s["is_rebalance"]]
+
+    # Engine may start in the middle of a holding period; pull the most
+    # recent rebalance snapshot *before* ``start`` so ReplayProvider
+    # answers with the correct opening holdings instead of empty cash.
+    all_snaps_before = storage.get_portfolio_snapshots(end=start)
+    prior_rebal = [s for s in all_snaps_before if s["is_rebalance"] and s["date"] < start]
+    if prior_rebal:
+        prior = prior_rebal[-1]  # results are date-ascending, so last is latest
+        rebalance_snaps = [prior] + rebalance_snaps
+        click.echo(f"Including prior rebalance snapshot from {prior['date']} as opening holdings")
+
+    if not rebalance_snaps:
+        click.echo(
+            f"ERROR: No rebalance snapshots in [{start}, {end}] (or before). "
+            "Run pangu production (T6) first, or pick a different window."
+        )
+        return
+
+    decisions = {s["date"]: s["symbols"] for s in rebalance_snaps}
+    avg_holdings = max(1, int(sum(len(v) for v in decisions.values()) / len(decisions)))
+    selected_top_n = top_n or avg_holdings
+
+    all_symbols = sorted({sym for syms in decisions.values() for sym in syms})
+    if not all_symbols:
+        click.echo("ERROR: All recorded decisions are empty.")
+        return
+    click.echo(
+        f"Loaded {len(decisions)} rebalance decisions, {len(all_symbols)} unique symbols, avg holdings = {avg_holdings}"
+    )
+
+    bench_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=15)).strftime("%Y-%m-%d")
+    bars_list = []
+    for sym in all_symbols:
+        df = storage.load_daily_bars(sym, start, end)
+        if df is not None and not df.empty:
+            df = df[["date", "open", "close", "volume", "adj_factor", "is_st"]].copy()
+            df["symbol"] = sym
+            bars_list.append(df)
+    if not bars_list:
+        click.echo("ERROR: No daily bars for decision symbols. Backfill bars first.")
+        return
+    all_bars = pd.concat(bars_list, ignore_index=True)
+    all_bars["date"] = pd.to_datetime(all_bars["date"])
+    open_prices = all_bars.pivot(index="date", columns="symbol", values="open")
+    close_prices = all_bars.pivot(index="date", columns="symbol", values="close")
+    volume_wide = all_bars.pivot(index="date", columns="symbol", values="volume")
+    adj_factor_wide = all_bars.pivot(index="date", columns="symbol", values="adj_factor")
+    is_st_wide = all_bars.pivot(index="date", columns="symbol", values="is_st")
+
+    bench_df = storage.load_daily_bars(benchmark, bench_start, end)
+    if bench_df is None or bench_df.empty:
+        click.echo(f"ERROR: No benchmark bars for {benchmark}. Run 'pangu backfill index --symbol {benchmark}'.")
+        return
+    bench_close = bench_df.set_index("date")["close"]
+    bench_close.index = pd.to_datetime(bench_close.index)
+
+    # Pre-check: engine requires ≥2 trading dates inside the window
+    dates_in_window = close_prices.index[(close_prices.index >= start) & (close_prices.index <= end)]
+    if len(dates_in_window) < 2:
+        click.echo(
+            f"ERROR: Need at least 2 trading days in [{start}, {end}]; "
+            f"found {len(dates_in_window)}. Widen the date range."
+        )
+        return
+
+    prefixes = tuple(p.strip() for p in exclude_prefixes.split(",") if p.strip()) if exclude_prefixes else ()
+
+    engine = BacktestEngine(top_n=selected_top_n, initial_capital=capital)
+    provider = ReplayProvider(decisions)
+    result = engine.run_with_provider(
+        provider,
+        open_prices=open_prices,
+        close_prices=close_prices,
+        benchmark_close=bench_close,
+        start=start,
+        end=end,
+        volume=volume_wide,
+        adj_factor=adj_factor_wide,
+        is_st=is_st_wide,
+        exclude_prefixes=prefixes,
+    )
+
+    click.echo(f"\n{'=' * 60}")
+    click.echo(f"Replay Result: {start} ~ {end} (capital=¥{capital:,.0f})")
+    click.echo(f"{'=' * 60}")
+    for k, v in result.metrics.items():
+        if isinstance(v, float):
+            click.echo(f"  {k:20s}: {v:+.4f}" if abs(v) < 10 else f"  {k:20s}: {v:.1f}")
+        else:
+            click.echo(f"  {k:20s}: {v}")
+    click.echo(f"  {'rebalances':20s}: {len(result.rebalance_log)}")
+
+    if plot:
+        from pangu.backtest.plot import plot_equity_curve
+
+        if plot_output is None:
+            plot_output = f"data/replay_{datetime.now().strftime('%Y%m%d')}.png"
+        path = plot_equity_curve(
+            result.nav,
+            result.benchmark_nav,
+            "replay",
+            plot_output,
+            initial_capital=capital,
+        )
         click.echo(f"\n📈 Chart saved: {path}")
 
 
 # ---------------------------------------------------------------------------
 # score command (ML model scoring)
 # ---------------------------------------------------------------------------
+
 
 @main.command("score")
 @click.option("--date", default=None, help="Target date (default: latest trading day)")
@@ -733,90 +1142,21 @@ def score_cmd(date: str | None, model_dir: str, top_n: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# train update command (single-window production model update)
-# ---------------------------------------------------------------------------
-
-@train.command("update")
-@click.option("--model-dir", default="models", help="Directory to save trained models")
-@click.option("--n-seeds", default=5, type=click.IntRange(min=1),
-              help="Number of random seeds (default: 5)")
-@click.option("--time-decay-halflife", default=120, type=click.IntRange(min=0),
-              help="Time decay half-life in trading days (default: 120)")
-@click.option("--first-train-start", default="2020-01-01",
-              help="Training start date (fixed, expanding window)")
-@click.option("--factors", "factors_path", default=None,
-              help="Pre-computed factors.parquet (default: compute from DB)")
-@click.option("--val-months", default=3, type=int, help="Validation period months (default: 3)")
-@click.option("--test-months", default=3, type=int, help="Test period months (default: 3)")
-def train_update_cmd(model_dir: str, n_seeds: int, time_decay_halflife: int,
-                     first_train_start: str, factors_path: str | None,
-                     val_months: int, test_months: int) -> None:
-    """Update production model: single expanding window + time decay.
-
-    Trains one window with all data from --first-train-start to latest,
-    using expanding window + TD (experimentally validated optimal config).
-    """
-    import logging
-
-    from pangu.main import build_components, load_env
-    from pangu.ml.model import train_walk_forward
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-
-    load_env()
-    c, _, _ = build_components()
-    storage = c.market._storage
-
-    # Determine latest data date for last_test_end
-    latest_bar = c.db.get_latest_bar_date()
-    if latest_bar is None:
-        click.echo("ERROR: No bar data. Run T3 sync or backfill first.")
-        return
-
-    click.echo(f"Production model update (expanding + TD{time_decay_halflife})")
-    click.echo(f"  Train start:   {first_train_start} (fixed)")
-    click.echo(f"  Latest data:   {latest_bar}")
-    click.echo(f"  Val/test:      {val_months}/{test_months} months")
-    click.echo(f"  Seeds:         {n_seeds}")
-
-    # train_walk_forward with step_months matching test to produce exactly 1 window
-    # expanding=True means train_start is always first_train_start
-    score_matrix_test, score_matrix_val = train_walk_forward(
-        storage=storage,
-        factors_path=factors_path,
-        model_dir=model_dir,
-        output_dir="data",
-        params=None,
-        label_horizon=5,
-        train_months=18,  # ignored when expanding=True
-        first_train_start=first_train_start,
-        last_test_end=latest_bar,
-        expanding=True,
-        time_decay_halflife=time_decay_halflife,
-        n_seeds=n_seeds,
-        val_months=val_months,
-        test_months=test_months,
-    )
-
-    click.echo("\n✅ Model update complete")
-    if not score_matrix_test.empty:
-        click.echo(f"  Test: {score_matrix_test.shape[0]} days × {score_matrix_test.shape[1]} stocks")
-    if not score_matrix_val.empty:
-        click.echo(f"  Val:  {score_matrix_val.shape[0]} days × {score_matrix_val.shape[1]} stocks")
-    click.echo(f"  Models saved to: {model_dir}/")
-
-
-# ---------------------------------------------------------------------------
 # evaluate-scores command
 # ---------------------------------------------------------------------------
 
+
 @main.command("evaluate-scores")
-@click.option("--scores", "scores_path", default="data/score_matrix_val.parquet",
-              help="Path to score matrix parquet (default: data/score_matrix_val.parquet)")
-@click.option("--top-n", "top_n_str", default="10,30,50",
-              help="Comma-separated Top-N values to evaluate (default: 10,30,50)")
-@click.option("--json", "output_json", is_flag=True, default=False,
-              help="Output results as JSON instead of table")
+@click.option(
+    "--scores",
+    "scores_path",
+    default="data/score_matrix_val.parquet",
+    help="Path to score matrix parquet (default: data/score_matrix_val.parquet)",
+)
+@click.option(
+    "--top-n", "top_n_str", default="10,30,50", help="Comma-separated Top-N values to evaluate (default: 10,30,50)"
+)
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output results as JSON instead of table")
 def evaluate_scores_cmd(scores_path: str, top_n_str: str, output_json: bool) -> None:
     """Diagnose score matrix quality (discrimination, stability, rank stability)."""
     import json
@@ -833,8 +1173,10 @@ def evaluate_scores_cmd(scores_path: str, top_n_str: str, output_json: bool) -> 
 
     scores = pd.read_parquet(path)
     scores.index = pd.to_datetime(scores.index)
-    click.echo(f"Loaded scores: {scores.shape[0]} days × {scores.shape[1]} stocks "
-               f"({scores.index.min().date()} ~ {scores.index.max().date()})")
+    click.echo(
+        f"Loaded scores: {scores.shape[0]} days × {scores.shape[1]} stocks "
+        f"({scores.index.min().date()} ~ {scores.index.max().date()})"
+    )
 
     try:
         top_ns = [int(x.strip()) for x in top_n_str.split(",")]
@@ -852,6 +1194,7 @@ def evaluate_scores_cmd(scores_path: str, top_n_str: str, output_json: bool) -> 
 # ---------------------------------------------------------------------------
 # evaluate-models command
 # ---------------------------------------------------------------------------
+
 
 @main.command("evaluate-models")
 @click.option("--model-dir", default="models", help="Directory with wf_window_*.txt files")
@@ -881,7 +1224,6 @@ def evaluate_models_cmd(model_dir: str, top_n: int, output_json: bool) -> None:
         click.echo(json.dumps(results, indent=2, default=str))
     else:
         click.echo(format_model_report(results))
-
 
 
 @main.command("compute-factors")
@@ -929,7 +1271,7 @@ def compute_factors_cmd(start: str, end: str, output: str, pool_file: str | None
         return
 
     all_bars = pd.concat(bar_frames, ignore_index=True)
-    click.echo(f"  Loaded {len(all_bars):,} bar rows ({len(bar_frames)} stocks) in {time.time()-t0:.1f}s")
+    click.echo(f"  Loaded {len(all_bars):,} bar rows ({len(bar_frames)} stocks) in {time.time() - t0:.1f}s")
 
     # Load fundamentals
     t1 = time.time()
@@ -940,13 +1282,13 @@ def compute_factors_cmd(start: str, end: str, output: str, pool_file: str | None
             fund_frames.append(df)
 
     fundamentals = pd.concat(fund_frames, ignore_index=True) if fund_frames else pd.DataFrame()
-    click.echo(f"  Loaded {len(fundamentals):,} fundamental rows in {time.time()-t1:.1f}s")
+    click.echo(f"  Loaded {len(fundamentals):,} fundamental rows in {time.time() - t1:.1f}s")
 
     # Compute
     t2 = time.time()
     engine = Alpha158Engine()
     panel = engine.compute(all_bars, fundamentals)
-    click.echo(f"  Computed {panel.shape[1]} factors × {panel.shape[0]:,} rows in {time.time()-t2:.1f}s")
+    click.echo(f"  Computed {panel.shape[1]} factors × {panel.shape[0]:,} rows in {time.time() - t2:.1f}s")
 
     # Save
     Path(output).parent.mkdir(parents=True, exist_ok=True)
@@ -966,6 +1308,7 @@ def compute_factors_cmd(start: str, end: str, output: str, pool_file: str | None
 def status() -> None:
     """Show database statistics and strategy returns."""
     from pangu.main import build_components, load_env
+
     load_env()
     c, _, _ = build_components()
     db = c.db
@@ -984,14 +1327,37 @@ def status() -> None:
     watchlist = c.stock_pool.get_watchlist()
     click.echo(f"  Watchlist:      {len(watchlist)} stocks")
 
-    # Strategy returns
-    returns = db.get_signal_returns(30)
-    has_returns = any(r["count"] > 0 for r in returns.values())
-    if has_returns:
-        click.echo("\n📈 30-Day Strategy Returns")
+    # Task runs (last 24h)
+    from pangu.tz import now as _tz_now
+
+    runs = db.get_recent_task_runs(limit=200)
+    if runs:
+        cutoff = (_tz_now() - _dt.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+        recent = [r for r in runs if (r.get("started_at") or "") >= cutoff]
+        # Latest run per task_id (rows are returned DESC; first match wins)
+        latest_by_task: dict[str, dict] = {}
+        for r in recent:
+            tid = r["task_id"]
+            if tid not in latest_by_task:
+                latest_by_task[tid] = r
+        if latest_by_task:
+            click.echo("\n🛠  Task Runs (last 24h)")
+            click.echo("─" * 35)
+            for tid in sorted(latest_by_task):
+                r = latest_by_task[tid]
+                icon = "✅" if r["status"] == "success" else "❌"
+                started = (r["started_at"] or "")[11:19]
+                duration = r.get("duration_ms") or 0
+                click.echo(f"  {icon} {tid:4s} {r['name']:<14s} {started}  ({duration / 1000:.1f}s)")
+                if r["status"] != "success" and r.get("error_msg"):
+                    err = r["error_msg"][:80]
+                    click.echo(f"        ⚠ {err}")
+
+    # Portfolio snapshot
+    snap = db.get_latest_portfolio_snapshot()
+    if snap:
+        click.echo("\n📁 Latest Portfolio Snapshot")
         click.echo("─" * 35)
-        for key in ("1d", "3d", "5d"):
-            r = returns[key]
-            if r["count"] > 0:
-                emoji = "📈" if r["avg_return"] >= 0 else "📉"
-                click.echo(f"  {key.upper()}: {emoji} {r['avg_return']:+.2f}% ({r['count']} signals)")
+        click.echo(f"  Date:           {snap['date']}")
+        click.echo(f"  Holdings:       {len(snap['symbols'])} symbols")
+        click.echo(f"  Rebalance day:  {'yes' if snap['is_rebalance'] else 'no'}")

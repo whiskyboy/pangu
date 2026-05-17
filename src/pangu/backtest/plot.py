@@ -38,14 +38,24 @@ def plot_equity_curve(
 
     # Fill: red where strategy > benchmark, green where strategy < benchmark
     ax.fill_between(
-        dates, strat_ret, bench_ret,
+        dates,
+        strat_ret,
+        bench_ret,
         where=strat_ret >= bench_ret,
-        interpolate=True, alpha=0.20, color="#dc2626", label="Excess return",
+        interpolate=True,
+        alpha=0.20,
+        color="#dc2626",
+        label="Excess return",
     )
     ax.fill_between(
-        dates, strat_ret, bench_ret,
+        dates,
+        strat_ret,
+        bench_ret,
         where=strat_ret < bench_ret,
-        interpolate=True, alpha=0.20, color="#16a34a", label="Underperformance",
+        interpolate=True,
+        alpha=0.20,
+        color="#16a34a",
+        label="Underperformance",
     )
 
     ax.axhline(0, color="grey", linewidth=0.6, linestyle="--")
@@ -53,18 +63,28 @@ def plot_equity_curve(
     # Final return annotations
     ax.annotate(
         f"{strat_ret.iloc[-1]:+.1%}",
-        xy=(dates[-1], strat_ret.iloc[-1]), xytext=(8, 0),
-        textcoords="offset points", fontsize=9, fontweight="bold", color="#2563eb",
+        xy=(dates[-1], strat_ret.iloc[-1]),
+        xytext=(8, 0),
+        textcoords="offset points",
+        fontsize=9,
+        fontweight="bold",
+        color="#2563eb",
     )
     ax.annotate(
         f"{bench_ret.iloc[-1]:+.1%}",
-        xy=(dates[-1], bench_ret.iloc[-1]), xytext=(8, 0),
-        textcoords="offset points", fontsize=9, fontweight="bold", color="#dc2626",
+        xy=(dates[-1], bench_ret.iloc[-1]),
+        xytext=(8, 0),
+        textcoords="offset points",
+        fontsize=9,
+        fontweight="bold",
+        color="#dc2626",
     )
 
     ax.set_title(
         f"Backtest: {strategy}  ({dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')})",
-        fontsize=13, fontweight="bold", pad=12,
+        fontsize=13,
+        fontweight="bold",
+        pad=12,
     )
     ax.set_ylabel("Cumulative Return", fontsize=11)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:.0%}"))

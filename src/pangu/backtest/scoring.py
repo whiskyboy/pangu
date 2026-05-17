@@ -81,7 +81,11 @@ def compute_technical_factors(
 
 
 def load_fundamental_factors(
-    storage: object, pool: list[str], start: str, end: str, dates_index: pd.DatetimeIndex,
+    storage: object,
+    pool: list[str],
+    start: str,
+    end: str,
+    dates_index: pd.DatetimeIndex,
 ) -> dict[str, pd.DataFrame]:
     """Load PE/PB/ROE via load_fundamentals_filled, aligned to dates_index."""
     fund_frames = []

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from pangu.models import TradeSignal
 from pangu.notification.protocol import NotificationProvider
 
 logger = logging.getLogger(__name__)
@@ -36,10 +35,6 @@ class NotificationManager:
             else:
                 outcome[name] = bool(result)
         return outcome
-
-    async def notify_signal(self, signal: TradeSignal) -> dict[str, bool]:
-        """Send a trade signal to all channels."""
-        return await self._dispatch("send_signal", signal)
 
     async def notify_text(self, text: str) -> dict[str, bool]:
         """Send plain text to all channels."""

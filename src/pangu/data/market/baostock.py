@@ -111,6 +111,7 @@ class BaoStockMarketDataProvider:
 
     def _query_with_retry(self, query_fn):
         """Execute a BaoStock query with exponential backoff and session recovery."""
+
         def _checked():
             self._ensure_login()
             rs = query_fn()
@@ -119,6 +120,7 @@ class BaoStockMarketDataProvider:
                     self._relogin()
                 raise RuntimeError(getattr(rs, "error_msg", "unknown error"))
             return rs
+
         return retry_call(_checked, circuit=self._circuit)
 
     def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -130,21 +132,34 @@ class BaoStockMarketDataProvider:
         bs_code = _to_bs_code(symbol)
         rs = self._query_with_retry(
             lambda: self._bs.query_history_k_data_plus(
-                bs_code, self._DAILY_FIELDS,
-                start_date=start, end_date=end,
-                frequency="d", adjustflag="3",
+                bs_code,
+                self._DAILY_FIELDS,
+                start_date=start,
+                end_date=end,
+                frequency="d",
+                adjustflag="3",
             )
         )
 
         df = self._query_to_df(rs)
         if df.empty:
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-            )
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"])
 
         # Cast numeric columns (BaoStock returns strings)
-        for col in ("open", "high", "low", "close", "preclose", "volume", "amount",
-                     "turn", "peTTM", "pbMRQ", "psTTM", "pcfNcfTTM"):
+        for col in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "preclose",
+            "volume",
+            "amount",
+            "turn",
+            "peTTM",
+            "pbMRQ",
+            "psTTM",
+            "pcfNcfTTM",
+        ):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -162,17 +177,18 @@ class BaoStockMarketDataProvider:
         bs_code = _to_bs_index_code(symbol)
         rs = self._query_with_retry(
             lambda: self._bs.query_history_k_data_plus(
-                bs_code, "date,code,open,high,low,close,volume,amount",
-                start_date=start, end_date=end,
-                frequency="d", adjustflag="3",
+                bs_code,
+                "date,code,open,high,low,close,volume,amount",
+                start_date=start,
+                end_date=end,
+                frequency="d",
+                adjustflag="3",
             )
         )
 
         df = self._query_to_df(rs)
         if df.empty:
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-            )
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"])
 
         for col in ("open", "high", "low", "close", "volume", "amount"):
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -199,7 +215,9 @@ class BaoStockMarketDataProvider:
         bs_code = _to_bs_code(symbol)
         rs = self._query_with_retry(
             lambda: self._bs.query_adjust_factor(
-                code=bs_code, start_date="1990-01-01", end_date="2099-12-31",
+                code=bs_code,
+                start_date="1990-01-01",
+                end_date="2099-12-31",
             )
         )
         events: list[tuple[str, float]] = []

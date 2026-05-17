@@ -14,9 +14,7 @@ logger = logging.getLogger(__name__)
 class FactorEngine(Protocol):
     """Interface for computing technical / fundamental factor scores."""
 
-    def compute(
-        self, bars: pd.DataFrame, global_data: pd.DataFrame | None = None
-    ) -> pd.DataFrame:
+    def compute(self, bars: pd.DataFrame, global_data: pd.DataFrame | None = None) -> pd.DataFrame:
         """Compute factor values; *global_data* is the international snapshot for macro factors."""
         ...
 
@@ -96,9 +94,7 @@ class PandasTAFactorEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def build_pseudo_bar(
-        historical: pd.DataFrame, realtime_quote: dict
-    ) -> pd.DataFrame:
+    def build_pseudo_bar(historical: pd.DataFrame, realtime_quote: dict) -> pd.DataFrame:
         """Append an intraday pseudo bar to *historical* for factor calc.
 
         *realtime_quote* must contain keys: ``open``, ``high``, ``low``,

@@ -92,6 +92,7 @@ class TestLoadWindowBoosters:
     def test_multi_seed_grouped(self, model_dir: str, trained_boosters, tmp_path) -> None:
         """Multi-seed files should be grouped by window, not deduplicated."""
         import shutil
+
         for wid in range(1, 4):
             src = tmp_path / f"wf_window_{wid:02d}.txt"
             dst = tmp_path / f"wf_window_{wid:02d}_seed1.txt"
@@ -104,6 +105,7 @@ class TestLoadWindowBoosters:
     def test_seed_only_files(self, trained_boosters, tmp_path) -> None:
         """When only seed-suffixed files exist, groups by window."""
         import shutil
+
         seed_dir = tmp_path / "seeds_only"
         seed_dir.mkdir()
         for wid in range(1, 4):

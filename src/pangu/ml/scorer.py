@@ -63,9 +63,7 @@ class MLScorer:
                 entries.setdefault(win_id, []).append(f)
 
         if not entries:
-            raise FileNotFoundError(
-                f"No model files matching wf_window_*_seed*.txt in {self._model_dir}"
-            )
+            raise FileNotFoundError(f"No model files matching wf_window_*_seed*.txt in {self._model_dir}")
 
         # Use latest window
         latest_win = max(entries)
@@ -75,7 +73,9 @@ class MLScorer:
         self._window_id = latest_win
         logger.info(
             "MLScorer loaded %d seed models from window %d (%s)",
-            len(self._models), latest_win, self._model_dir,
+            len(self._models),
+            latest_win,
+            self._model_dir,
         )
 
     @property

@@ -59,9 +59,7 @@ class TestComputeDiscrimination:
         assert result["p90_p10_spread_mean"] > 0
         assert result["top10_boundary_margin_mean"] > 0
 
-    def test_wider_spread_than_noisy(
-        self, stable_scores: pd.DataFrame, noisy_scores: pd.DataFrame
-    ) -> None:
+    def test_wider_spread_than_noisy(self, stable_scores: pd.DataFrame, noisy_scores: pd.DataFrame) -> None:
         # stable_scores has wider deliberate spread (linspace -0.05 to 0.05)
         s = _compute_discrimination(stable_scores, [10])
         n = _compute_discrimination(noisy_scores, [10])

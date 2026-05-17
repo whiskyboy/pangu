@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from pangu.tasks._base import scheduled_task
 from pangu.tz import today_str
 from pangu.utils import date_str
 
@@ -17,18 +18,9 @@ _BARS_LOOKBACK_DAYS = 1200
 _BARS_FAIL_THRESHOLD = 0.5
 
 
+@scheduled_task("T3", "国内行情/基本面同步")
 async def sync_domestic_market(c: Components) -> None:
     """Sync daily K-lines + fundamentals for the full stock pool."""
-    try:
-        await _sync_domestic_market_impl(c)
-    except Exception:  # noqa: BLE001
-        logger.error("[T3] Domestic market sync failed", exc_info=True)
-        await c.alert("[T3] 国内行情同步任务异常，请检查日志")
-
-
-async def _sync_domestic_market_impl(c: Components) -> None:
-    """Inner implementation of domestic market sync."""
-    logger.info("[T3] Syncing domestic market...")
     pool = c.stock_pool.get_all_symbols()
     today = today_str()
     start = date_str(days_ago=_BARS_LOOKBACK_DAYS)
@@ -91,5 +83,3 @@ async def _sync_domestic_market_impl(c: Components) -> None:
             logger.info("[T3] Pub dates: %d quarters updated", pd_ok)
     except Exception:  # noqa: BLE001
         logger.warning("[T3] Pub dates sync failed", exc_info=True)
-
-    logger.info("[T3] Done")

@@ -13,6 +13,7 @@ from pangu.ml.model import MIN_ITERATIONS, LGBModel, LGBRankerModel, _average_se
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def synthetic_data():
     """Generate synthetic regression data with known signal."""
@@ -62,6 +63,7 @@ def train_val_split(synthetic_data):
 # ---------------------------------------------------------------------------
 # LGBModel
 # ---------------------------------------------------------------------------
+
 
 class TestLGBModel:
     def test_fit_returns_metrics(self, train_val_split):
@@ -145,7 +147,8 @@ class TestLGBModel:
         # Pure noise — early stopping should fire very quickly
         X = pd.DataFrame(
             rng.standard_normal((len(idx), 5)).astype("float32"),
-            index=idx, columns=[f"F{i}" for i in range(5)],
+            index=idx,
+            columns=[f"F{i}" for i in range(5)],
         )
         y = pd.Series(rng.standard_normal(len(idx)), index=idx, name="label")
 
@@ -161,10 +164,14 @@ class TestLGBModel:
         """When model uses all n_estimators (no early stop), don't retrain."""
         X_train, y_train, X_val, y_val = train_val_split
         # Strong signal + small n_estimators: early stopping won't fire before 30
-        model = LGBModel({
-            "num_leaves": 15, "learning_rate": 0.05,
-            "min_child_samples": 20, "n_estimators": 30,
-        })
+        model = LGBModel(
+            {
+                "num_leaves": 15,
+                "learning_rate": 0.05,
+                "min_child_samples": 20,
+                "n_estimators": 30,
+            }
+        )
         info = model.fit(X_train, y_train, X_val, y_val)
         # best_iteration == 30 (completed, no early stop) so no retrain
         assert info["best_iteration"] == 30
@@ -173,6 +180,7 @@ class TestLGBModel:
 # ---------------------------------------------------------------------------
 # IC computation
 # ---------------------------------------------------------------------------
+
 
 class TestComputeIC:
     def test_perfect_correlation(self):
@@ -188,8 +196,7 @@ class TestComputeIC:
     def test_zero_correlation(self):
         rng = np.random.default_rng(42)
         idx = pd.MultiIndex.from_product(
-            [pd.to_datetime(pd.bdate_range("2024-01-01", periods=20)),
-             [f"S{i}" for i in range(10)]],
+            [pd.to_datetime(pd.bdate_range("2024-01-01", periods=20)), [f"S{i}" for i in range(10)]],
             names=["date", "symbol"],
         )
         y_true = pd.Series(rng.standard_normal(200), index=idx)
@@ -299,6 +306,7 @@ class TestLGBRankerModel:
 # ---------------------------------------------------------------------------
 # Rank-average scores
 # ---------------------------------------------------------------------------
+
 
 class TestAverageSeedScores:
     def test_single_series_passthrough(self):

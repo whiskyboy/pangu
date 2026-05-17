@@ -2,78 +2,86 @@
 
 [中文](README.md) | English
 
-A personal China A-share quantitative trading signal system — multi-factor strategy + LLM-powered decision engine with automated Feishu (Lark) notifications.
+A personal China A-share quantitative trading signal system — weekly TopkDropout rebalance driven by LightGBM scoring + LLM bull/bear/judge debate, with automated Feishu (Lark) notifications.
 
 > ⚠️ This system generates trading **signal suggestions** only. It does not connect to brokers or execute trades automatically. All investment decisions are your own.
 
 ## Features
 
-- 📊 **Cross-sectional factor ranking**: Technical + fundamental + macro factors, multi-factor scoring across the full stock pool
-- 🤖 **LLM decision engine**: Per-stock evidence packages (factors + news + macro) → bull/bear/referee three-round debate → BUY/HOLD/SELL signals
-- 🌍 **Global market integration**: US indices, Hong Kong HSI, commodities fed into macro factors; international news impact analysis on A-shares
-- 🔔 **Feishu signal push**: Formatted signal cards via Feishu Bot (price, stop-loss, confidence, factor summary, news events)
-- 📈 **Signal post-verification**: Automatic 1/3/5 trading day return tracking with strategy performance reports
-- 🚨 **Error alerting**: Critical task failures auto-pushed to Feishu
-- ⏰ **Auto scheduling**: APScheduler with trading calendar, 6 scheduled tasks, CLI single-run mode
-- 🛠 **CLI management**: Command-line watchlist management, task execution, system status
+- 📊 **Alpha158 factor engine + LightGBM training**: 191 factors (159 technical + 32 fundamental); monthly single-window training in production + multi-seed walk-forward for offline research (see [Offline Training & Backtest](#offline-training--backtest))
+- 🤖 **LLM-TopkDropout weekly rebalance**: ML proposes BUY / SELL candidate pools; LLM bull/bear/judge picks the actual rebalance moves
+- 🗃 **Virtual portfolio state**: latest holdings persisted as JSON, rebalanced on the first ISO-week trading day
+- 🎯 **Executable signal enhancements**: rebalance card includes reference price + suggested share size + price-limit warning
+- 🔁 **Decision replay**: `pangu replay` feeds historical `portfolio_snapshots` to the same backtest engine to estimate paper PnL
+- 🚨 **Unified task monitoring**: every task wrapped by a decorator that captures exceptions → Feishu alert → `task_runs` history table
+- ⏰ **APScheduler**: 6 tasks scheduled against the trading calendar; `pangu status` shows recent run history
+- 🛠 **Full CLI**: data backfill / factor computation / model training / backtest / decision replay / evaluation / scheduler run
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Layer 4: Notification & Scheduling                         │
-│  Feishu Bot Push │ APScheduler │ CLI Tools                  │
+│  Layer 5: Scheduling + Monitoring                            │
+│  APScheduler │ @scheduled_task (alert+task_runs) │ CLI       │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 3: Strategy & Decision                               │
-│  Multi-Factor Ranking │ LLM Decision Engine (Bull/Bear/Ref) │
+│  Layer 4: Notification                                       │
+│  Feishu Bot (notify_markdown / notify_text alert)            │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 2: Factor Engineering                                │
-│  Technical (pandas-ta) │ Fundamental │ Macro (Global Mkts)  │
+│  Layer 3: Strategy & Decision                                │
+│  MLScoringStrategy (LightGBM) + LLM Bull/Bear/Judge          │
+│  PortfolioState (latest target JSON)                         │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 1: Data Infrastructure                               │
-│  Market Provider (AkShare/BaoStock) │ News │ Stock Pool     │
-│  SQLite Storage │ Trading Calendar │ Incremental Sync       │
+│  Layer 2: Factor Engineering                                 │
+│  Alpha158 (191) │ Technical (PandasTA) │ Fundamental         │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 1: Data Infrastructure                                │
+│  Market/News/Fundamental Provider (BaoStock + AkShare)       │
+│  SQLite (daily_bars / fundamentals / trade_signals /         │
+│          portfolio_snapshots / task_runs)                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## How It Works
 
-PanGu runs 6 scheduled tasks each trading day, forming a complete pipeline: data collection → factor computation → signal generation → post-verification.
+PanGu runs 6 scheduled tasks per trading day, forming a complete loop: data → model → signals.
+
+> ℹ️ **Task numbering reflects logical dependencies** (data → model → signals), not scheduling order. The actual order on the 1st of each month is: T2 (hourly) → T5 (02:00) → T1 (06:00) → T4 (07:00) → T6 (08:15) → T3 (18:00).
 
 ### Data Collection
 
-- **T1 Global Market Sync** (08:00): Fetches overnight data for US indices (S&P 500, Dow Jones, NASDAQ), Hong Kong HSI/HSTECH, VHSI volatility, and commodities (gold, oil, copper, etc.)
-- **T2 News Polling** (hourly): Scrapes real-time financial headlines, deduplicates and stores, auto-cleans expired news
-- **T3 Domestic Market Sync** (18:00 post-close): Incrementally pulls daily K-lines and fundamentals (PE, PB, ROE, etc.) for the full stock pool, with AkShare → BaoStock automatic fallback
-- **T5 Reference Data Sync** (monthly): Updates A-share trading calendar and stock pool constituents
+- **T1 Reference Data Sync** (06:00 on the 1st of each month): Trading calendar + index constituent snapshot
+- **T2 News Polling** (hourly 00–23, runs on weekends too): Real-time financial headlines, deduplication + expiry; covers the overnight US session
+- **T3 Domestic Market Sync** (18:00 trading days after close): Incremental daily K + fundamentals + valuation fields, BaoStock primary / AkShare fallback
+- **T4 International Data Sync** (07:00 trading days): Fetches latest snapshots of US / HK / HSTECH / commodities into the DB; used by T6 as overnight LLM context
 
-### Multi-Factor Ranking
+### Model Training
 
-The T4 signal generation task performs cross-sectional factor scoring across all stocks in the pool:
+- **T5 Monthly Model Training** (02:00 on the 1st of each month): Single-window production training (full history + last N months as validation); artifact filenames remain compatible with `MLScorer.reload()`; runtime ≈ 15–20 minutes
 
-- **Technical factors** (62% weight): RSI(14), MACD histogram, Bollinger Band bias, OBV, ATR volatility, volume ratio
-- **Fundamental factors** (25% weight): PE TTM, PB, ROE TTM
-- **Macro factors** (5% weight): Computes weighted composites from global overnight changes — US overnight (S&P 500 × 40% + Dow × 30% + NASDAQ × 30%), HK HSI/HSTECH, VHSI volatility, and commodity price changes. A sector mapping table translates commodity movements into A-share sector adjustments (e.g., oil up → bullish for energy). A global risk composite score (risk-off assets like gold and VHSI carry negative weights) automatically raises the buy threshold when risk is elevated
+### LLM-TopkDropout Weekly Rebalance
 
-All factors are Z-score normalized, weighted-summed, and min-max scaled to [0, 1]. Stocks are ranked by descending score, with the Top-N (default 10) advancing to LLM evaluation.
+T6 (08:15 pre-market on every trading day) does two things:
 
-### LLM Decision Engine
+1. **Data freshness self-check**: alerts if K-lines / global snapshot / news are stale
+2. **Is-rebalance-day gate**: rebalance only on the first trading day of each ISO week; otherwise self-check only
 
-Top-N candidates + watchlist stocks each receive an "evidence package" for a three-role LLM debate:
+Rebalance flow:
 
-1. **Bull**: Presents bullish arguments based on strong technicals and positive news
-2. **Bear**: Presents bearish arguments based on weak factors and negative events
-3. **Referee**: Weighs both sides and renders a final BUY / SELL / HOLD verdict with confidence score
+1. **ML scoring** — `MLScoringStrategy` runs the latest-window LightGBM model across the full pool
+2. **Candidate pools** — lowest-scoring holdings → `SELL pool`, highest-scoring non-holdings → `BUY pool`
+3. **LLM debate** — both pools + overnight global snapshot + last-24h news fed to `judge_rebalance`:
+   - Bull: BUY / hold rationale per candidate
+   - Bear: SELL / pass rationale per candidate
+   - Judge: final BUY / SELL list (≤ `n_drop` each)
+4. **ML fallback** — if LLM picks fewer than `n_drop`, fill the gap by ML rank; if LLM completely fails, degrade to classic ML-only TopkDropout
+5. **Persist** — write `target_portfolio.json` + a `portfolio_snapshots` row tagged `is_rebalance=True`
+6. **Push** — one consolidated Markdown card to Feishu containing reference price (T-1 close), suggested share size (equal-weight by `initial_capital / top_n`), estimated amount, and price-limit warning; plus a `trade_signals` audit row per decision
 
-Evidence packages contain: factor scores and rankings, raw factor values (RSI, MACD, PE, etc.), stock-specific news and announcements, and global market snapshot. On LLM failure, the system automatically falls back to pure factor scoring (≥0.7 → BUY, ≤0.3 → SELL).
+### Decision Replay and Monitoring
 
-### Signal Push
-
-Generated BUY/SELL signals are pushed via Feishu Bot DM, including stock info, suggested price, stop-loss level, confidence, factor summary, and key news events. Signals are persisted to the database with status tracking (new entry / sustained / exit).
-
-### Post-Verification
-
-T6 runs daily at 16:00, looking back at signals from 1, 3, and 5 trading days ago, comparing against actual closing prices to calculate returns. Strategy performance reports are pushed to Feishu (directional returns: BUY signals use positive returns, SELL signals use inverse returns).
+- **`pangu replay`** — Replays historical `portfolio_snapshots` through the same backtest engine to estimate paper PnL vs benchmark (replaces the old "weekly report" task). Real PnL should be tracked in your brokerage account
+- **`pangu status`** — Shows DB stats + last 24h task runs + latest portfolio snapshot
+- **Unified task monitoring** — every task is decorated by `@scheduled_task` (`src/pangu/tasks/_base.py`); exceptions are caught, a Feishu alert is pushed, and a `task_runs` row is persisted
 
 ## Tech Stack
 
@@ -81,10 +89,11 @@ T6 runs daily at 16:00, looking back at signals from 1, 3, and 5 trading days ag
 |----------|-----------|
 | Language | Python 3.12+ |
 | Package Manager | uv |
-| Data Sources | AkShare (primary) / BaoStock (fallback) |
-| Factor Computation | pandas-ta + pandas + numpy |
+| Data Sources | BaoStock (primary) / AkShare (fallback) |
+| Factor Computation | pandas + numpy + pandas-ta |
+| Modeling | LightGBM (Walk-Forward ensemble) |
 | LLM Interface | LiteLLM (Azure OpenAI / DeepSeek / Gemini) |
-| Database | SQLite (local persistence + incremental cache) |
+| Database | SQLite (WAL mode, raw sqlite3) |
 | Notifications | lark-oapi (Feishu Bot SDK) |
 | Scheduling | APScheduler |
 | CLI | Click |
@@ -114,31 +123,40 @@ cp .env.example .env
 ### CLI Usage
 
 ```bash
-# Manage watchlist
-pangu pool list                  # List watchlist stocks
-pangu pool add 600519            # Add by symbol (auto-fetches historical data)
-pangu pool add 贵州茅台           # Add by name (fuzzy match)
-pangu pool remove 600519         # Remove from watchlist
+# Watchlist
+pangu pool list / add / remove
 
-# Run tasks
-pangu run init                   # First-time init (sync calendar + market data)
-pangu run once                   # Run all tasks once
-pangu run start                  # Start scheduler (daemon mode)
+# Backfill (first deployment or long gap; `pangu run init` covers this in one go)
+pangu backfill constituents --start 2019-01-01
+pangu backfill bars --start 2019-01-01
+pangu backfill fundamentals --start 2019-01-01
+pangu backfill index --start 2019-01-01
 
-# System status
-pangu status                     # Database stats + strategy returns
+# Offline training + evaluation (see "Offline Training & Backtest")
+pangu compute-factors                      # Alpha158 → data/factors.parquet
+pangu train                                # Single-window production training (full history)
+pangu train walkforward                    # Multi-window walk-forward (research / backtest only)
+pangu evaluate-scores --scores data/score_matrix_val.parquet
+pangu evaluate-models --model-dir models
+pangu backtest --strategy lgb --scores data/score_matrix_val.parquet \
+    --start <val_start> --end <val_end>
+pangu replay --start 2026-01-01 --end 2026-05-15   # Replay historical decisions
+
+# Runtime
+pangu run init                             # One-shot cold-start (idempotent by default; --force re-runs everything)
+pangu run signals [--initial-capital 200000]      # Manually trigger T6 (auto-runs T4 if today's snapshot is missing)
+pangu run start [--initial-capital 200000]        # Launch the scheduler daemon
+pangu status                               # DB stats + task_runs + portfolio snapshot
 ```
 
-> Use `uv run pangu` instead of `pangu` if the virtual environment is not activated.
+> Use `uv run pangu` if the virtual environment is not activated.
 
 ### Docker Deployment
 
 ```bash
 cp .env.example .env
-# Edit .env with credentials
-
-docker compose up -d             # Build and start
-docker compose logs -f worker    # View logs
+docker compose up -d
+docker compose logs -f worker
 ```
 
 ## Configuration
@@ -159,49 +177,80 @@ FEISHU_APP_ID=cli_xxxx
 FEISHU_APP_SECRET=your-secret
 ```
 
-### Watchlist (`config/watchlist.yaml`)
-
-```yaml
-watchlist:
-  - symbol: "600519"
-    name: "贵州茅台"
-    sector: "白酒"
-  - symbol: "000858"
-    name: "五粮液"
-    sector: "白酒"
-  # Recommended: 15-30 stocks across 3-5 sectors
-```
-
-### Key Parameters (`config/settings.toml`)
+### Production Parameters (`config/settings.toml`)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `strategy.top_n` | 10 | Factor ranking Top-N for LLM evaluation |
-| `strategy.buy_threshold` | 0.7 | Factor score > threshold → BUY signal |
-| `strategy.sell_threshold` | 0.3 | Factor score < threshold → SELL signal |
-| `llm.provider` | `azure/$AZURE_DEPLOYMENT` | LLM backend for decision engine |
+| `stock_pool.indices` | `["000300","000905"]` | Index constituents used for the rebalance pool (CSI300 + CSI500) |
+| `strategy.top_n` | 25 | TopkDropout target portfolio size |
+| `ml.enabled` | `true` | Enable ML scoring (required for T6) |
+| `ml.model_dir` | `models` | LightGBM model directory (T5 training output) |
+| `ml.n_drop` | 3 | Per-rebalance turnover (max BUY/SELL count) |
+| `ml.buy_candidate_size` | 10 | Top non-held candidates for the LLM BUY pool |
+| `ml.sell_candidate_size` | 5 | Bottom-held candidates for the LLM SELL pool |
+| `ml.val_months` | 3 | Tail validation window for T5 production training (months) |
+| `portfolio.state_path` | `data/target_portfolio.json` | Latest target portfolio JSON path |
+| `portfolio.initial_capital` | `100000.0` | Cold-start capital (CLI `--initial-capital` overrides) |
+| `llm.provider` | `azure/$AZURE_DEPLOYMENT` | LiteLLM model identifier for `judge_rebalance` |
+
+> Offline-training parameters (`n_seeds`, `time_decay_halflife`, …) — see [Offline Training & Backtest](#offline-training--backtest).
 
 ## Scheduled Tasks
 
-All tasks are scheduled according to the A-share trading calendar (skipped on non-trading days):
+Tasks run on the times configured under `[scheduler]` in `config/settings.toml`. Tasks marked "trading day" auto-skip non-trading days.
 
 | Task | Time | Frequency | Description |
 |------|------|-----------|-------------|
-| T1 Global Market | 08:00 | Daily | US/HK/commodity overnight snapshot → macro factors |
-| T2 News Polling | 07:00–20:00 | Hourly | Financial headlines → deduplicated storage |
-| T3 Domestic Market | 18:00 | Daily | Stock pool K-lines + fundamentals (incremental) |
-| T4 Signal Generation | 08:15 | Daily | Factor ranking → Top-N → evidence → LLM judge → Feishu push |
-| T5 Reference Data | 1st of month | Monthly | Trading calendar + stock pool constituents |
-| T6 Signal Verification | 16:00 | Daily | 1/3/5-day actual returns → performance report |
+| **T1** Reference Data Sync | 06:00 | 1st of each month | Trading calendar + index constituent snapshot |
+| **T2** News Polling | 00:00–23:00 hourly | Every hour (incl. weekends) | Financial headlines → dedup + expiry |
+| **T3** Domestic Market Sync | 18:00 | Trading days (after close) | Daily K + fundamentals + valuation (incremental) |
+| **T4** International Data Sync | 07:00 | Trading days | US / HK / commodity snapshots (overnight context) |
+| **T5** Monthly Model Training | 02:00 | 1st of each month | Single-window LightGBM training (≈15–20min) |
+| **T6** Signal Generation / Rebalance | 08:15 | Trading days (pre-market) | Self-check + LLM-TopkDropout rebalance on first ISO-week trading day |
 
-Use `pangu run once` to execute all tasks sequentially (T5→T1→T2→T3→T4→T6).
+> Task numbering reflects **logical dependencies** (data → model → signals), not scheduling order.
+
+Every task is wrapped by `@scheduled_task`: exceptions auto-alert to Feishu and persist into `task_runs`. Use `pangu status` to view the last 24h of runs.
+
+`pangu run signals` manually triggers T6 (auto-runs T4 first if today's snapshot is missing).
+
+## Offline Training & Backtest
+
+Offline training is separate from the production scheduler — used for first deployment, periodic review, and strategy research. Full methodology and experiment log: [`docs/ml-experiments.md`](docs/ml-experiments.md).
+
+```bash
+pangu compute-factors                          # Compute Alpha158 191 factors → data/factors.parquet
+
+# Multi-window walk-forward (research only; takes hours)
+pangu train walkforward --n-seeds 5            # → score_matrix_{val,test}.parquet + models/wf_window_*.txt
+
+pangu evaluate-scores --scores data/score_matrix_val.parquet
+pangu evaluate-models --model-dir models
+pangu backtest --strategy lgb \
+    --scores data/score_matrix_val.parquet \
+    --start <val_start> --end <val_end>        # Backtest / tune on the val window
+pangu replay --start 2026-01-01 --end 2026-05-15   # Replay historical decisions through the engine
+```
+
+> The production T5 task uses **single-window** training (`pangu train`, full history + tail `ml.val_months` for validation), taking ≈15–20 minutes; walk-forward is research only, hence the subcommand name `pangu train walkforward`. Both produce identically-named artifacts (`wf_window_NN_seed*.txt`) that `MLScorer.reload()` can load.
+
+| Knob | Description |
+|------|-------------|
+| `ml.n_seeds` | Seeds per window (default 5; use 1 for quick experiments) |
+| `ml.time_decay_halflife` | Training-sample time decay half-life in trading days |
+| `ml.first_train_start` | Walk-forward first training window start (default `2020-01-01`) |
+| `ml.val_months` | Validation window length (months) for T5 / walk-forward |
+| `scheduler.model_training_day` / `scheduler.model_training_time` | T5 retraining schedule |
+
+> ⚠️ **Val/Test discipline**: use `score_matrix_val.parquet` for strategy selection / tuning and `score_matrix_test.parquet` for final reporting only — never select strategies based on test scores.
+
 
 ## Development
 
 ```bash
 uv sync --extra dev
 
-uv run pytest              # 409 tests
+uv run pytest
 uv run ruff check src/ tests/
 uv run ruff format src/ tests/
 ```
@@ -210,10 +259,10 @@ uv run ruff format src/ tests/
 
 | Item | Monthly Cost |
 |------|-------------|
-| LLM (Azure gpt-4o-mini, ~10 calls/day) | ~$0.05 |
+| LLM (Azure gpt-4o-mini, weekly rebalance) | ~$0.10 |
 | VPS (2C4G) | ~$7-15 |
-| Data sources (AkShare/BaoStock) | Free |
-| **Total** | **< $15/month** |
+| Data sources (BaoStock/AkShare) | Free |
+| **Total** | **< $20/month** |
 
 ## License
 

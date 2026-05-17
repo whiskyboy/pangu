@@ -61,16 +61,30 @@ class TestBackfillGrossMargin:
         import pandas as pd
 
         # Pre-populate fundamentals rows (simulating prior per-stock sync)
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-03-31", "2024-06-30"], "pe_ttm": [30.0, 31.0],
-        }))
-        db.save_fundamentals("000001", pd.DataFrame({
-            "date": ["2024-03-31"], "pe_ttm": [8.0],
-        }))
-        provider = _FakeGrossMarginProvider({
-            "20240331": {"600519": 0.92, "000001": 0.30, "999999": 0.5},
-            "20240630": {"600519": 0.91},
-        })
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-03-31", "2024-06-30"],
+                    "pe_ttm": [30.0, 31.0],
+                }
+            ),
+        )
+        db.save_fundamentals(
+            "000001",
+            pd.DataFrame(
+                {
+                    "date": ["2024-03-31"],
+                    "pe_ttm": [8.0],
+                }
+            ),
+        )
+        provider = _FakeGrossMarginProvider(
+            {
+                "20240331": {"600519": 0.92, "000001": 0.30, "999999": 0.5},
+                "20240630": {"600519": 0.91},
+            }
+        )
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
         ok, fail = composite.refresh_gross_margin("2024-01-01", "2024-06-30")
         assert ok == 2
@@ -89,15 +103,23 @@ class TestBackfillGrossMargin:
         import pandas as pd
 
         # Pre-populate rows for Q3/Q4 only
-        db.save_fundamentals("600519", pd.DataFrame({
-            "date": ["2024-09-30", "2024-12-31"], "pe_ttm": [30.0, 31.0],
-        }))
-        provider = _FakeGrossMarginProvider({
-            "20240331": {"600519": 0.92},
-            "20240630": {"600519": 0.91},
-            "20240930": {"600519": 0.90},
-            "20241231": {"600519": 0.89},
-        })
+        db.save_fundamentals(
+            "600519",
+            pd.DataFrame(
+                {
+                    "date": ["2024-09-30", "2024-12-31"],
+                    "pe_ttm": [30.0, 31.0],
+                }
+            ),
+        )
+        provider = _FakeGrossMarginProvider(
+            {
+                "20240331": {"600519": 0.92},
+                "20240630": {"600519": 0.91},
+                "20240930": {"600519": 0.90},
+                "20241231": {"600519": 0.89},
+            }
+        )
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
         # Narrow date range covers only Q3 and Q4
         ok, fail = composite.refresh_gross_margin("2024-07-01", "2024-12-31")
@@ -124,11 +146,16 @@ class TestBackfillGrossMargin:
 
     def test_preserves_existing_data(self, db: Database) -> None:
         """Gross margin backfill should not overwrite PE/PB etc."""
-        db.save_fundamentals("600519", __import__("pandas").DataFrame({
-            "date": ["2024-03-31"],
-            "pe_ttm": [25.0],
-            "pb": [3.0],
-        }))
+        db.save_fundamentals(
+            "600519",
+            __import__("pandas").DataFrame(
+                {
+                    "date": ["2024-03-31"],
+                    "pe_ttm": [25.0],
+                    "pb": [3.0],
+                }
+            ),
+        )
         provider = _FakeGrossMarginProvider({"20240331": {"600519": 0.92}})
         composite = CompositeFundamentalProvider(storage=db, providers=[provider])
         composite.refresh_gross_margin("2024-01-01", "2024-03-31")

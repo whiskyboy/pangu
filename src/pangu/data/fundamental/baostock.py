@@ -65,6 +65,7 @@ class BaoStockFundamentalProvider:
 
     def _query_with_retry(self, query_fn):
         """Execute a BaoStock query with exponential backoff and session recovery."""
+
         def _checked():
             self._ensure_login()
             rs = query_fn()
@@ -73,6 +74,7 @@ class BaoStockFundamentalProvider:
                     self._relogin()
                 raise RuntimeError(getattr(rs, "error_msg", "unknown error"))
             return rs
+
         return retry_call(_checked, circuit=self._circuit)
 
     @staticmethod
@@ -105,7 +107,9 @@ class BaoStockFundamentalProvider:
     # -- Protocol methods --
 
     def fetch_pub_dates(
-        self, symbol: str, start_year: int | None = None,
+        self,
+        symbol: str,
+        start_year: int | None = None,
     ) -> dict[str, str]:
         """Return mapping of report_date → pub_date for each quarter.
 
@@ -120,6 +124,7 @@ class BaoStockFundamentalProvider:
         bs_code = self._to_bs_code(symbol)
 
         from pangu.tz import now as _now
+
         current_year = _now().year
         if start_year is None:
             start_year = current_year - 1
@@ -130,7 +135,9 @@ class BaoStockFundamentalProvider:
                 try:
                     rs = self._query_with_retry(
                         lambda y=year, q=quarter: self._bs.query_profit_data(
-                            bs_code, year=y, quarter=q,
+                            bs_code,
+                            year=y,
+                            quarter=q,
                         ),
                     )
                     df = self._query_to_df(rs)
@@ -145,7 +152,10 @@ class BaoStockFundamentalProvider:
         return result
 
     def get_financial_indicator(
-        self, symbol: str, start: str | None = None, end: str | None = None,
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
     ) -> pd.DataFrame:
         """Return ROE, revenue_yoy, profit_yoy from BaoStock quarterly data.
 
@@ -162,17 +172,22 @@ class BaoStockFundamentalProvider:
         except Exception:  # noqa: BLE001
             logger.warning(
                 "BaoStock financial indicator failed for %s",
-                symbol, exc_info=True,
+                symbol,
+                exc_info=True,
             )
             return pd.DataFrame()
 
     def _fetch_financial(
-        self, symbol: str, start: str | None = None, end: str | None = None,
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
     ) -> pd.DataFrame:
         """Fetch quarterly financial data from BaoStock."""
         bs_code = self._to_bs_code(symbol)
 
         from pangu.tz import now as _now
+
         current_year = _now().year
 
         if start is not None:
@@ -221,13 +236,15 @@ class BaoStockFundamentalProvider:
 
                         profit_yoy = self._safe_float(r.get("YOYNI"))
 
-                        rows.append({
-                            "symbol": symbol,
-                            "date": stat_date,
-                            "roe_ttm": roe,
-                            "revenue_yoy": revenue_yoy,
-                            "profit_yoy": profit_yoy,
-                        })
+                        rows.append(
+                            {
+                                "symbol": symbol,
+                                "date": stat_date,
+                                "roe_ttm": roe,
+                                "revenue_yoy": revenue_yoy,
+                                "profit_yoy": profit_yoy,
+                            }
+                        )
                 except Exception:  # noqa: BLE001
                     logger.debug("growth query failed for %s %dQ%d", symbol, year, quarter)
 

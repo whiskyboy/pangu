@@ -62,7 +62,8 @@ class PortfolioState:
         except (OSError, json.JSONDecodeError):
             logger.warning(
                 "Portfolio state file %s is unreadable or corrupt; treating as cold start",
-                self._path, exc_info=True,
+                self._path,
+                exc_info=True,
             )
             return None
         try:
@@ -75,7 +76,8 @@ class PortfolioState:
         except (KeyError, TypeError, ValueError):
             logger.warning(
                 "Portfolio state file %s has unexpected schema; treating as cold start",
-                self._path, exc_info=True,
+                self._path,
+                exc_info=True,
             )
             return None
 
@@ -84,8 +86,11 @@ class PortfolioState:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = asdict(portfolio)
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8",
-            dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp",
+            mode="w",
+            encoding="utf-8",
+            dir=self._path.parent,
+            prefix=f".{self._path.name}.",
+            suffix=".tmp",
             delete=False,
         ) as tmp:
             json.dump(payload, tmp, ensure_ascii=False, indent=2, sort_keys=True)
@@ -93,7 +98,9 @@ class PortfolioState:
         os.replace(tmp_path, self._path)
         logger.info(
             "PortfolioState saved %d symbols to %s (date=%s)",
-            len(portfolio.symbols), self._path, portfolio.date,
+            len(portfolio.symbols),
+            self._path,
+            portfolio.date,
         )
 
     def clear(self) -> None:

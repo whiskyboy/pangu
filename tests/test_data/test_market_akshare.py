@@ -28,20 +28,21 @@ def db() -> Database:
 
 def _fake_hist_df() -> pd.DataFrame:
     """Simulate ak.stock_zh_a_hist() return with Chinese columns."""
-    return pd.DataFrame({
-        "日期": ["2026-01-02", "2026-01-03"],
-        "开盘": [10.0, 10.5],
-        "收盘": [10.8, 11.2],
-        "最高": [11.0, 11.5],
-        "最低": [9.5, 10.0],
-        "成交量": [100000, 120000],
-        "成交额": [1_080_000, 1_344_000],
-        "振幅": [1.5, 1.4],
-        "涨跌幅": [0.8, 3.7],
-        "涨跌额": [0.08, 0.4],
-        "换手率": [1.0, 1.2],
-    })
-
+    return pd.DataFrame(
+        {
+            "日期": ["2026-01-02", "2026-01-03"],
+            "开盘": [10.0, 10.5],
+            "收盘": [10.8, 11.2],
+            "最高": [11.0, 11.5],
+            "最低": [9.5, 10.0],
+            "成交量": [100000, 120000],
+            "成交额": [1_080_000, 1_344_000],
+            "振幅": [1.5, 1.4],
+            "涨跌幅": [0.8, 3.7],
+            "涨跌额": [0.08, 0.4],
+            "换手率": [1.0, 1.2],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +137,14 @@ class TestGetDailyBars:
         df = provider.get_daily_bars("600519", "2026-01-02", "2026-01-03")
 
         assert list(df.columns) == [
-            "date", "open", "high", "low", "close", "volume", "amount", "adj_factor",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "adj_factor",
         ]
         assert len(df) == 2
         assert df.iloc[0]["close"] == pytest.approx(10.8)
@@ -164,9 +172,7 @@ class TestGetDailyBars:
         assert mock_hist.call_count == 2
 
     @patch("akshare.stock_zh_a_hist")
-    def test_empty_response_returns_empty(
-        self, mock_hist: MagicMock, db: Database
-    ) -> None:
+    def test_empty_response_returns_empty(self, mock_hist: MagicMock, db: Database) -> None:
         """If AkShare returns empty, return empty DataFrame."""
         mock_hist.return_value = pd.DataFrame()
         provider = AkShareMarketDataProvider(storage=db, request_interval=0)
@@ -196,50 +202,56 @@ class TestGetDailyBars:
 
 def _fake_us_index_df() -> pd.DataFrame:
     """Simulate ak.index_us_stock_sina() return — historical daily OHLCV."""
-    return pd.DataFrame({
-        "date": ["2026-01-01", "2026-01-02", "2026-01-03"],
-        "open": [5100.0, 5150.0, 5180.0],
-        "high": [5150.0, 5200.0, 5220.0],
-        "low": [5080.0, 5130.0, 5170.0],
-        "close": [5140.0, 5190.0, 5200.0],
-        "volume": [3e9, 3.1e9, 2.9e9],
-        "amount": [0, 0, 0],
-    })
+    return pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+            "open": [5100.0, 5150.0, 5180.0],
+            "high": [5150.0, 5200.0, 5220.0],
+            "low": [5080.0, 5130.0, 5170.0],
+            "close": [5140.0, 5190.0, 5200.0],
+            "volume": [3e9, 3.1e9, 2.9e9],
+            "amount": [0, 0, 0],
+        }
+    )
 
 
 def _fake_hk_index_df() -> pd.DataFrame:
     """Simulate ak.stock_hk_index_spot_sina() — 38 HK indices (sina format)."""
-    return pd.DataFrame({
-        "代码": ["HSI", "HSTECH", "OTHER"],
-        "名称": ["恒生指数", "恒生科技指数", "其他指数"],
-        "最新价": [26700.0, 5360.0, 1000.0],
-        "涨跌额": [130.0, 50.0, 10.0],
-        "涨跌幅": [0.52, 0.13, 0.05],
-        "昨收": [26570.0, 5310.0, 990.0],
-        "今开": [26500.0, 5340.0, 990.0],
-        "最高": [26750.0, 5380.0, 1010.0],
-        "最低": [26400.0, 5300.0, 980.0],
-    })
+    return pd.DataFrame(
+        {
+            "代码": ["HSI", "HSTECH", "OTHER"],
+            "名称": ["恒生指数", "恒生科技指数", "其他指数"],
+            "最新价": [26700.0, 5360.0, 1000.0],
+            "涨跌额": [130.0, 50.0, 10.0],
+            "涨跌幅": [0.52, 0.13, 0.05],
+            "昨收": [26570.0, 5310.0, 990.0],
+            "今开": [26500.0, 5340.0, 990.0],
+            "最高": [26750.0, 5380.0, 1010.0],
+            "最低": [26400.0, 5300.0, 980.0],
+        }
+    )
 
 
 def _fake_commodity_df() -> pd.DataFrame:
     """Simulate ak.futures_foreign_commodity_realtime() — batch realtime."""
-    return pd.DataFrame({
-        "名称": ["COMEX黄金", "COMEX白银", "NYMEX原油", "COMEX铜", "新加坡铁矿石"],
-        "最新价": [5040.0, 77.1, 62.5, 583.4, 96.7],
-        "人民币报价": [0, 0, 0, 0, 0],
-        "涨跌额": [-6.5, -0.9, -0.3, -2.8, -0.1],
-        "涨跌幅": [-0.13, -1.11, -0.47, -0.48, -0.10],
-        "开盘价": [5050.0, 77.6, 63.0, 583.9, 96.9],
-        "最高价": [5074.0, 78.4, 63.1, 585.9, 97.8],
-        "最低价": [4982.0, 74.6, 62.4, 579.7, 96.2],
-        "昨日结算价": [5046.0, 78.0, 62.8, 586.3, 96.8],
-        "持仓量": [0, 0, 0, 0, 0],
-        "买价": [5036.0, 77.0, 62.5, 583.1, 96.7],
-        "卖价": [5037.0, 77.0, 62.5, 583.2, 96.8],
-        "行情时间": ["17:54:21", "17:54:15", "17:54:26", "17:53:42", "17:54:30"],
-        "日期": ["2026-02-16", "2026-02-16", "2026-02-16", "2026-02-16", "2026-02-16"],
-    })
+    return pd.DataFrame(
+        {
+            "名称": ["COMEX黄金", "COMEX白银", "NYMEX原油", "COMEX铜", "新加坡铁矿石"],
+            "最新价": [5040.0, 77.1, 62.5, 583.4, 96.7],
+            "人民币报价": [0, 0, 0, 0, 0],
+            "涨跌额": [-6.5, -0.9, -0.3, -2.8, -0.1],
+            "涨跌幅": [-0.13, -1.11, -0.47, -0.48, -0.10],
+            "开盘价": [5050.0, 77.6, 63.0, 583.9, 96.9],
+            "最高价": [5074.0, 78.4, 63.1, 585.9, 97.8],
+            "最低价": [4982.0, 74.6, 62.4, 579.7, 96.2],
+            "昨日结算价": [5046.0, 78.0, 62.8, 586.3, 96.8],
+            "持仓量": [0, 0, 0, 0, 0],
+            "买价": [5036.0, 77.0, 62.5, 583.1, 96.7],
+            "卖价": [5037.0, 77.0, 62.5, 583.2, 96.8],
+            "行情时间": ["17:54:21", "17:54:15", "17:54:26", "17:53:42", "17:54:30"],
+            "日期": ["2026-02-16", "2026-02-16", "2026-02-16", "2026-02-16", "2026-02-16"],
+        }
+    )
 
 
 class TestGetUSIndices:
@@ -345,7 +357,10 @@ class TestGetGlobalSnapshot:
     @patch("akshare.stock_hk_index_spot_sina")
     @patch("akshare.index_us_stock_sina")
     def test_aggregates_all_sources(
-        self, mock_us: MagicMock, mock_hk: MagicMock, mock_commodity: MagicMock,
+        self,
+        mock_us: MagicMock,
+        mock_hk: MagicMock,
+        mock_commodity: MagicMock,
     ) -> None:
         mock_us.return_value = _fake_us_index_df()
         mock_hk.return_value = _fake_hk_index_df()
@@ -360,7 +375,10 @@ class TestGetGlobalSnapshot:
     @patch("akshare.stock_hk_index_spot_sina")
     @patch("akshare.index_us_stock_sina")
     def test_persists_all_to_storage(
-        self, mock_us: MagicMock, mock_hk: MagicMock, mock_commodity: MagicMock,
+        self,
+        mock_us: MagicMock,
+        mock_hk: MagicMock,
+        mock_commodity: MagicMock,
         db: Database,
     ) -> None:
         mock_us.return_value = _fake_us_index_df()
@@ -376,7 +394,10 @@ class TestGetGlobalSnapshot:
     @patch("akshare.stock_hk_index_spot_sina")
     @patch("akshare.index_us_stock_sina")
     def test_reads_from_db_cache(
-        self, mock_us: MagicMock, mock_hk: MagicMock, mock_commodity: MagicMock,
+        self,
+        mock_us: MagicMock,
+        mock_hk: MagicMock,
+        mock_commodity: MagicMock,
         db: Database,
     ) -> None:
         """Second call on the same day should read from DB, not API."""
@@ -465,17 +486,67 @@ class TestBaoStockDailyBars:
         mock_adj.return_value = _fake_bs_result(
             ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
         )
-        fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "turn",
-                   "tradestatus", "pctChg", "peTTM", "pbMRQ", "psTTM",
-                   "pcfNcfTTM", "isST"]
+        fields = [
+            "date",
+            "code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "preclose",
+            "volume",
+            "amount",
+            "adjustflag",
+            "turn",
+            "tradestatus",
+            "pctChg",
+            "peTTM",
+            "pbMRQ",
+            "psTTM",
+            "pcfNcfTTM",
+            "isST",
+        ]
         rows = [
-            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "0.5000", "1", "8.00",
-             "25.3", "8.1", "3.14", "5.67", "0"],
-            ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
-             "10.8", "120000", "1344000", "2", "0.6000", "1", "3.70",
-             "26.0", "8.3", "3.20", "5.80", "0"],
+            [
+                "2026-01-02",
+                "sh.600519",
+                "10.0",
+                "11.0",
+                "9.5",
+                "10.8",
+                "10.0",
+                "100000",
+                "1080000",
+                "2",
+                "0.5000",
+                "1",
+                "8.00",
+                "25.3",
+                "8.1",
+                "3.14",
+                "5.67",
+                "0",
+            ],
+            [
+                "2026-01-03",
+                "sh.600519",
+                "10.5",
+                "11.5",
+                "10.0",
+                "11.2",
+                "10.8",
+                "120000",
+                "1344000",
+                "2",
+                "0.6000",
+                "1",
+                "3.70",
+                "26.0",
+                "8.3",
+                "3.20",
+                "5.80",
+                "0",
+            ],
         ]
         mock_query.return_value = _fake_bs_result(fields, rows)
 
@@ -503,11 +574,21 @@ class TestBaoStockDailyBars:
         mock_adj.return_value = _fake_bs_result(
             ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
         )
-        fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "pctChg"]
+        fields = [
+            "date",
+            "code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "preclose",
+            "volume",
+            "amount",
+            "adjustflag",
+            "pctChg",
+        ]
         rows = [
-            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "8.00"],
+            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8", "10.0", "100000", "1080000", "2", "8.00"],
         ]
         mock_query.return_value = _fake_bs_result(fields, rows)
 
@@ -521,8 +602,7 @@ class TestBaoStockDailyBars:
     def test_empty_result(self, mock_query: MagicMock, mock_login: MagicMock) -> None:
         mock_login.return_value = MagicMock(error_code="0")
         mock_query.return_value = _fake_bs_result(
-            ["date", "code", "open", "high", "low", "close",
-             "preclose", "volume", "amount", "adjustflag", "pctChg"],
+            ["date", "code", "open", "high", "low", "close", "preclose", "volume", "amount", "adjustflag", "pctChg"],
             [],
         )
 
@@ -579,8 +659,11 @@ class TestCompositeProviderChain:
     @patch("baostock.login")
     @patch("baostock.query_history_k_data_plus")
     def test_fallback_on_primary_exception(
-        self, mock_bs_query: MagicMock, mock_bs_login: MagicMock,
-        mock_ak_hist: MagicMock, db: Database,
+        self,
+        mock_bs_query: MagicMock,
+        mock_bs_login: MagicMock,
+        mock_ak_hist: MagicMock,
+        db: Database,
     ) -> None:
         """When BaoStock raises, AkShare fallback should be used."""
         mock_bs_login.return_value = MagicMock(error_code="0")
@@ -604,26 +687,79 @@ class TestCompositeProviderChain:
     @patch("baostock.query_adjust_factor")
     @patch("baostock.query_history_k_data_plus")
     def test_caches_to_sqlite(
-        self, mock_bs_query: MagicMock, mock_bs_adj: MagicMock,
+        self,
+        mock_bs_query: MagicMock,
+        mock_bs_adj: MagicMock,
         mock_bs_login: MagicMock,
-        mock_ak_hist: MagicMock, db: Database,
+        mock_ak_hist: MagicMock,
+        db: Database,
     ) -> None:
         """Composite caches data and serves from cache on subsequent calls."""
         mock_bs_login.return_value = MagicMock(error_code="0")
         mock_bs_adj.return_value = _fake_bs_result(
             ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
         )
-        fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "turn",
-                   "tradestatus", "pctChg", "peTTM", "pbMRQ", "psTTM",
-                   "pcfNcfTTM", "isST"]
+        fields = [
+            "date",
+            "code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "preclose",
+            "volume",
+            "amount",
+            "adjustflag",
+            "turn",
+            "tradestatus",
+            "pctChg",
+            "peTTM",
+            "pbMRQ",
+            "psTTM",
+            "pcfNcfTTM",
+            "isST",
+        ]
         rows = [
-            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "0.5000", "1", "8.00",
-             "25.3", "8.1", "3.14", "5.67", "0"],
-            ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
-             "10.8", "120000", "1344000", "2", "0.6000", "1", "3.70",
-             "26.0", "8.3", "3.20", "5.80", "0"],
+            [
+                "2026-01-02",
+                "sh.600519",
+                "10.0",
+                "11.0",
+                "9.5",
+                "10.8",
+                "10.0",
+                "100000",
+                "1080000",
+                "2",
+                "0.5000",
+                "1",
+                "8.00",
+                "25.3",
+                "8.1",
+                "3.14",
+                "5.67",
+                "0",
+            ],
+            [
+                "2026-01-03",
+                "sh.600519",
+                "10.5",
+                "11.5",
+                "10.0",
+                "11.2",
+                "10.8",
+                "120000",
+                "1344000",
+                "2",
+                "0.6000",
+                "1",
+                "3.70",
+                "26.0",
+                "8.3",
+                "3.20",
+                "5.80",
+                "0",
+            ],
         ]
         mock_bs_query.return_value = _fake_bs_result(fields, rows)
 
@@ -659,9 +795,12 @@ class TestCompositeProviderChain:
     @patch("baostock.query_adjust_factor")
     @patch("baostock.query_history_k_data_plus")
     def test_both_fail_returns_cached(
-        self, mock_bs_query: MagicMock, mock_bs_adj: MagicMock,
+        self,
+        mock_bs_query: MagicMock,
+        mock_bs_adj: MagicMock,
         mock_bs_login: MagicMock,
-        mock_ak_hist: MagicMock, db: Database,
+        mock_ak_hist: MagicMock,
+        db: Database,
     ) -> None:
         """When both providers fail, cached data should be returned."""
         # Seed cache via successful BaoStock call
@@ -669,13 +808,22 @@ class TestCompositeProviderChain:
         mock_bs_adj.return_value = _fake_bs_result(
             ["code", "dividOperateDate", "foreAdjustFactor", "backAdjustFactor", "adjustFactor"], []
         )
-        fields = ["date", "code", "open", "high", "low", "close",
-                   "preclose", "volume", "amount", "adjustflag", "pctChg"]
+        fields = [
+            "date",
+            "code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "preclose",
+            "volume",
+            "amount",
+            "adjustflag",
+            "pctChg",
+        ]
         rows = [
-            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8",
-             "10.0", "100000", "1080000", "2", "8.00"],
-            ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2",
-             "10.8", "120000", "1344000", "2", "3.70"],
+            ["2026-01-02", "sh.600519", "10.0", "11.0", "9.5", "10.8", "10.0", "100000", "1080000", "2", "8.00"],
+            ["2026-01-03", "sh.600519", "10.5", "11.5", "10.0", "11.2", "10.8", "120000", "1344000", "2", "3.70"],
         ]
         mock_bs_query.return_value = _fake_bs_result(fields, rows)
 
@@ -687,8 +835,8 @@ class TestCompositeProviderChain:
 
         # Now both fail for a later range
         rs_empty = _fake_bs_result(
-            ["date", "code", "open", "high", "low", "close",
-             "preclose", "volume", "amount", "adjustflag", "pctChg"], [],
+            ["date", "code", "open", "high", "low", "close", "preclose", "volume", "amount", "adjustflag", "pctChg"],
+            [],
         )
         mock_bs_query.return_value = rs_empty
         mock_ak_hist.return_value = pd.DataFrame()

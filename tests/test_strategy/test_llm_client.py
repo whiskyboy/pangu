@@ -17,6 +17,7 @@ def _no_sleep():
     with patch("pangu.strategy.llm.client.asyncio.sleep", new_callable=AsyncMock):
         yield
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -34,9 +35,7 @@ _VALID_RESPONSE = {
 
 def _make_completion(content: str) -> SimpleNamespace:
     """Build a mock litellm completion response."""
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-    )
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +77,7 @@ class TestParseJsonResponse:
 
     def test_json_array_rejected(self) -> None:
         """Only dicts are accepted, not arrays."""
-        assert self.client._parse_json_response('[1, 2, 3]') is None
+        assert self.client._parse_json_response("[1, 2, 3]") is None
 
     def test_deeply_nested_json(self) -> None:
         """3+ levels of nesting should parse correctly."""
@@ -100,51 +99,12 @@ class TestParseJsonResponse:
 
 
 # ---------------------------------------------------------------------------
-# Rule-based fallback tests
-# ---------------------------------------------------------------------------
-
-
-class TestRuleBasedFallback:
-    def setup_method(self) -> None:
-        self.client = LLMClient(model="test/model")
-
-    def test_bullish_keywords(self) -> None:
-        text = "该公司获批新药，业绩预增超预期，增持计划公布"
-        result = self.client._rule_based_fallback(text)
-        assert result["action"] == "BUY"
-        assert result["confidence"] >= 0.5
-
-    def test_bearish_keywords(self) -> None:
-        text = "业绩下滑，大股东减持，面临处罚风险"
-        result = self.client._rule_based_fallback(text)
-        assert result["action"] == "SELL"
-        assert result["confidence"] >= 0.5
-
-    def test_neutral_no_keywords(self) -> None:
-        text = "公司召开年度股东大会，审议日常议案"
-        result = self.client._rule_based_fallback(text)
-        assert result["action"] == "HOLD"
-        assert result["confidence"] == 0.3
-
-    def test_structure_complete(self) -> None:
-        result = self.client._rule_based_fallback("test")
-        required_keys = [
-            "action", "confidence", "bull_reason",
-            "bear_reason", "judge_conclusion",
-            "short_term_outlook", "mid_term_outlook",
-        ]
-        for key in required_keys:
-            assert key in result
-
-    def test_confidence_capped(self) -> None:
-        """Confidence should never exceed 0.8."""
-        text = " ".join(["利好 增持 回购 业绩预增 超预期 突破 获批 中标"] * 3)
-        result = self.client._rule_based_fallback(text)
-        assert result["confidence"] <= 0.8
-
-
-# ---------------------------------------------------------------------------
 # LLM call tests (mock litellm)
+#
+# Note: After the LLM-TopkDropout refactor, ``_rule_based_fallback`` was
+# removed. ``LLMClient.call`` now raises RuntimeError after all retries fail —
+# the caller (``judge_rebalance``) wraps this in its own try/except and falls
+# back to deterministic ML ranking.
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +121,8 @@ class TestLLMCall:
         assert client.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_primary_fails_rule_fallback(self) -> None:
+    async def test_primary_fails_raises_runtime_error(self) -> None:
+        """All connection errors after retries → RuntimeError."""
         client = LLMClient(model="test/primary")
 
         with patch(
@@ -169,34 +130,30 @@ class TestLLMCall:
             new_callable=AsyncMock,
             side_effect=ConnectionError("all down"),
         ):
-            result = await client.call("system", "重大合同签订，利好明显")
+            with pytest.raises(RuntimeError, match="failed after retries"):
+                await client.call("system", "user prompt")
 
-        assert result["action"] == "BUY"
-        assert "规则降级" in result["judge_conclusion"]
         assert client.call_count == 0  # no successful LLM calls
 
     @pytest.mark.asyncio
-    async def test_unparseable_response_retries_then_degrades(self) -> None:
-        """If LLM returns non-JSON, retry then degrade to rules."""
+    async def test_unparseable_response_retries_then_raises(self) -> None:
+        """Non-JSON content after retries → RuntimeError."""
         client = LLMClient(model="test/primary")
         bad_resp = _make_completion("I cannot provide JSON")
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=bad_resp):
-            result = await client.call("system", "利空消息，减持风险")
-
-        assert "规则降级" in result["judge_conclusion"]
+            with pytest.raises(RuntimeError, match="failed after retries"):
+                await client.call("system", "user prompt")
 
     @pytest.mark.asyncio
-    async def test_empty_response_content(self) -> None:
-        """Empty content from LLM should trigger fallback."""
+    async def test_empty_response_content_raises(self) -> None:
+        """Empty content from LLM after retries → RuntimeError."""
         client = LLMClient(model="test/primary")
         empty_resp = _make_completion("")
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=empty_resp):
-            result = await client.call("system", "利空消息，减持风险")
-
-        assert result["action"] == "SELL"
-        assert "规则降级" in result["judge_conclusion"]
+            with pytest.raises(RuntimeError, match="failed after retries"):
+                await client.call("system", "user prompt")
 
     @pytest.mark.asyncio
     async def test_call_count_tracks_successful_only(self) -> None:

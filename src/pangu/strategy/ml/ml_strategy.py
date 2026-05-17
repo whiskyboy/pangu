@@ -5,18 +5,15 @@ LightGBM model predictions on Alpha158 factors.
 
 Production rebalance uses LLM-TopkDropout (two-stage TopkDropout):
 ML coarsely selects candidate pools, LLM finely picks within them.
-Falls back to classic TopkDropout when LLM fails.
+Falls back to ML-only TopkDropout when the LLM fails.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pandas as pd
-
-from pangu.models import Action, SignalStatus, TradeSignal
 
 if TYPE_CHECKING:
     from pangu.ml.scorer import MLScorer
@@ -24,6 +21,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _STAR_PREFIXES = ("688", "689")
+
+
+def pool_score_rank_maps(
+    pool_df: pd.DataFrame,
+) -> tuple[dict[str, float], dict[str, int]]:
+    """Return (score_map, rank_map) keyed by symbol from a scored pool DataFrame.
+
+    Both maps are empty when ``pool_df`` is empty or missing the expected
+    columns. Used across T4 and ML strategy code to avoid repeated
+    ``dict(zip(...))`` boilerplate.
+    """
+    if pool_df is None or pool_df.empty:
+        return {}, {}
+    score_map = dict(zip(pool_df["symbol"], pool_df["score"], strict=False)) if "score" in pool_df.columns else {}
+    rank_map = dict(zip(pool_df["symbol"], pool_df["rank"], strict=False)) if "rank" in pool_df.columns else {}
+    return score_map, rank_map
 
 
 class MLScoringStrategy:
@@ -36,7 +49,6 @@ class MLScoringStrategy:
     buy_candidate_size : non-held top-ranked pool size for LLM BUY decision
     sell_candidate_size : held bottom-ranked pool size for LLM SELL decision
     n_drop : per-rebalance turnover (fallback uses this when LLM under-fills)
-    buy_threshold : minimum normalized score to trigger BUY (legacy path only)
     exclude_star : exclude STAR Market stocks (688/689 prefix)
     """
 
@@ -48,23 +60,17 @@ class MLScoringStrategy:
         buy_candidate_size: int = 10,
         sell_candidate_size: int = 5,
         n_drop: int = 3,
-        buy_threshold: float = 0.0,
         exclude_star: bool = True,
     ) -> None:
         if buy_candidate_size < n_drop:
-            raise ValueError(
-                f"buy_candidate_size ({buy_candidate_size}) must be >= n_drop ({n_drop})"
-            )
+            raise ValueError(f"buy_candidate_size ({buy_candidate_size}) must be >= n_drop ({n_drop})")
         if sell_candidate_size < n_drop:
-            raise ValueError(
-                f"sell_candidate_size ({sell_candidate_size}) must be >= n_drop ({n_drop})"
-            )
+            raise ValueError(f"sell_candidate_size ({sell_candidate_size}) must be >= n_drop ({n_drop})")
         self._scorer = scorer
         self._top_n = top_n
         self._buy_candidate_size = buy_candidate_size
         self._sell_candidate_size = sell_candidate_size
         self._n_drop = n_drop
-        self._buy_threshold = buy_threshold
         self._exclude_star = exclude_star
 
     # ------------------------------------------------------------------
@@ -113,18 +119,22 @@ class MLScoringStrategy:
             scores = pd.Series(0.5, index=raw_scores.index, name="score")
 
         ranks = scores.rank(ascending=False, method="min").astype(int)
-        return pd.DataFrame({
-            "symbol": scores.index,
-            "score": scores.values,
-            "rank": ranks.values,
-        })
+        return pd.DataFrame(
+            {
+                "symbol": scores.index,
+                "score": scores.values,
+                "rank": ranks.values,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Candidate pools
     # ------------------------------------------------------------------
 
     def get_buy_candidate_pool(
-        self, pool_df: pd.DataFrame, holdings: list[str],
+        self,
+        pool_df: pd.DataFrame,
+        holdings: list[str],
     ) -> list[str]:
         """Top ``buy_candidate_size`` non-held symbols by ML rank (ascending)."""
         if pool_df.empty:
@@ -134,12 +144,15 @@ class MLScoringStrategy:
         if non_held.empty:
             return []
         ordered = non_held.sort_values(
-            ["rank", "symbol"], ascending=[True, True],
+            ["rank", "symbol"],
+            ascending=[True, True],
         )
         return ordered["symbol"].head(self._buy_candidate_size).tolist()
 
     def get_sell_candidate_pool(
-        self, pool_df: pd.DataFrame, holdings: list[str],
+        self,
+        pool_df: pd.DataFrame,
+        holdings: list[str],
     ) -> list[str]:
         """Worst ``sell_candidate_size`` held symbols by ML rank (descending).
 
@@ -157,7 +170,8 @@ class MLScoringStrategy:
         else:
             held_df = pool_df[pool_df["symbol"].isin(holdings)]
             ordered = held_df.sort_values(
-                ["rank", "symbol"], ascending=[False, True],
+                ["rank", "symbol"],
+                ascending=[False, True],
             )
             held_ordered = ordered["symbol"].tolist()
 
@@ -182,10 +196,7 @@ class MLScoringStrategy:
         """
         if n <= 0:
             return []
-        rank_map = (
-            dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
-            if not pool_df.empty else {}
-        )
+        _, rank_map = pool_score_rank_maps(pool_df)
         # Highest rank number first (worst), missing → +inf so they sort first
         candidates = [s for s in sell_pool if s not in excluded]
         candidates.sort(key=lambda s: (-rank_map.get(s, float("inf")), s))
@@ -201,10 +212,7 @@ class MLScoringStrategy:
         """Pick *n* best-ranked symbols from ``buy_pool``, skipping excluded."""
         if n <= 0:
             return []
-        rank_map = (
-            dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
-            if not pool_df.empty else {}
-        )
+        _, rank_map = pool_score_rank_maps(pool_df)
         candidates = [s for s in buy_pool if s not in excluded]
         candidates.sort(key=lambda s: (rank_map.get(s, float("inf")), s))
         return candidates[:n]
@@ -218,79 +226,40 @@ class MLScoringStrategy:
         if pool_df.empty:
             return []
         ordered = pool_df.sort_values(
-            ["rank", "symbol"], ascending=[True, True],
+            ["rank", "symbol"],
+            ascending=[True, True],
         )
         return ordered["symbol"].head(self._top_n).tolist()
 
-    # ------------------------------------------------------------------
-    # Legacy single-call signal generation (CLI `pangu score` only)
-    # ------------------------------------------------------------------
 
-    def generate_signals(
-        self,
-        date: str,
-        pool: list[str],
-        *,
-        prev_pool: pd.DataFrame | None = None,
-    ) -> tuple[pd.DataFrame, list[TradeSignal]]:
-        """Score stocks and generate naive BUY/SELL signals (legacy CLI path).
+# ---------------------------------------------------------------------------
+# Factory helper (shared by main.py bootstrap and T5 post-train hot-load)
+# ---------------------------------------------------------------------------
 
-        For the production rebalance pipeline, use ``score_pool`` +
-        ``get_buy_candidate_pool`` + ``get_sell_candidate_pool`` instead.
-        """
-        pool_df = self.score_pool(date, pool)
-        if pool_df.empty:
-            return pool_df, []
 
-        now = datetime.now()
-        prev_top: set[str] = set()
-        if prev_pool is not None and not prev_pool.empty:
-            prev_top = set(
-                prev_pool[prev_pool["rank"] <= self._top_n]["symbol"].tolist()
-            )
+def try_build_ml_strategy(
+    db,
+    ml_cfg: dict,
+    strategy_cfg: dict,
+) -> "MLScoringStrategy | None":
+    """Construct an MLScoringStrategy from config, returning None if models are missing.
 
-        signals: list[TradeSignal] = []
-        score_map = dict(zip(pool_df["symbol"], pool_df["score"], strict=False))
-        rank_map = dict(zip(pool_df["symbol"], pool_df["rank"], strict=False))
-        for sym in sorted(score_map):
-            score = float(score_map[sym])
-            rank = int(rank_map[sym])
-            in_top = rank <= self._top_n
-            was_in_top = sym in prev_top
+    Centralises the bootstrap rules so callers (``main.build_components`` at
+    startup and ``tasks.update_model`` after first training) stay in sync.
+    """
+    if not ml_cfg.get("enabled", False):
+        return None
+    from pangu.ml.scorer import MLScorer
 
-            if in_top and score >= self._buy_threshold:
-                status = SignalStatus.SUSTAINED if was_in_top else SignalStatus.NEW_ENTRY
-                signals.append(self._make_signal(
-                    now, sym, Action.BUY, status, score,
-                    f"ML rank={rank} score={score:.3f}",
-                ))
-            elif was_in_top and not in_top:
-                signals.append(self._make_signal(
-                    now, sym, Action.SELL, SignalStatus.EXIT, score,
-                    f"ML exit top-{self._top_n}: rank={rank} score={score:.3f}",
-                ))
-
-        return pool_df, signals
-
-    @staticmethod
-    def _make_signal(
-        now: datetime,
-        symbol: str,
-        action: Action,
-        status: SignalStatus,
-        score: float,
-        reason: str,
-    ) -> TradeSignal:
-        return TradeSignal(
-            timestamp=now,
-            symbol=symbol,
-            name=symbol,
-            action=action,
-            signal_status=status,
-            days_in_top_n=0,
-            price=0.0,
-            confidence=score,
-            source="ml",
-            reason=reason,
-            factor_score=score,
-        )
+    model_dir = ml_cfg.get("model_dir", "models")
+    try:
+        scorer = MLScorer(model_dir=model_dir, db=db)
+    except FileNotFoundError:
+        return None
+    return MLScoringStrategy(
+        scorer,
+        top_n=strategy_cfg.get("top_n", 25),
+        buy_candidate_size=ml_cfg.get("buy_candidate_size", 10),
+        sell_candidate_size=ml_cfg.get("sell_candidate_size", 5),
+        n_drop=ml_cfg.get("n_drop", 3),
+    )

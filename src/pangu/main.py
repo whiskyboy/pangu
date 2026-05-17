@@ -1,9 +1,10 @@
-"""PanGu main entry point — M5.1.
+"""PanGu main entry point.
 
 Initializes all components and starts the APScheduler-based
-TradingScheduler. Supports two modes:
-  - ``--once``: run all tasks once and exit (for manual / first-run)
-  - default: start scheduler and run indefinitely
+TradingScheduler. Entry points:
+  - ``_run_scheduler``: daemon mode (default)
+  - ``_run_init``: one-time cold-start (backfill → factors → train → portfolio_state)
+  - ``_run_signals``: manual trigger for T6 signal generation
 """
 
 from __future__ import annotations
@@ -14,8 +15,6 @@ import os
 import signal
 import sys
 from pathlib import Path
-
-import yaml
 
 
 # Load .env if present (before config reads $ENV_VAR placeholders)
@@ -44,16 +43,12 @@ from pangu.data.news import AkShareNewsDataProvider  # noqa: E402
 from pangu.data.stock_pool import StockPoolManager  # noqa: E402
 from pangu.data.storage import Database  # noqa: E402
 from pangu.factor.fundamental import FundamentalFactorEngine  # noqa: E402
-from pangu.factor.macro import MacroFactorEngine  # noqa: E402
 from pangu.factor.technical import PandasTAFactorEngine  # noqa: E402
-from pangu.ml.scorer import MLScorer  # noqa: E402
 from pangu.notification import NotificationManager  # noqa: E402
 from pangu.notification.feishu import FeishuNotifier  # noqa: E402
 from pangu.portfolio import PortfolioState  # noqa: E402
 from pangu.scheduler import Components, TradingScheduler  # noqa: E402
-from pangu.strategy.factor import MultiFactorStrategy  # noqa: E402
 from pangu.strategy.llm import LLMClient, LLMJudgeEngineImpl  # noqa: E402
-from pangu.strategy.ml.ml_strategy import MLScoringStrategy  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,7 +82,8 @@ def build_components() -> tuple[Components, str, Settings]:
     news = AkShareNewsDataProvider(storage=db)
     akshare_fund = AkShareFundamentalProvider()
     fundamental = CompositeFundamentalProvider(
-        storage=db, providers=[akshare_fund],
+        storage=db,
+        providers=[akshare_fund],
     )
 
     sys_cfg = settings.system
@@ -102,28 +98,12 @@ def build_components() -> tuple[Components, str, Settings]:
         indices=pool_cfg.get("indices"),
     )
 
-    # Sector mapping
-    mapping_path = Path(sys_cfg.get("global_market_mapping_path", "config/global_market_mapping.yaml"))
-    sector_mapping: list[dict] = []
-    if mapping_path.exists():
-        with open(mapping_path) as f:
-            raw = yaml.safe_load(f) or {}
-        sector_mapping = raw.get("mappings", [])
-
     # Factor engines
     tech_engine = PandasTAFactorEngine()
     fund_engine = FundamentalFactorEngine()
-    macro_engine = MacroFactorEngine()
 
-    # Strategy + LLM
+    # LLM
     strategy_cfg = settings.strategy
-    factor_strategy = MultiFactorStrategy(
-        top_n=strategy_cfg.get("top_n", 10),
-        buy_threshold=strategy_cfg.get("buy_threshold", 0.7),
-        sell_threshold=strategy_cfg.get("sell_threshold", 0.3),
-        risk_dampen_threshold=strategy_cfg.get("risk_dampen_threshold", -1.0),
-        sector_mapping=sector_mapping,
-    )
 
     llm_cfg = settings.llm
     llm_client = LLMClient(
@@ -132,30 +112,30 @@ def build_components() -> tuple[Components, str, Settings]:
     )
     judge_engine = LLMJudgeEngineImpl(llm_client)
 
-    # ML scoring strategy (optional, replaces z-score when enabled)
-    ml_strategy = None
+    # ML scoring strategy — uses shared factory so T5 can rebuild after first training
     ml_cfg = settings.ml
-    if ml_cfg.get("enabled", False):
-        model_dir = ml_cfg.get("model_dir", "models")
-        try:
-            ml_scorer = MLScorer(model_dir=model_dir, db=db)
-            ml_strategy = MLScoringStrategy(
-                ml_scorer,
-                top_n=strategy_cfg.get("top_n", 25),
-                buy_candidate_size=ml_cfg.get("buy_candidate_size", 10),
-                sell_candidate_size=ml_cfg.get("sell_candidate_size", 5),
-                n_drop=ml_cfg.get("n_drop", 3),
-            )
+    ml_enabled = bool(ml_cfg.get("enabled", False))
+    from pangu.strategy.ml.ml_strategy import try_build_ml_strategy
+
+    ml_strategy = try_build_ml_strategy(db, ml_cfg, strategy_cfg)
+    if ml_enabled:
+        if ml_strategy is not None:
             logger.info(
-                "ML scoring enabled: model_dir=%s, window=%d, seeds=%d, "
-                "top_n=%d, buy_pool=%d, sell_pool=%d, n_drop=%d",
-                model_dir, ml_scorer.window_id, ml_scorer.n_models,
-                ml_strategy.top_n, ml_strategy.buy_candidate_size,
-                ml_strategy.sell_candidate_size, ml_strategy.n_drop,
+                "ML scoring enabled: model_dir=%s, window=%d, seeds=%d, top_n=%d, buy_pool=%d, sell_pool=%d, n_drop=%d",
+                ml_cfg.get("model_dir", "models"),
+                ml_strategy._scorer.window_id,
+                ml_strategy._scorer.n_models,
+                ml_strategy.top_n,
+                ml_strategy.buy_candidate_size,
+                ml_strategy.sell_candidate_size,
+                ml_strategy.n_drop,
             )
-        except FileNotFoundError:
-            logger.warning("ML enabled but no models found in %s, falling back to z-score",
-                           model_dir)
+        else:
+            logger.warning(
+                "ML enabled but no models found in %s; T6 will alert and skip on rebalance day. "
+                "T5 will train and hot-swap on the next monthly run, or run `pangu run init` / `pangu train` first.",
+                ml_cfg.get("model_dir", "models"),
+            )
 
     # Portfolio state — virtual target portfolio JSON
     portfolio_cfg = settings.portfolio
@@ -179,8 +159,7 @@ def build_components() -> tuple[Components, str, Settings]:
                 open_id=open_id or None,
             )
             notif_manager.add_channel(feishu_notifier)
-            logger.info("Feishu notifier initialized (open_id=%s)",
-                        "set" if open_id else "not set")
+            logger.info("Feishu notifier initialized (open_id=%s)", "set" if open_id else "not set")
         else:
             logger.warning("Feishu not configured, skipping")
     else:
@@ -194,19 +173,22 @@ def build_components() -> tuple[Components, str, Settings]:
         stock_pool=stock_pool,
         tech_engine=tech_engine,
         fund_engine=fund_engine,
-        macro_engine=macro_engine,
-        factor_strategy=factor_strategy,
         judge_engine=judge_engine,
         notif_manager=notif_manager,
         ml_strategy=ml_strategy,
+        ml_enabled=ml_enabled,
         portfolio_state=portfolio_state,
+        initial_capital=float(settings.portfolio.get("initial_capital", 100_000.0)),
     )
     return components, tz, settings
 
 
-async def _run_scheduler() -> None:
+async def _run_scheduler(*, initial_capital: float | None = None) -> None:
     """Start scheduler and block until SIGINT/SIGTERM."""
     components, tz, settings = build_components()
+    if initial_capital is not None:
+        components.initial_capital = initial_capital
+        logger.info("Override initial_capital=%.2f", initial_capital)
     scheduler = TradingScheduler(components, timezone=tz, scheduler_cfg=settings.scheduler)
 
     # First run: sync calendar to ensure trading day checks work
@@ -222,6 +204,7 @@ async def _run_scheduler() -> None:
         stop_event.set()
 
     import sys
+
     loop = asyncio.get_running_loop()
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -232,31 +215,259 @@ async def _run_scheduler() -> None:
     logger.info("Goodbye")
 
 
-async def _run_once() -> None:
-    """Run all tasks once and exit."""
-    components, _tz, settings = build_components()
-    scheduler = TradingScheduler(components, timezone=_tz, scheduler_cfg=settings.scheduler)
-    await scheduler.run_once()
+async def _run_signals(*, initial_capital: float | None = None) -> None:
+    """Manually trigger T6 signal generation (and T4 if today's snapshot is missing)."""
+    components, tz, settings = build_components()
+    if initial_capital is not None:
+        components.initial_capital = initial_capital
+        logger.info("Override initial_capital=%.2f", initial_capital)
+    scheduler = TradingScheduler(components, timezone=tz, scheduler_cfg=settings.scheduler)
+    logger.info("=== run signals: manual T6 trigger ===")
+    await scheduler.run_signals()
+    logger.info("=== run signals complete ===")
 
 
-async def _run_init() -> None:
-    """First-time initialization: sync reference data + domestic market only."""
+async def _run_init(*, force: bool = False) -> None:
+    """First-time cold-start initialization.
+
+    Executes the full bootstrap sequence. Each step is skipped if its
+    output already looks fresh; use ``force=True`` to re-run everything.
+
+      1. Sync trading calendar + index constituents (T1 idempotent)
+      2. Backfill historical constituents + export pool YAML
+      3. Backfill daily bars for the historical pool
+      4. Backfill fundamentals (financial indicators + gross_margin + pub_dates)
+      5. Compute Alpha158 factor panel → data/factors.parquet
+      6. Train production model (single window, all history)
+    """
+    from datetime import datetime
+    from pathlib import Path
+
     components, _tz, settings = build_components()
-    scheduler = TradingScheduler(components, timezone=_tz, scheduler_cfg=settings.scheduler)
-    logger.info("=== init: syncing reference data + domestic market ===")
-    await scheduler.sync_reference_data()
-    await scheduler.sync_domestic_market()
-    logger.info("=== init complete ===")
+    db = components.db
+    sys_cfg = settings.system
+    init_start = sys_cfg.get("init_backfill_start", "2019-01-01")
+    pool_cfg = settings.stock_pool
+    pool_yaml_path = "config/backfill_stock_pool.yaml"
+
+    logger.info("=== run init: cold-start initialization (force=%s) ===", force)
+    logger.info("    backfill start date: %s", init_start)
+
+    # ------------------------------------------------------------------
+    # 1. trading calendar + current-date constituents (cheap)
+    # ------------------------------------------------------------------
+    rows = db.load_all_index_constituents()
+    if force or not rows:
+        logger.info("[1/6] sync trading calendar + index constituents...")
+        components.stock_pool.sync_trading_calendar()
+        components.stock_pool.sync_index_constituents()
+    else:
+        logger.info("[1/6] ⏭ skipped: index_constituents has %d rows", len(rows))
+
+    # ------------------------------------------------------------------
+    # 2. historical constituents backfill + pool YAML
+    # ------------------------------------------------------------------
+    pool_yaml = Path(pool_yaml_path)
+    if force or not pool_yaml.exists():
+        logger.info("[2/6] backfill historical constituents (semi-annual sampling)...")
+        from pangu.tz import today_str
+
+        count, all_symbols = components.stock_pool.sync_historical_constituents(init_start, today_str())
+        logger.info("    %d records, %d unique symbols", count, len(all_symbols))
+        pool_yaml.parent.mkdir(parents=True, exist_ok=True)
+        with open(pool_yaml, "w") as f:
+            f.write("symbols:\n")
+            for sym in sorted(all_symbols):
+                f.write(f'- "{sym}"\n')
+        logger.info("    exported pool to %s", pool_yaml)
+    else:
+        logger.info("[2/6] ⏭ skipped: %s already exists", pool_yaml)
+
+    # Load pool for downstream steps
+    import yaml
+
+    with open(pool_yaml) as f:
+        pool_data = yaml.safe_load(f) or {}
+    pool = [str(s) for s in (pool_data.get("symbols") or [])]
+    logger.info("    using %d-stock pool from %s", len(pool), pool_yaml)
+
+    # ------------------------------------------------------------------
+    # 3. backfill daily bars
+    # ------------------------------------------------------------------
+    from datetime import timedelta as _td
+
+    from pangu.tz import today_str as _today_str
+
+    latest_bar = db.get_latest_bar_date()
+    bars_stale = (
+        latest_bar is None or (datetime.now().date() - datetime.strptime(latest_bar, "%Y-%m-%d").date()).days > 7
+    )
+    # Pool-aware coverage: require ≥95% of pool symbols to have a bar within
+    # the last 30 calendar days (handles holiday gaps). A global row count
+    # could pass with massive coverage gaps in a partial backfill.
+    coverage_since = (datetime.now().date() - _td(days=30)).strftime("%Y-%m-%d")
+    covered_syms = db.count_symbols_with_bars(pool, coverage_since) if pool else 0
+    pool_covered = len(pool) > 0 and covered_syms >= int(0.95 * len(pool))
+    if force or bars_stale or not pool_covered:
+        logger.info(
+            "[3/6] backfill daily bars (%d stocks, this may take hours; coverage %d/%d)...",
+            len(pool),
+            covered_syms,
+            len(pool),
+        )
+        today = _today_str()
+        ok, fail = 0, 0
+        for i, sym in enumerate(pool, 1):
+            try:
+                df = components.market.get_daily_bars(sym, init_start, today, force=force)
+                if df is not None and not df.empty:
+                    ok += 1
+                else:
+                    fail += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+                logger.warning("    failed: %s", sym, exc_info=True)
+            if i % 50 == 0 or i == len(pool):
+                logger.info("    progress %d/%d (ok=%d fail=%d)", i, len(pool), ok, fail)
+        # also backfill index bars
+        for idx_code in pool_cfg.get("indices", ["000300"]):
+            try:
+                components.market.get_index_daily_bars(idx_code, init_start, today, force=force)
+                logger.info("    index %s synced", idx_code)
+            except Exception:  # noqa: BLE001
+                logger.warning("    index %s failed", idx_code, exc_info=True)
+    else:
+        logger.info(
+            "[3/6] ⏭ skipped: pool coverage %d/%d, latest=%s",
+            covered_syms,
+            len(pool),
+            latest_bar,
+        )
+
+    # ------------------------------------------------------------------
+    # 4. backfill fundamentals
+    # ------------------------------------------------------------------
+    latest_pub = db.get_latest_fundamentals_pub_date()
+    pub_stale = (
+        latest_pub is None or (datetime.now().date() - datetime.strptime(latest_pub, "%Y-%m-%d").date()).days > 120
+    )
+    # Pool-aware fundamentals coverage: ≥90% of pool symbols should have
+    # at least one quarterly row in the past 200 days (one fiscal quarter
+    # cycle + reporting lag).
+    fund_since = (datetime.now().date() - _td(days=200)).strftime("%Y-%m-%d")
+    covered_funds = db.count_symbols_with_fundamentals(pool, fund_since) if pool else 0
+    pool_funds_covered = len(pool) > 0 and covered_funds >= int(0.90 * len(pool))
+    if force or pub_stale or not pool_funds_covered:
+        logger.info(
+            "[4/6] backfill fundamentals + gross_margin + pub_dates (coverage %d/%d)...",
+            covered_funds,
+            len(pool),
+        )
+        today = _today_str()
+        ok, fail = 0, 0
+        for i, sym in enumerate(pool, 1):
+            try:
+                df = components.fundamental.get_financial_indicator(sym, start=init_start, force=force)
+                if df is not None and not df.empty:
+                    ok += 1
+                else:
+                    fail += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+                logger.warning("    fundamentals failed: %s", sym, exc_info=True)
+            if i % 50 == 0 or i == len(pool):
+                logger.info("    progress %d/%d (ok=%d fail=%d)", i, len(pool), ok, fail)
+        components.fundamental.refresh_gross_margin(init_start, today)
+        components.fundamental.refresh_pub_dates(init_start, today)
+    else:
+        logger.info(
+            "[4/6] ⏭ skipped: fundamentals pool coverage %d/%d, latest pub_date=%s",
+            covered_funds,
+            len(pool),
+            latest_pub,
+        )
+
+    # ------------------------------------------------------------------
+    # 5. compute Alpha158 factors
+    # ------------------------------------------------------------------
+    factors_path = Path("data/factors.parquet")
+    latest_bar = db.get_latest_bar_date()  # refresh
+    fresh_factors = (
+        factors_path.exists()
+        and latest_bar is not None
+        and factors_path.stat().st_mtime > datetime.strptime(latest_bar, "%Y-%m-%d").timestamp()
+    )
+    if force or not fresh_factors:
+        logger.info("[5/6] compute Alpha158 factor panel...")
+        from pangu.factor.alpha158 import Alpha158Engine
+
+        engine = Alpha158Engine()
+        end_date = latest_bar or _today_str()
+        bars: list = []
+        funds: list = []
+        for sym in pool:
+            b = db.load_daily_bars(sym, init_start, end_date)
+            if b is not None and not b.empty:
+                bars.append(b)
+            f = db.load_fundamentals_filled(sym, init_start, end_date)
+            if f is not None and not f.empty:
+                funds.append(f)
+        import pandas as pd
+
+        all_bars = pd.concat(bars, ignore_index=True) if bars else pd.DataFrame()
+        all_funds = pd.concat(funds, ignore_index=True) if funds else pd.DataFrame()
+        panel = engine.compute(all_bars, all_funds)
+        factors_path.parent.mkdir(parents=True, exist_ok=True)
+        panel.to_parquet(factors_path)
+        logger.info(
+            "    factors written: %s (%s rows × %d cols)",
+            factors_path,
+            f"{len(panel):,}",
+            panel.shape[1],
+        )
+    else:
+        logger.info("[5/6] ⏭ skipped: %s up to date", factors_path)
+
+    # ------------------------------------------------------------------
+    # 6. train production model
+    # ------------------------------------------------------------------
+    ml_cfg = settings.ml
+    model_dir = Path(ml_cfg.get("model_dir", "models"))
+    fresh_model = False
+    age_days = float("inf")
+    if model_dir.exists():
+        model_files = list(model_dir.glob("wf_window_*_seed*.txt"))
+        if model_files:
+            newest = max(model_files, key=lambda p: p.stat().st_mtime)
+            age_days = (datetime.now().timestamp() - newest.stat().st_mtime) / 86400.0
+            fresh_model = age_days < 30
+    if force or not fresh_model:
+        logger.info("[6/6] train production model (single window, all history)...")
+        from pangu.ml.model import train as _train
+
+        _train(
+            storage=db,
+            factors_path=str(factors_path) if factors_path.exists() else None,
+            model_dir=str(model_dir),
+            first_train_start=ml_cfg.get("first_train_start", "2020-01-01"),
+            val_months=ml_cfg.get("val_months", 3),
+            time_decay_halflife=ml_cfg.get("time_decay_halflife", 120),
+            n_seeds=ml_cfg.get("n_seeds", 5),
+        )
+    else:
+        logger.info("[6/6] ⏭ skipped: model in %s is %.1f days old", model_dir, age_days)
+
+    logger.info("=== run init complete ===")
 
 
 def main() -> None:
     """Entry point for ``python -m pangu.main``."""
     if "--init" in sys.argv:
         logger.info("=== PanGu — init mode ===")
-        asyncio.run(_run_init())
-    elif "--once" in sys.argv:
-        logger.info("=== PanGu — run once ===")
-        asyncio.run(_run_once())
+        asyncio.run(_run_init(force="--force" in sys.argv))
+    elif "--signals" in sys.argv:
+        logger.info("=== PanGu — signals mode ===")
+        asyncio.run(_run_signals())
     else:
         logger.info("=== PanGu — scheduler mode ===")
         asyncio.run(_run_scheduler())

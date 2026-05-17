@@ -1,4 +1,12 @@
-"""Tests for TradingScheduler (M5.2)."""
+"""Tests for TradingScheduler — registration, trading-day gate, run_signals.
+
+Task-specific behaviour is covered in tests/test_tasks/*. Here we focus on
+the scheduler-level concerns:
+
+* All expected jobs are registered with the right ids
+* ``_run_if_trading_day`` honours the calendar
+* ``run_signals`` invokes T6 (and conditionally T4)
+"""
 
 from __future__ import annotations
 
@@ -16,67 +24,46 @@ from pangu.scheduler import Components, TradingScheduler
 
 
 @pytest.fixture
-def mock_components() -> Components:
-    """Build a Components instance with all mocked dependencies."""
+def mock_components(tmp_path) -> Components:
+    """Build a Components instance with mocked dependencies (ML path enabled)."""
     db = MagicMock()
     db.is_trading_day.return_value = True
-    db.load_factor_pool_latest.return_value = pd.DataFrame()
-    db.save_factor_pool = MagicMock()
-    db.save_trade_signal = MagicMock()
+    db.load_all_index_constituents.return_value = []
+    db.cleanup_old_news.return_value = 0
+    db.cleanup_old_task_runs.return_value = 0
+    db.get_latest_bar_date.return_value = None
+    db.get_latest_news_timestamp.return_value = None
+    db.load_latest_global_snapshots.return_value = pd.DataFrame()
 
     market = MagicMock()
-    market.get_global_snapshot.return_value = pd.DataFrame(
-        {"name": ["S&P500"], "latest_price": [5000.0], "change_pct": [0.5]}
-    )
-    market.get_daily_bars.return_value = pd.DataFrame({
-        "date": ["2026-02-19"],
-        "open": [10.0], "high": [11.0], "low": [9.5], "close": [10.5],
-        "volume": [1000000],
-    })
+    market.get_global_snapshot.return_value = pd.DataFrame()
+    market.get_daily_bars.return_value = pd.DataFrame()
+    market.get_index_daily_bars = MagicMock(return_value=pd.DataFrame())
 
     news = MagicMock()
     news.get_latest_news.return_value = []
-    news.get_stock_news.return_value = []
-    news.get_announcements.return_value = []
 
     fundamental = MagicMock()
+    fundamental.get_financial_indicator.return_value = pd.DataFrame()
+    fundamental.refresh_gross_margin = MagicMock(return_value=(0, 0))
+    fundamental.refresh_pub_dates = MagicMock(return_value=(0, 0))
 
     stock_pool = MagicMock()
-    stock_pool.get_watchlist.return_value = ["600519"]
-    stock_pool.get_active_pool.return_value = ["600519"]
     stock_pool.get_all_symbols.return_value = ["600519"]
-    from pangu.models import StockMeta
-    stock_pool.get_stock_metadata.return_value = {"600519": StockMeta(name="贵州茅台", sector="白酒")}
     stock_pool.sync_trading_calendar.return_value = 0
-    stock_pool.sync_index_constituents = MagicMock(return_value=0)
+    stock_pool.sync_index_constituents.return_value = 0
 
     tech_engine = MagicMock()
-    tech_engine.compute.return_value = pd.DataFrame({
-        "close": [10.5], "rsi_14": [55.0], "macd_hist": [0.1],
-    })
-
     fund_engine = MagicMock()
-    fund_engine.compute.return_value = pd.DataFrame(
-        {"pe_ttm": [20.0], "pb": [2.0]}, index=["600519"],
-    )
-
-    macro_engine = MagicMock()
-    macro_engine.compute.return_value = {"global_risk": -0.5, "macro_adj": 0.0}
-
-    factor_strategy = MagicMock()
-    factor_strategy.generate_signals.return_value = (
-        pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
-        [],
-    )
-    factor_strategy._build_factor_matrix.return_value = pd.DataFrame(
-        {"rsi_14": [55.0]}, index=["600519"],
-    )
-
     judge_engine = MagicMock()
-    judge_engine.judge_pool = AsyncMock(return_value=[])
 
     notif_manager = MagicMock()
-    notif_manager.notify = AsyncMock(return_value={"FeishuNotifier": True})
+    notif_manager.notify_text = AsyncMock(return_value={"FakeChannel": True})
+    notif_manager.notify_markdown = AsyncMock(return_value={"FakeChannel": True})
+
+    ml_strategy = MagicMock()
+    portfolio_state = MagicMock()
+    portfolio_state.load.return_value = None
 
     return Components(
         db=db,
@@ -86,11 +73,12 @@ def mock_components() -> Components:
         stock_pool=stock_pool,
         tech_engine=tech_engine,
         fund_engine=fund_engine,
-        macro_engine=macro_engine,
-        factor_strategy=factor_strategy,
         judge_engine=judge_engine,
         notif_manager=notif_manager,
-        watchlist_path="config/watchlist.yaml",
+        watchlist_path=str(tmp_path / "watchlist.yaml"),
+        ml_strategy=ml_strategy,
+        ml_enabled=True,
+        portfolio_state=portfolio_state,
     )
 
 
@@ -105,21 +93,36 @@ def scheduler(mock_components: Components) -> TradingScheduler:
 
 
 class TestJobRegistration:
-    def test_five_jobs_registered(self, scheduler: TradingScheduler) -> None:
-        jobs = scheduler._scheduler.get_jobs()
-        assert len(jobs) == 6
-
-    def test_job_ids(self, scheduler: TradingScheduler) -> None:
+    def test_all_jobs_registered(self, scheduler: TradingScheduler) -> None:
+        # T1-T6: data sync (T1-T4) → model (T5) → signal (T6)
         job_ids = {j.id for j in scheduler._scheduler.get_jobs()}
-        expected = {
-            "t1_sync_global_market",
+        assert job_ids == {
+            "t1_sync_reference_data",
             "t2_poll_news",
             "t3_sync_domestic_market",
-            "t4_generate_signals",
-            "t5_sync_reference_data",
-            "t6_verify_signals",
+            "t4_sync_global_market",
+            "t5_update_model",
+            "t6_generate_signals",
         }
-        assert job_ids == expected
+
+    def test_t5_omitted_when_ml_not_configured(self, mock_components) -> None:
+        # T5 is gated by ml_enabled (not ml_strategy) so a fresh deploy
+        # with ml.enabled=true but no models still schedules T5.
+        mock_components.ml_strategy = None
+        mock_components.ml_enabled = False
+        sched = TradingScheduler(mock_components, timezone="Asia/Shanghai")
+        job_ids = {j.id for j in sched._scheduler.get_jobs()}
+        assert "t5_update_model" not in job_ids
+
+    def test_t5_scheduled_when_ml_enabled_but_no_models(self, mock_components) -> None:
+        # Bootstrap scenario: ml_enabled=True, but models haven't been
+        # trained yet (ml_strategy is None). T5 must still be scheduled
+        # so the monthly cron can produce the first set of models.
+        mock_components.ml_strategy = None
+        mock_components.ml_enabled = True
+        sched = TradingScheduler(mock_components, timezone="Asia/Shanghai")
+        job_ids = {j.id for j in sched._scheduler.get_jobs()}
+        assert "t5_update_model" in job_ids
 
     @pytest.mark.asyncio
     async def test_start_and_shutdown(self, scheduler: TradingScheduler) -> None:
@@ -154,258 +157,67 @@ class TestTradingDayGate:
 
 
 # ---------------------------------------------------------------------------
-# T1: Sync global market
+# Smoke tests for each wrapper — they just delegate to the underlying task
 # ---------------------------------------------------------------------------
 
 
-class TestT1:
+class TestTaskWrappers:
     @pytest.mark.asyncio
-    async def test_fetches_snapshot(self, scheduler: TradingScheduler) -> None:
-        await scheduler.sync_global_market()
-        scheduler._c.market.get_global_snapshot.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_computes_macro_factors(self, scheduler: TradingScheduler) -> None:
-        await scheduler.sync_global_market()
-        scheduler._c.macro_engine.compute.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_handles_failure(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.market.get_global_snapshot.side_effect = RuntimeError("network")
-        await scheduler.sync_global_market()  # should not raise
-        # macro_engine still called with empty DataFrame
-        scheduler._c.macro_engine.compute.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# T2: Poll news
-# ---------------------------------------------------------------------------
-
-
-class TestT2:
-    @pytest.mark.asyncio
-    async def test_fetches_telegraph(self, scheduler: TradingScheduler) -> None:
-        await scheduler.poll_news()
-        scheduler._c.news.get_latest_news.assert_called_once_with(limit=50)
-
-    @pytest.mark.asyncio
-    async def test_cleans_old_news(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.db.cleanup_old_news.return_value = 5
-        await scheduler.poll_news()
-        scheduler._c.db.cleanup_old_news.assert_called_once_with(30)
-
-    @pytest.mark.asyncio
-    async def test_handles_failure(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.news.get_latest_news.side_effect = RuntimeError("fail")
-        await scheduler.poll_news()  # should not raise
-
-
-# ---------------------------------------------------------------------------
-# T3: Sync domestic market
-# ---------------------------------------------------------------------------
-
-
-class TestT3:
-    @pytest.mark.asyncio
-    async def test_syncs_bars_and_fundamentals(self, scheduler: TradingScheduler) -> None:
-        await scheduler.sync_domestic_market()
-        scheduler._c.stock_pool.get_all_symbols.assert_called_once()
-        scheduler._c.market.get_daily_bars.assert_called()
-        scheduler._c.fundamental.get_financial_indicator.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_handles_partial_failure(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.market.get_daily_bars.side_effect = RuntimeError("fail")
-        await scheduler.sync_domestic_market()  # should not raise
-
-
-# ---------------------------------------------------------------------------
-# T4: Generate signals
-# ---------------------------------------------------------------------------
-
-
-class TestT4:
-    @pytest.mark.asyncio
-    async def test_full_pipeline(self, scheduler: TradingScheduler) -> None:
-        from pangu.models import Action, SignalStatus, TradeSignal
-        from pangu.tz import now
-
-        sig = TradeSignal(
-            timestamp=now(), symbol="600519", name="贵州茅台",
-            action=Action.HOLD, signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0, price=1850.0, confidence=0.6,
-            source="llm_judge", reason="test",
-        )
-        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[sig])
-        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
-            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
-        )
-        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
-
-        await scheduler.generate_signals()
-
-        scheduler._c.stock_pool.get_all_symbols.assert_called()
-        scheduler._c.db.save_trade_signal.assert_called_once()
-        scheduler._c.factor_strategy.generate_signals.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_reads_telegraph_from_db(self, scheduler: TradingScheduler) -> None:
-        """T4 should read telegraph from DB (T2 accumulated), not API."""
-        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
-        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
-            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
-        )
-        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
-
-        await scheduler.generate_signals()
-
-        scheduler._c.db.load_recent_news.assert_called_once_with(hours=24)
-
-    @pytest.mark.asyncio
-    async def test_uses_factor_signals_for_candidates(self, scheduler: TradingScheduler) -> None:
-        """LLM candidates = factor_signals symbols + watchlist, not full pool."""
-        from pangu.models import Action, SignalStatus, TradeSignal
-        from pangu.tz import now
-
-        # Factor strategy returns pool of 3 stocks but only 1 signal
-        buy_sig = TradeSignal(
-            timestamp=now(), symbol="000001", name="平安银行",
-            action=Action.BUY, signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0, price=10.0, confidence=0.8,
-            source="factor", reason="top",
-        )
-        scheduler._c.factor_strategy.generate_signals.return_value = (
-            pd.DataFrame({
-                "symbol": ["000001", "000002", "000003"],
-                "score": [0.9, 0.7, 0.5],
-                "rank": [1, 2, 3],
-            }),
-            [buy_sig],  # only 000001 has a factor signal
-        )
-        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
-        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
-            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
-        )
-        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
-
-        await scheduler.generate_signals()
-
-        # build_evidence_pool called with factor signal (000001) + watchlist (600519)
-        call_args = scheduler._c.judge_engine.build_evidence_pool.call_args
-        candidate_symbols = call_args[0][0]
-        assert "000001" in candidate_symbols  # factor signal
-        assert "600519" in candidate_symbols  # watchlist
-        assert "000002" not in candidate_symbols  # not selected by factor strategy
-        assert "000003" not in candidate_symbols  # not selected by factor strategy
-
-    @pytest.mark.asyncio
-    async def test_signal_status_new_entry(self, scheduler: TradingScheduler) -> None:
-        """Stock in current pool but not in previous → NEW_ENTRY."""
-        from pangu.models import Action, SignalStatus, TradeSignal
-        from pangu.tz import now
-
-        sig = TradeSignal(
-            timestamp=now(), symbol="600519", name="贵州茅台",
-            action=Action.BUY, signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0, price=1850.0, confidence=0.8,
-            source="llm_judge", reason="test",
-        )
-        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[sig])
-        # Previous pool is empty → all current stocks are NEW_ENTRY
-        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
-            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
-        )
-        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
-        # Factor strategy returns 600519 in the pool
-        scheduler._c.factor_strategy.generate_signals.return_value = (
-            pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
-            [],
-        )
-
-        await scheduler.generate_signals()
-
-        saved_signal = scheduler._c.db.save_trade_signal.call_args[0][0]
-        assert saved_signal.signal_status == SignalStatus.NEW_ENTRY
-
-    @pytest.mark.asyncio
-    async def test_signal_status_sustained(self, scheduler: TradingScheduler) -> None:
-        """Stock in both current and previous pool → SUSTAINED."""
-        from pangu.models import Action, SignalStatus, TradeSignal
-        from pangu.tz import now
-
-        sig = TradeSignal(
-            timestamp=now(), symbol="600519", name="贵州茅台",
-            action=Action.HOLD, signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0, price=1850.0, confidence=0.7,
-            source="llm_judge", reason="test",
-        )
-        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[sig])
-        # Previous pool had 600519
-        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
-            return_value=pd.DataFrame({
-                "symbol": ["600519"], "score": [0.75], "rank": [1],
-            }),
-        )
-        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
-        scheduler._c.factor_strategy.generate_signals.return_value = (
-            pd.DataFrame({"symbol": ["600519"], "score": [0.8], "rank": [1]}),
-            [],
-        )
-
-        await scheduler.generate_signals()
-
-        saved_signal = scheduler._c.db.save_trade_signal.call_args[0][0]
-        assert saved_signal.signal_status == SignalStatus.SUSTAINED
-        assert saved_signal.prev_factor_score == pytest.approx(0.75)
-
-
-# ---------------------------------------------------------------------------
-# T5: Sync reference data
-# ---------------------------------------------------------------------------
-
-
-class TestT5:
-    @pytest.mark.asyncio
-    async def test_syncs_calendar_and_index_constituents(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.stock_pool.sync_index_constituents = MagicMock(return_value=300)
+    async def test_t1_syncs_calendar_and_constituents(
+        self,
+        scheduler: TradingScheduler,
+    ) -> None:
         await scheduler.sync_reference_data()
         scheduler._c.stock_pool.sync_trading_calendar.assert_called_once()
         scheduler._c.stock_pool.sync_index_constituents.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_handles_calendar_failure(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.stock_pool.sync_trading_calendar.side_effect = RuntimeError("fail")
-        scheduler._c.stock_pool.sync_index_constituents = MagicMock(return_value=300)
-        await scheduler.sync_reference_data()  # should not raise
-        # Index constituents sync should still be called
-        scheduler._c.stock_pool.sync_index_constituents.assert_called_once()
+    async def test_t2_polls_news_and_cleans_up(self, scheduler: TradingScheduler) -> None:
+        await scheduler.poll_news()
+        scheduler._c.news.get_latest_news.assert_called_once_with(limit=50)
+        scheduler._c.db.cleanup_old_news.assert_called_once_with(30)
+        scheduler._c.db.cleanup_old_task_runs.assert_called_once_with(30)
 
     @pytest.mark.asyncio
-    async def test_handles_index_constituents_failure(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.stock_pool.sync_index_constituents = MagicMock(side_effect=RuntimeError("fail"))
-        await scheduler.sync_reference_data()  # should not raise
+    async def test_t3_syncs_bars_and_fundamentals(self, scheduler: TradingScheduler) -> None:
+        await scheduler.sync_domestic_market()
+        scheduler._c.market.get_daily_bars.assert_called()
+        scheduler._c.fundamental.get_financial_indicator.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_t4_calls_market_snapshot(self, scheduler: TradingScheduler) -> None:
+        await scheduler.sync_global_market()
+        scheduler._c.market.get_global_snapshot.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# run_once
+# run_signals (manual T6 trigger)
 # ---------------------------------------------------------------------------
 
 
-class TestRunOnce:
+class TestRunSignals:
     @pytest.mark.asyncio
-    async def test_runs_all_tasks(self, scheduler: TradingScheduler) -> None:
-        scheduler._c.judge_engine.judge_pool = AsyncMock(return_value=[])
-        scheduler._c.db.load_factor_pool_previous_day = MagicMock(
-            return_value=pd.DataFrame(columns=["symbol", "score", "rank"]),
+    async def test_runs_t4_when_snapshot_missing(self, scheduler: TradingScheduler) -> None:
+        scheduler._c.db.load_latest_global_snapshots.return_value = pd.DataFrame()
+        scheduler.sync_global_market = AsyncMock()
+        scheduler.generate_signals = AsyncMock()
+
+        await scheduler.run_signals()
+
+        scheduler.sync_global_market.assert_awaited_once()
+        scheduler.generate_signals.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_t4_when_snapshot_fresh(self, scheduler: TradingScheduler) -> None:
+        from pangu.tz import today_str
+
+        scheduler._c.db.load_latest_global_snapshots.return_value = pd.DataFrame(
+            {"date": [today_str()], "symbol": ["^GSPC"], "close": [4000.0]}
         )
-        scheduler._c.db.load_recent_news = MagicMock(return_value=[])
+        scheduler.sync_global_market = AsyncMock()
+        scheduler.generate_signals = AsyncMock()
 
-        await scheduler.run_once()
+        await scheduler.run_signals()
 
-        # All 5 tasks should have been called
-        scheduler._c.stock_pool.sync_trading_calendar.assert_called()  # T5
-        scheduler._c.market.get_daily_bars.assert_called()  # T3
-        scheduler._c.fundamental.get_financial_indicator.assert_called()  # T3
-        scheduler._c.market.get_global_snapshot.assert_called()  # T1 + T4
-        scheduler._c.news.get_latest_news.assert_called()  # T2
-        scheduler._c.factor_strategy.generate_signals.assert_called()  # T4
+        scheduler.sync_global_market.assert_not_awaited()
+        scheduler.generate_signals.assert_awaited_once()

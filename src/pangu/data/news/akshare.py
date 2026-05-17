@@ -129,14 +129,16 @@ class AkShareNewsDataProvider(ThrottleMixin):
 
             ts = self._parse_timestamp(pub_time, "")
 
-            items.append(NewsItem(
-                timestamp=ts,
-                title=title,
-                content=content,
-                source=source,
-                region=Region.DOMESTIC,
-                symbols=[symbol],
-            ))
+            items.append(
+                NewsItem(
+                    timestamp=ts,
+                    title=title,
+                    content=content,
+                    source=source,
+                    region=Region.DOMESTIC,
+                    symbols=[symbol],
+                )
+            )
 
         if self._storage is not None and items:
             self._storage.save_news_items(items)
@@ -180,15 +182,17 @@ class AkShareNewsDataProvider(ThrottleMixin):
             url = str(row.get("公告链接", ""))
             pub_time = str(row.get("公告时间", ""))
             ts = self._parse_timestamp(pub_time, "")
-            items.append(NewsItem(
-                timestamp=ts,
-                title=title,
-                content=url,
-                source="巨潮",
-                region=Region.DOMESTIC,
-                symbols=[symbol],
-                category=NewsCategory.ANNOUNCEMENT,
-            ))
+            items.append(
+                NewsItem(
+                    timestamp=ts,
+                    title=title,
+                    content=url,
+                    source="巨潮",
+                    region=Region.DOMESTIC,
+                    symbols=[symbol],
+                    category=NewsCategory.ANNOUNCEMENT,
+                )
+            )
 
         if self._storage is not None and items:
             self._storage.save_news_items(items)

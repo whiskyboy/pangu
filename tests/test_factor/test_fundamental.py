@@ -11,14 +11,16 @@ from pangu.factor.fundamental import FundamentalFactorEngine
 # Helpers
 # ---------------------------------------------------------------------------
 
-_SAMPLE_DF = pd.DataFrame({
-    "symbol": ["601899", "600967", "000750"],
-    "pe_ttm": [15.2, 22.5, -8.0],
-    "pb": [2.8, 1.5, 0.9],
-    "roe_ttm": [18.5, 12.0, -5.0],
-    "revenue_yoy": [25.3, 10.5, -15.0],
-    "profit_yoy": [30.1, 8.2, -40.0],
-})
+_SAMPLE_DF = pd.DataFrame(
+    {
+        "symbol": ["601899", "600967", "000750"],
+        "pe_ttm": [15.2, 22.5, -8.0],
+        "pb": [2.8, 1.5, 0.9],
+        "roe_ttm": [18.5, 12.0, -5.0],
+        "revenue_yoy": [25.3, 10.5, -15.0],
+        "profit_yoy": [30.1, 8.2, -40.0],
+    }
+)
 
 
 @pytest.fixture

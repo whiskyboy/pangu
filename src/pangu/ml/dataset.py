@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 # Walk-Forward window definitions
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class WindowSplit:
     """Date ranges for one Walk-Forward window."""
@@ -92,15 +93,17 @@ def generate_walk_forward_windows(
         if te_end > cutoff:
             break
 
-        windows.append(WindowSplit(
-            window_id=i + 1,
-            train_start=t_start.strftime("%Y-%m-%d"),
-            train_end=t_end.strftime("%Y-%m-%d"),
-            val_start=v_start.strftime("%Y-%m-%d"),
-            val_end=v_end.strftime("%Y-%m-%d"),
-            test_start=te_start.strftime("%Y-%m-%d"),
-            test_end=te_end.strftime("%Y-%m-%d"),
-        ))
+        windows.append(
+            WindowSplit(
+                window_id=i + 1,
+                train_start=t_start.strftime("%Y-%m-%d"),
+                train_end=t_end.strftime("%Y-%m-%d"),
+                val_start=v_start.strftime("%Y-%m-%d"),
+                val_end=v_end.strftime("%Y-%m-%d"),
+                test_start=te_start.strftime("%Y-%m-%d"),
+                test_end=te_end.strftime("%Y-%m-%d"),
+            )
+        )
         i += 1
 
     if not windows:
@@ -116,6 +119,7 @@ def generate_walk_forward_windows(
 # ---------------------------------------------------------------------------
 # Factor panel loading
 # ---------------------------------------------------------------------------
+
 
 def load_factor_panel(
     storage: "DataStorage",
@@ -176,6 +180,7 @@ def load_factor_panel(
 # ---------------------------------------------------------------------------
 # Label computation
 # ---------------------------------------------------------------------------
+
 
 def compute_labels(
     storage: "DataStorage",
@@ -240,8 +245,7 @@ def compute_labels(
         if horizon_weights is not None:
             if len(horizon_weights) != len(horizon_list):
                 raise ValueError(
-                    f"horizon_weights length {len(horizon_weights)} != "
-                    f"horizons length {len(horizon_list)}"
+                    f"horizon_weights length {len(horizon_weights)} != horizons length {len(horizon_list)}"
                 )
             paired = sorted(zip(horizon_list, horizon_weights))
             horizon_list = [h for h, _ in paired]
@@ -316,6 +320,7 @@ def compute_labels(
 # LambdaRank helpers
 # ---------------------------------------------------------------------------
 
+
 def discretize_labels(labels: pd.Series, n_bins: int = 10) -> pd.Series:
     """Per-day percentile discretization for LambdaRank.
 
@@ -368,16 +373,14 @@ def compute_groups(index: pd.MultiIndex) -> list[int]:
     dates = index.get_level_values("date")
     # Verify data is sorted by date — LGBMRanker requires contiguous groups
     if not dates.is_monotonic_increasing:
-        raise ValueError(
-            "Index must be sorted by date for LambdaRank groups. "
-            "Call .sort_index(level='date') first."
-        )
+        raise ValueError("Index must be sorted by date for LambdaRank groups. Call .sort_index(level='date') first.")
     return dates.value_counts().sort_index().tolist()
 
 
 # ---------------------------------------------------------------------------
 # Sample weighting
 # ---------------------------------------------------------------------------
+
 
 def compute_time_decay_weights(
     index: pd.MultiIndex,
@@ -419,6 +422,7 @@ def compute_time_decay_weights(
 # ---------------------------------------------------------------------------
 # Window dataset builder
 # ---------------------------------------------------------------------------
+
 
 def build_window_datasets(
     panel: pd.DataFrame,
@@ -481,11 +485,9 @@ def build_window_datasets(
             rng = np.random.RandomState(42)
             sampled_dates = []
             for block_start in range(0, len(unique_dates), train_subsample_stride):
-                block = unique_dates[block_start:block_start + train_subsample_stride]
+                block = unique_dates[block_start : block_start + train_subsample_stride]
                 sampled_dates.append(rng.choice(block))
-            subset = subset.loc[
-                subset.index.get_level_values("date").isin(sampled_dates)
-            ]
+            subset = subset.loc[subset.index.get_level_values("date").isin(sampled_dates)]
 
         if subset.empty:
             result[split_name] = (pd.DataFrame(), pd.Series(dtype="float64"))

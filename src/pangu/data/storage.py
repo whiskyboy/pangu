@@ -1,14 +1,15 @@
-"""SQLite storage layer — PRD §7.1.
+"""SQLite storage layer.
 
-Provides a thin wrapper around sqlite3 for persisting daily bars,
-news items, trade signals, fundamentals, data sync log, and the
-trading calendar.
+Provides a thin wrapper around sqlite3 for persisting daily bars, news
+items, trade signals, fundamentals, the trading calendar, weekly
+portfolio snapshots, and task-run history.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta
@@ -82,9 +83,6 @@ CREATE TABLE IF NOT EXISTS trade_signals (
     pushed           INTEGER DEFAULT 0,
     metadata         TEXT,
     signal_date      TEXT,
-    return_1d        REAL,
-    return_3d        REAL,
-    return_5d        REAL,
     UNIQUE (symbol, action, signal_date)
 );
 
@@ -191,6 +189,29 @@ CREATE TABLE IF NOT EXISTS index_constituents (
     sector        TEXT,              -- 东财行业分类
     PRIMARY KEY (date, index_code, symbol)
 );
+
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    date          TEXT PRIMARY KEY,        -- YYYY-MM-DD
+    symbols_json  TEXT NOT NULL,           -- JSON array of holdings on this date
+    is_rebalance  INTEGER NOT NULL         -- 1 = rebalance day, 0 = regular EOD
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date
+    ON portfolio_snapshots(date);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id       TEXT NOT NULL,           -- 'T1' .. 'T6'
+    name          TEXT NOT NULL,
+    started_at    TEXT NOT NULL,
+    completed_at  TEXT NOT NULL,
+    status        TEXT NOT NULL,           -- 'success' / 'failed'
+    error_msg     TEXT,
+    duration_ms   INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_runs_task_started
+    ON task_runs(task_id, started_at DESC);
 """
 
 
@@ -198,6 +219,10 @@ class Database:
     """Thin SQLite wrapper for PanGu persistence."""
 
     def __init__(self, db_path: str = ":memory:") -> None:
+        if db_path != ":memory:":
+            parent = os.path.dirname(db_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._lock = threading.Lock()
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -216,21 +241,13 @@ class Database:
     def _migrate(self) -> None:
         """Apply schema migrations for existing databases."""
         # Add category column to news_items if missing
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(news_items)").fetchall()
-        }
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(news_items)").fetchall()}
         if "category" not in cols:
-            self._conn.execute(
-                "ALTER TABLE news_items ADD COLUMN category TEXT DEFAULT 'news'"
-            )
+            self._conn.execute("ALTER TABLE news_items ADD COLUMN category TEXT DEFAULT 'news'")
             self._conn.commit()
 
         # Migrate trade_signals: add signal_date + UNIQUE constraint
-        sig_cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(trade_signals)").fetchall()
-        }
+        sig_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(trade_signals)").fetchall()}
         if "signal_date" not in sig_cols:
             # SQLite can't ALTER TABLE ADD UNIQUE, so recreate the table
             self._conn.executescript("""
@@ -267,23 +284,10 @@ class Database:
                 DROP TABLE trade_signals;
                 ALTER TABLE trade_signals_new RENAME TO trade_signals;
             """)
-            # Re-read columns after migration
-            sig_cols = {
-                row[1]
-                for row in self._conn.execute("PRAGMA table_info(trade_signals)").fetchall()
-            }
-
-        # Migrate trade_signals: add return_1d/3d/5d columns
-        for col in ("return_1d", "return_3d", "return_5d"):
-            if col not in sig_cols:
-                self._conn.execute(f"ALTER TABLE trade_signals ADD COLUMN {col} REAL")
         self._conn.commit()
 
         # Migrate index_constituents: add date column, change PK
-        ic_cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(index_constituents)").fetchall()
-        }
+        ic_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(index_constituents)").fetchall()}
         if "updated_date" in ic_cols and "date" not in ic_cols:
             self._conn.executescript("""
                 ALTER TABLE index_constituents RENAME TO index_constituents_old;
@@ -303,18 +307,34 @@ class Database:
             self._conn.commit()
 
         # Migrate fundamentals: add new columns if missing
-        fund_cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(fundamentals)").fetchall()
-        }
+        fund_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(fundamentals)").fetchall()}
         new_fund_cols = [
-            "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
-            "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
-            "cashflow_to_profit", "ps_ttm", "pcf_ttm", "pub_date",
-            "roa", "operating_profit_ratio", "ocf_to_revenue",
-            "eps_weighted", "quick_ratio", "receivables_turnover", "inventory_turnover",
-            "cost_profit_ratio", "dividend_payout_ratio", "cash_ratio", "equity_ratio",
-            "shareholder_equity_ratio", "undistributed_per_share", "capital_reserve_per_share",
+            "net_profit_margin",
+            "gross_margin",
+            "debt_ratio",
+            "asset_turnover",
+            "current_ratio",
+            "equity_yoy",
+            "asset_yoy",
+            "cashflow_per_share",
+            "cashflow_to_profit",
+            "ps_ttm",
+            "pcf_ttm",
+            "pub_date",
+            "roa",
+            "operating_profit_ratio",
+            "ocf_to_revenue",
+            "eps_weighted",
+            "quick_ratio",
+            "receivables_turnover",
+            "inventory_turnover",
+            "cost_profit_ratio",
+            "dividend_payout_ratio",
+            "cash_ratio",
+            "equity_ratio",
+            "shareholder_equity_ratio",
+            "undistributed_per_share",
+            "capital_reserve_per_share",
         ]
         for col in new_fund_cols:
             if col not in fund_cols:
@@ -323,10 +343,7 @@ class Database:
         self._conn.commit()
 
         # Migrate daily_bars: add new columns if missing
-        bar_cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(daily_bars)").fetchall()
-        }
+        bar_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(daily_bars)").fetchall()}
         new_bar_cols = [
             ("turn", "REAL"),
             ("preclose", "REAL"),
@@ -361,6 +378,37 @@ class Database:
                     self._conn.execute(f"ALTER TABLE daily_bars DROP COLUMN {col}")
         self._conn.commit()
 
+        # Versioned migrations (PRAGMA user_version)
+        current_ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
+
+        # v1: task_runs reset after T1-T6 rename (old task_ids T1/T4/T5/T6/T7
+        # had different semantics; mixing them in history would be misleading).
+        if current_ver < 1:
+            self._conn.execute("DELETE FROM task_runs")
+            self._conn.execute("PRAGMA user_version = 1")
+            self._conn.commit()
+
+        # v2: drop nav/benchmark_nav from portfolio_snapshots (T6 weekly report
+        # removed; portfolio NAV is now tracked via pangu replay on demand).
+        if current_ver < 2:
+            ps_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(portfolio_snapshots)").fetchall()}
+            if "nav" in ps_cols or "benchmark_nav" in ps_cols:
+                self._conn.executescript("""
+                    ALTER TABLE portfolio_snapshots RENAME TO portfolio_snapshots_old;
+                    CREATE TABLE portfolio_snapshots (
+                        date          TEXT PRIMARY KEY,
+                        symbols_json  TEXT NOT NULL,
+                        is_rebalance  INTEGER NOT NULL
+                    );
+                    INSERT INTO portfolio_snapshots (date, symbols_json, is_rebalance)
+                    SELECT date, symbols_json, is_rebalance FROM portfolio_snapshots_old;
+                    DROP TABLE portfolio_snapshots_old;
+                    CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date
+                        ON portfolio_snapshots(date);
+                """)
+            self._conn.execute("PRAGMA user_version = 2")
+            self._conn.commit()
+
     # ------------------------------------------------------------------
     # daily_bars
     # ------------------------------------------------------------------
@@ -377,21 +425,23 @@ class Database:
 
         rows: list[tuple[Any, ...]] = []
         for _, r in df.iterrows():
-            rows.append((
-                symbol,
-                str(r["date"]),
-                r.get("open"),
-                r.get("high"),
-                r.get("low"),
-                r.get("close"),
-                r.get("volume"),
-                r.get("amount"),
-                r.get("adj_factor", 1.0),
-                r.get("turn"),
-                r.get("preclose"),
-                r.get("tradestatus"),
-                r.get("is_st"),
-            ))
+            rows.append(
+                (
+                    symbol,
+                    str(r["date"]),
+                    r.get("open"),
+                    r.get("high"),
+                    r.get("low"),
+                    r.get("close"),
+                    r.get("volume"),
+                    r.get("amount"),
+                    r.get("adj_factor", 1.0),
+                    r.get("turn"),
+                    r.get("preclose"),
+                    r.get("tradestatus"),
+                    r.get("is_st"),
+                )
+            )
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO daily_bars "
@@ -403,14 +453,11 @@ class Database:
             self._conn.commit()
         return len(rows)
 
-    def load_daily_bars(
-        self, symbol: str, start: str, end: str
-    ) -> pd.DataFrame:
+    def load_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Load daily bars for *symbol* between *start* and *end* (inclusive)."""
         with self._lock:
             return pd.read_sql(
-                "SELECT * FROM daily_bars WHERE symbol = ? AND date >= ? AND date <= ? "
-                "ORDER BY date",
+                "SELECT * FROM daily_bars WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date",
                 self._conn,
                 params=(symbol, start, end),
             )
@@ -487,9 +534,7 @@ class Database:
 
     def load_recent_news(self, hours: int = 24) -> list[NewsItem]:
         """Load news items from the last *hours* hours."""
-        cutoff = (
-            _now() - timedelta(hours=hours)
-        ).isoformat()
+        cutoff = (_now() - timedelta(hours=hours)).isoformat()
         with self._lock:
             rows = self._conn.execute(
                 "SELECT timestamp, title, content, source, region, category, symbols, sentiment "
@@ -516,9 +561,7 @@ class Database:
         """Delete news items older than *days* days. Returns count deleted."""
         cutoff = (_now() - timedelta(days=days)).isoformat()
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM news_items WHERE timestamp < ?", (cutoff,)
-            )
+            cur = self._conn.execute("DELETE FROM news_items WHERE timestamp < ?", (cutoff,))
             self._conn.commit()
             return cur.rowcount
 
@@ -573,9 +616,21 @@ class Database:
             ).fetchall()
         result: list[TradeSignal] = []
         for (
-            ts, symbol, name, action, signal_status, days_in_top_n,
-            price, confidence, source, reason,
-            stop_loss, take_profit, factor_score, prev_factor_score, metadata_json,
+            ts,
+            symbol,
+            name,
+            action,
+            signal_status,
+            days_in_top_n,
+            price,
+            confidence,
+            source,
+            reason,
+            stop_loss,
+            take_profit,
+            factor_score,
+            prev_factor_score,
+            metadata_json,
         ) in rows:
             result.append(
                 TradeSignal(
@@ -598,64 +653,6 @@ class Database:
             )
         return result
 
-    def load_unverified_signals(self, signal_date: str, lookback: int) -> list[dict]:
-        """Load signals from *signal_date* where return_{lookback}d is NULL.
-
-        Returns list of dicts with keys: id, symbol, name, action, price.
-        Only BUY/SELL signals are returned (HOLD is not verifiable).
-        """
-        col = f"return_{lookback}d"
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT id, symbol, name, action, price FROM trade_signals "
-                f"WHERE signal_date = ? AND {col} IS NULL "
-                f"AND action IN ('BUY', 'SELL')",
-                (signal_date,),
-            ).fetchall()
-        return [
-            {"id": r[0], "symbol": r[1], "name": r[2] or r[1], "action": r[3], "price": r[4]}
-            for r in rows
-        ]
-
-    def update_signal_return(self, signal_id: int, lookback: int, return_pct: float) -> None:
-        """Update return_{lookback}d for a signal."""
-        col = f"return_{lookback}d"
-        with self._lock:
-            self._conn.execute(
-                f"UPDATE trade_signals SET {col} = ? WHERE id = ?",
-                (return_pct, signal_id),
-            )
-            self._conn.commit()
-
-    def get_signal_returns(self, days: int = 30) -> dict[str, dict]:
-        """Compute strategy return stats over the last *days* days.
-
-        Returns ``{lookback: {"count": N, "avg_return": pct}}``.
-        Strategy return = return_pct for BUY, -return_pct for SELL.
-        """
-        results: dict[str, dict] = {}
-        for lb in (1, 3, 5):
-            col = f"return_{lb}d"
-            with self._lock:
-                rows = self._conn.execute(
-                    f"SELECT action, {col} FROM trade_signals "
-                    f"WHERE {col} IS NOT NULL "
-                    f"AND signal_date >= date('now', ?)",
-                    (f"-{days} days",),
-                ).fetchall()
-            if not rows:
-                results[f"{lb}d"] = {"count": 0, "avg_return": 0.0}
-                continue
-            total_return = sum(
-                ret if action == "BUY" else -ret
-                for action, ret in rows
-            )
-            results[f"{lb}d"] = {
-                "count": len(rows),
-                "avg_return": round(total_return / len(rows), 2),
-            }
-        return results
-
     # ------------------------------------------------------------------
     # trading_calendar
     # ------------------------------------------------------------------
@@ -673,9 +670,7 @@ class Database:
     def is_trading_day(self, date: str) -> bool:
         """Check if *date* is a trading day."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT 1 FROM trading_calendar WHERE date = ?", (date,)
-            ).fetchone()
+            row = self._conn.execute("SELECT 1 FROM trading_calendar WHERE date = ?", (date,)).fetchone()
         return row is not None
 
     def get_trading_day_offset(self, date: str, offset: int) -> str | None:
@@ -723,9 +718,7 @@ class Database:
             latest_signal = self._conn.execute(
                 "SELECT signal_date FROM trade_signals ORDER BY signal_date DESC LIMIT 1"
             ).fetchone()
-            latest_bar = self._conn.execute(
-                "SELECT MAX(date) FROM daily_bars"
-            ).fetchone()
+            latest_bar = self._conn.execute("SELECT MAX(date) FROM daily_bars").fetchone()
         return {
             "bars_count": bars_count,
             "bars_symbols": bars_symbols,
@@ -742,12 +735,60 @@ class Database:
             row = self._conn.execute("SELECT MAX(date) FROM daily_bars").fetchone()
         return row[0] if row and row[0] else None
 
+    def count_daily_bars(self) -> int:
+        """Return the total number of rows in daily_bars."""
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM daily_bars").fetchone()
+        return int(row[0]) if row else 0
+
+    def count_symbols_with_bars(self, symbols: list[str], since: str) -> int:
+        """Return how many of *symbols* have at least one daily bar with ``date >= since``.
+
+        Used by cold-start init to decide whether the bars table covers the
+        expected pool densely enough to skip backfill.
+        """
+        if not symbols:
+            return 0
+        placeholders = ",".join("?" * len(symbols))
+        sql = f"SELECT COUNT(DISTINCT symbol) FROM daily_bars WHERE date >= ? AND symbol IN ({placeholders})"
+        with self._lock:
+            row = self._conn.execute(sql, [since, *symbols]).fetchone()
+        return int(row[0]) if row else 0
+
+    def count_symbols_with_fundamentals(self, symbols: list[str], since: str) -> int:
+        """Return how many of *symbols* have at least one fundamentals row with ``pub_date >= since``."""
+        if not symbols:
+            return 0
+        placeholders = ",".join("?" * len(symbols))
+        sql = (
+            f"SELECT COUNT(DISTINCT symbol) FROM fundamentals "
+            f"WHERE pub_date IS NOT NULL AND pub_date >= ? AND symbol IN ({placeholders})"
+        )
+        with self._lock:
+            row = self._conn.execute(sql, [since, *symbols]).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_latest_fundamentals_pub_date(self) -> str | None:
+        """Return the most recent ``pub_date`` in fundamentals (for PIT freshness check)."""
+        with self._lock:
+            row = self._conn.execute("SELECT MAX(pub_date) FROM fundamentals WHERE pub_date IS NOT NULL").fetchone()
+        return row[0] if row and row[0] else None
+
+    def get_latest_close(self, symbol: str) -> float | None:
+        """Return the latest (most recent date) close price for *symbol*."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT close FROM daily_bars WHERE symbol = ? ORDER BY date DESC LIMIT 1",
+                (symbol,),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return float(row[0])
+
     def get_latest_news_timestamp(self) -> str | None:
         """Return the most recent news_items timestamp, or None."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT MAX(timestamp) FROM news_items"
-            ).fetchone()
+            row = self._conn.execute("SELECT MAX(timestamp) FROM news_items").fetchone()
         return row[0] if row and row[0] else None
 
     # ------------------------------------------------------------------
@@ -755,14 +796,38 @@ class Database:
     # ------------------------------------------------------------------
 
     _FUND_COLS = [
-        "pe_ttm", "pb", "roe_ttm", "revenue_yoy", "profit_yoy", "market_cap",
-        "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
-        "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
-        "cashflow_to_profit", "ps_ttm", "pcf_ttm", "pub_date",
-        "roa", "operating_profit_ratio", "ocf_to_revenue",
-        "eps_weighted", "quick_ratio", "receivables_turnover", "inventory_turnover",
-        "cost_profit_ratio", "dividend_payout_ratio", "cash_ratio", "equity_ratio",
-        "shareholder_equity_ratio", "undistributed_per_share", "capital_reserve_per_share",
+        "pe_ttm",
+        "pb",
+        "roe_ttm",
+        "revenue_yoy",
+        "profit_yoy",
+        "market_cap",
+        "net_profit_margin",
+        "gross_margin",
+        "debt_ratio",
+        "asset_turnover",
+        "current_ratio",
+        "equity_yoy",
+        "asset_yoy",
+        "cashflow_per_share",
+        "cashflow_to_profit",
+        "ps_ttm",
+        "pcf_ttm",
+        "pub_date",
+        "roa",
+        "operating_profit_ratio",
+        "ocf_to_revenue",
+        "eps_weighted",
+        "quick_ratio",
+        "receivables_turnover",
+        "inventory_turnover",
+        "cost_profit_ratio",
+        "dividend_payout_ratio",
+        "cash_ratio",
+        "equity_ratio",
+        "shareholder_equity_ratio",
+        "undistributed_per_share",
+        "capital_reserve_per_share",
     ]
 
     def save_fundamentals(self, symbol: str, df: pd.DataFrame) -> int:
@@ -772,9 +837,7 @@ class Database:
         cols = self._FUND_COLS
         rows: list[tuple[Any, ...]] = []
         for _, r in df.iterrows():
-            rows.append(
-                (symbol, str(r["date"])) + tuple(r.get(c) for c in cols)
-            )
+            rows.append((symbol, str(r["date"])) + tuple(r.get(c) for c in cols))
         col_list = ", ".join(["symbol", "date"] + cols)
         placeholders = ", ".join(["?"] * (2 + len(cols)))
         upsert = ", ".join(f"{c} = COALESCE(excluded.{c}, {c})" for c in cols)
@@ -808,8 +871,7 @@ class Database:
             if not date_val:
                 continue
             data = json.dumps(
-                {k: v for k, v in r.items()
-                 if pd.notna(v) and not (isinstance(v, float) and math.isinf(v))},
+                {k: v for k, v in r.items() if pd.notna(v) and not (isinstance(v, float) and math.isinf(v))},
                 ensure_ascii=False,
                 default=str,
             )
@@ -891,33 +953,46 @@ class Database:
             self._conn.commit()
         return cur.rowcount
 
-    def load_fundamentals(
-        self, symbol: str, start: str, end: str
-    ) -> pd.DataFrame:
+    def load_fundamentals(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Load fundamentals for *symbol* between *start* and *end*."""
         with self._lock:
             return pd.read_sql(
-                "SELECT * FROM fundamentals WHERE symbol = ? AND date >= ? AND date <= ? "
-                "ORDER BY date",
+                "SELECT * FROM fundamentals WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date",
                 self._conn,
                 params=(symbol, start, end),
             )
 
     # Columns that are quarterly (need ffill) vs daily (already complete)
     _QUARTERLY_COLS = [
-        "roe_ttm", "revenue_yoy", "profit_yoy",
-        "net_profit_margin", "gross_margin", "debt_ratio", "asset_turnover",
-        "current_ratio", "equity_yoy", "asset_yoy", "cashflow_per_share",
+        "roe_ttm",
+        "revenue_yoy",
+        "profit_yoy",
+        "net_profit_margin",
+        "gross_margin",
+        "debt_ratio",
+        "asset_turnover",
+        "current_ratio",
+        "equity_yoy",
+        "asset_yoy",
+        "cashflow_per_share",
         "cashflow_to_profit",
-        "roa", "operating_profit_ratio", "ocf_to_revenue",
-        "eps_weighted", "quick_ratio", "receivables_turnover", "inventory_turnover",
-        "cost_profit_ratio", "dividend_payout_ratio", "cash_ratio", "equity_ratio",
-        "shareholder_equity_ratio", "undistributed_per_share", "capital_reserve_per_share",
+        "roa",
+        "operating_profit_ratio",
+        "ocf_to_revenue",
+        "eps_weighted",
+        "quick_ratio",
+        "receivables_turnover",
+        "inventory_turnover",
+        "cost_profit_ratio",
+        "dividend_payout_ratio",
+        "cash_ratio",
+        "equity_ratio",
+        "shareholder_equity_ratio",
+        "undistributed_per_share",
+        "capital_reserve_per_share",
     ]
 
-    def load_fundamentals_filled(
-        self, symbol: str, start: str, end: str
-    ) -> pd.DataFrame:
+    def load_fundamentals_filled(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         """Load fundamentals with quarterly columns forward-filled.
 
         PE/PB are daily (already complete). ROE, revenue_yoy, etc. are
@@ -934,15 +1009,13 @@ class Database:
             # Find the latest quarterly row before start (seed for ffill)
             quarterly_check = " OR ".join(f"{c} IS NOT NULL" for c in self._QUARTERLY_COLS)
             seed_date = self._conn.execute(
-                f"SELECT MAX(date) FROM fundamentals "
-                f"WHERE symbol = ? AND date < ? AND ({quarterly_check})",
+                f"SELECT MAX(date) FROM fundamentals WHERE symbol = ? AND date < ? AND ({quarterly_check})",
                 (symbol, start),
             ).fetchone()[0]
 
             query_start = seed_date if seed_date else start
             df = pd.read_sql(
-                "SELECT * FROM fundamentals WHERE symbol = ? AND date >= ? AND date <= ? "
-                "ORDER BY date",
+                "SELECT * FROM fundamentals WHERE symbol = ? AND date >= ? AND date <= ? ORDER BY date",
                 self._conn,
                 params=(symbol, query_start, end),
             )
@@ -1058,18 +1131,20 @@ class Database:
             return 0
         rows: list[tuple[Any, ...]] = []
         for _, r in df.iterrows():
-            rows.append((
-                r["symbol"],
-                str(r["date"]),
-                r.get("name"),
-                r.get("open"),
-                r.get("high"),
-                r.get("low"),
-                r.get("close"),
-                r.get("volume"),
-                r.get("change_pct"),
-                r.get("source"),
-            ))
+            rows.append(
+                (
+                    r["symbol"],
+                    str(r["date"]),
+                    r.get("name"),
+                    r.get("open"),
+                    r.get("high"),
+                    r.get("low"),
+                    r.get("close"),
+                    r.get("volume"),
+                    r.get("change_pct"),
+                    r.get("source"),
+                )
+            )
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO global_snapshots "
@@ -1103,14 +1178,10 @@ class Database:
         """
         if df.empty:
             return 0
-        rows = [
-            (row["symbol"], date, float(row["score"]), int(row["rank"]))
-            for _, row in df.iterrows()
-        ]
+        rows = [(row["symbol"], date, float(row["score"]), int(row["rank"])) for _, row in df.iterrows()]
         with self._lock:
             self._conn.executemany(
-                "INSERT OR REPLACE INTO factor_pool (symbol, date, score, rank) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO factor_pool (symbol, date, score, rank) VALUES (?, ?, ?, ?)",
                 rows,
             )
             self._conn.commit()
@@ -1128,9 +1199,7 @@ class Database:
     def load_factor_pool_latest(self) -> pd.DataFrame:
         """Load factor pool for the most recent date."""
         with self._lock:
-            row = self._conn.execute(
-                "SELECT MAX(date) FROM factor_pool"
-            ).fetchone()
+            row = self._conn.execute("SELECT MAX(date) FROM factor_pool").fetchone()
             if row is None or row[0] is None:
                 return pd.DataFrame(columns=["symbol", "score", "rank"])
             return pd.read_sql(
@@ -1142,11 +1211,10 @@ class Database:
     def load_factor_pool_previous_day(self) -> pd.DataFrame:
         """Load factor pool for the most recent date *before* today."""
         from pangu.utils import date_str
+
         today = date_str()
         with self._lock:
-            row = self._conn.execute(
-                "SELECT MAX(date) FROM factor_pool WHERE date < ?", (today,)
-            ).fetchone()
+            row = self._conn.execute("SELECT MAX(date) FROM factor_pool WHERE date < ?", (today,)).fetchone()
             if row is None or row[0] is None:
                 return pd.DataFrame(columns=["symbol", "score", "rank"])
             return pd.read_sql(
@@ -1167,11 +1235,7 @@ class Database:
         """
         if not rows:
             return 0
-        tuples = [
-            (r["date"], r["index_code"], r["symbol"],
-             r.get("name"), r.get("sector"))
-            for r in rows
-        ]
+        tuples = [(r["date"], r["index_code"], r["symbol"], r.get("name"), r.get("sector")) for r in rows]
         with self._lock:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO index_constituents "
@@ -1211,8 +1275,7 @@ class Database:
         with self._lock:
             for symbol, sector in sector_map.items():
                 cur = self._conn.execute(
-                    "UPDATE index_constituents SET sector = ? "
-                    "WHERE symbol = ? AND (sector IS NULL OR sector = '')",
+                    "UPDATE index_constituents SET sector = ? WHERE symbol = ? AND (sector IS NULL OR sector = '')",
                     (sector, symbol),
                 )
                 total += cur.rowcount
@@ -1241,11 +1304,7 @@ class Database:
                     ") ORDER BY symbol",
                     (index_code, index_code),
                 ).fetchall()
-        return [
-            {"date": r[0], "index_code": r[1], "symbol": r[2],
-             "name": r[3], "sector": r[4]}
-            for r in rows
-        ]
+        return [{"date": r[0], "index_code": r[1], "symbol": r[2], "name": r[3], "sector": r[4]} for r in rows]
 
     def load_all_index_constituents(self, date: str | None = None) -> list[dict]:
         """Load constituents for all index codes.
@@ -1266,11 +1325,7 @@ class Database:
                     "  SELECT MAX(date) FROM index_constituents"
                     ") ORDER BY symbol",
                 ).fetchall()
-        return [
-            {"date": r[0], "index_code": r[1], "symbol": r[2],
-             "name": r[3], "sector": r[4]}
-            for r in rows
-        ]
+        return [{"date": r[0], "index_code": r[1], "symbol": r[2], "name": r[3], "sector": r[4]} for r in rows]
 
     def load_constituents_for_date(self, target_date: str) -> list[str]:
         """Return stock symbols from the nearest snapshot <= target_date.
@@ -1311,14 +1366,15 @@ class Database:
         """Return all (date, adj_factor) pairs for a stock's daily bars."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT date, adj_factor FROM daily_bars "
-                "WHERE symbol = ? ORDER BY date",
+                "SELECT date, adj_factor FROM daily_bars WHERE symbol = ? ORDER BY date",
                 (symbol,),
             ).fetchall()
         return [(r[0], r[1]) for r in rows]
 
     def update_adj_factors(
-        self, symbol: str, updates: list[tuple[float, str]],
+        self,
+        symbol: str,
+        updates: list[tuple[float, str]],
     ) -> None:
         """Batch update adj_factor for a stock's daily bars.
 
@@ -1333,11 +1389,179 @@ class Database:
             return
         with self._lock:
             self._conn.executemany(
-                "UPDATE daily_bars SET adj_factor = ? "
-                "WHERE symbol = ? AND date = ?",
+                "UPDATE daily_bars SET adj_factor = ? WHERE symbol = ? AND date = ?",
                 [(factor, symbol, date) for factor, date in updates],
             )
             self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # portfolio_snapshots
+    # ------------------------------------------------------------------
+
+    def save_portfolio_snapshot(
+        self,
+        date: str,
+        symbols: list[str],
+        *,
+        is_rebalance: bool = False,
+    ) -> None:
+        """Insert or replace a portfolio snapshot for *date*.
+
+        Re-inserts (REPLACE) so rebalance writes can overwrite an earlier
+        EOD-only row with the post-rebalance holdings.
+        """
+        symbols_json = json.dumps(sorted(symbols), ensure_ascii=False)
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO portfolio_snapshots (date, symbols_json, is_rebalance) VALUES (?, ?, ?)",
+                (date, symbols_json, 1 if is_rebalance else 0),
+            )
+            self._conn.commit()
+
+    def get_portfolio_snapshot(self, date: str) -> dict | None:
+        """Return the snapshot for *date* (or None if missing)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT date, symbols_json, is_rebalance FROM portfolio_snapshots WHERE date = ?",
+                (date,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "date": row[0],
+            "symbols": json.loads(row[1]) if row[1] else [],
+            "is_rebalance": bool(row[2]),
+        }
+
+    def get_portfolio_snapshots(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Return snapshots ordered by date ascending."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if start:
+            clauses.append("date >= ?")
+            params.append(start)
+        if end:
+            clauses.append("date <= ?")
+            params.append(end)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"SELECT date, symbols_json, is_rebalance FROM portfolio_snapshots {where} ORDER BY date"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {
+                "date": r[0],
+                "symbols": json.loads(r[1]) if r[1] else [],
+                "is_rebalance": bool(r[2]),
+            }
+            for r in rows
+        ]
+
+    def get_latest_portfolio_snapshot(self) -> dict | None:
+        """Return the most recent snapshot, or None if the table is empty."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT date, symbols_json, is_rebalance FROM portfolio_snapshots ORDER BY date DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "date": row[0],
+            "symbols": json.loads(row[1]) if row[1] else [],
+            "is_rebalance": bool(row[2]),
+        }
+
+    # ------------------------------------------------------------------
+    # task_runs
+    # ------------------------------------------------------------------
+
+    def record_task_run(
+        self,
+        *,
+        task_id: str,
+        name: str,
+        started_at: str,
+        completed_at: str,
+        status: str,
+        error_msg: str | None = None,
+        duration_ms: int | None = None,
+    ) -> int:
+        """Insert a task-run row and return its id."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO task_runs "
+                "(task_id, name, started_at, completed_at, status, error_msg, duration_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, name, started_at, completed_at, status, error_msg, duration_ms),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def get_recent_task_runs(
+        self,
+        task_id: str | None = None,
+        *,
+        limit: int = 10,
+    ) -> list[dict]:
+        """Return recent task runs (most recent first). Filter by task_id if given."""
+        with self._lock:
+            if task_id:
+                rows = self._conn.execute(
+                    "SELECT task_id, name, started_at, completed_at, status, "
+                    "       error_msg, duration_ms "
+                    "FROM task_runs WHERE task_id = ? "
+                    "ORDER BY started_at DESC LIMIT ?",
+                    (task_id, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT task_id, name, started_at, completed_at, status, "
+                    "       error_msg, duration_ms "
+                    "FROM task_runs ORDER BY started_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [
+            {
+                "task_id": r[0],
+                "name": r[1],
+                "started_at": r[2],
+                "completed_at": r[3],
+                "status": r[4],
+                "error_msg": r[5],
+                "duration_ms": r[6],
+            }
+            for r in rows
+        ]
+
+    def get_last_successful_run(self, task_id: str) -> str | None:
+        """Return the started_at of the most recent successful run of *task_id*."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT started_at FROM task_runs "
+                "WHERE task_id = ? AND status = 'success' "
+                "ORDER BY started_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def cleanup_old_task_runs(self, days: int = 30) -> int:
+        """Delete task_runs older than *days*. Returns the number of deleted rows."""
+        cutoff = (_now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM task_runs WHERE started_at < ?",
+                (cutoff,),
+            )
+            self._conn.commit()
+            return int(cur.rowcount)
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def evaluate_scores(
     scores: pd.DataFrame,
     top_ns: list[int] | None = None,
@@ -60,6 +61,7 @@ def evaluate_scores(
 # ---------------------------------------------------------------------------
 # 1. Discrimination — cross-sectional spread
 # ---------------------------------------------------------------------------
+
 
 def _compute_discrimination(scores: pd.DataFrame, top_ns: list[int]) -> dict:
     """Measure how well scores separate stocks on each day."""
@@ -96,6 +98,7 @@ def _compute_discrimination(scores: pd.DataFrame, top_ns: list[int]) -> dict:
 # 2. Stability — temporal autocorrelation
 # ---------------------------------------------------------------------------
 
+
 def _compute_stability(scores: pd.DataFrame) -> dict:
     """Measure how stable individual stock scores are over time."""
     # Sample up to 200 stocks with enough data
@@ -122,20 +125,21 @@ def _compute_stability(scores: pd.DataFrame) -> dict:
     for lag in AUTOCORR_LAGS:
         vals = autocorrs[lag]
         result[f"score_autocorr_{lag}d"] = float(np.mean(vals)) if vals else float("nan")
-    result.update({
-        "temporal_std_to_cs_std_ratio": (
-            float(np.sqrt(ts_var) / np.sqrt(cs_var)) if cs_var > 0 else float("inf")
-        ),
-        "overall_variance": overall_var,
-        "cross_sectional_variance_pct": float(cs_var / overall_var * 100) if overall_var > 0 else 0.0,
-        "temporal_variance_pct": float(ts_var / overall_var * 100) if overall_var > 0 else 0.0,
-    })
+    result.update(
+        {
+            "temporal_std_to_cs_std_ratio": (float(np.sqrt(ts_var) / np.sqrt(cs_var)) if cs_var > 0 else float("inf")),
+            "overall_variance": overall_var,
+            "cross_sectional_variance_pct": float(cs_var / overall_var * 100) if overall_var > 0 else 0.0,
+            "temporal_variance_pct": float(ts_var / overall_var * 100) if overall_var > 0 else 0.0,
+        }
+    )
     return result
 
 
 # ---------------------------------------------------------------------------
 # 3. Rank stability — Top-N overlap across rebalance periods
 # ---------------------------------------------------------------------------
+
 
 def _compute_rank_stability(scores: pd.DataFrame, top_ns: list[int]) -> dict:
     """Measure how much the Top-N set changes between rebalance periods."""
@@ -164,9 +168,7 @@ def _compute_rank_stability(scores: pd.DataFrame, top_ns: list[int]) -> dict:
                 key = f"{freq_name}_top{n}"
                 result[f"{key}_overlap_mean"] = float(overlap_arr.mean())
                 result[f"{key}_jaccard_mean"] = float(jaccard_arr.mean())
-                result[f"{key}_low_overlap_pct"] = float(
-                    (overlap_arr < 0.5).mean() * 100
-                )
+                result[f"{key}_low_overlap_pct"] = float((overlap_arr < 0.5).mean() * 100)
 
     return result
 
@@ -174,6 +176,7 @@ def _compute_rank_stability(scores: pd.DataFrame, top_ns: list[int]) -> dict:
 # ---------------------------------------------------------------------------
 # Report formatting
 # ---------------------------------------------------------------------------
+
 
 def format_report(results: dict) -> str:
     """Format evaluation results as a terminal-friendly report."""
@@ -193,11 +196,7 @@ def format_report(results: dict) -> str:
     lines.append(f"  Cross-sectional std (median): {d['cross_sectional_std_median']:.6f}")
     lines.append(f"  P90-P10 spread (mean):        {d['p90_p10_spread_mean']:.6f}")
 
-    top_ns = sorted({
-        int(k.split("_")[0].replace("top", ""))
-        for k in d
-        if k.startswith("top")
-    })
+    top_ns = sorted({int(k.split("_")[0].replace("top", "")) for k in d if k.startswith("top")})
     if top_ns:
         lines.append("")
         lines.append(f"  {'Top-N':>8}  {'Boundary margin':>16}  {'Margin/DailyΔ':>14}")
@@ -218,8 +217,7 @@ def format_report(results: dict) -> str:
     ratio = s["temporal_std_to_cs_std_ratio"]
     flag = " ⚠ (>1 means per-stock noise dominates cross-sectional signal)" if ratio > 1.0 else ""
     lines.append(f"  Temporal σ / CS σ:   {ratio:.4f}{flag}")
-    lines.append(f"  Variance: CS={s['cross_sectional_variance_pct']:.1f}%, "
-                 f"Temporal={s['temporal_variance_pct']:.1f}%")
+    lines.append(f"  Variance: CS={s['cross_sectional_variance_pct']:.1f}%, Temporal={s['temporal_variance_pct']:.1f}%")
 
     # --- Rank stability ---
     r = results["rank_stability"]
@@ -229,9 +227,7 @@ def format_report(results: dict) -> str:
 
     # Group by frequency
     for freq in ["daily", "weekly"]:
-        freq_keys = sorted(
-            {int(k.split("_top")[1].split("_")[0]) for k in r if k.startswith(freq)}
-        )
+        freq_keys = sorted({int(k.split("_top")[1].split("_")[0]) for k in r if k.startswith(freq)})
         if not freq_keys:
             continue
         lines.append(f"  [{freq}]")

@@ -20,6 +20,7 @@ from pangu.ml.dataset import (
 # Walk-Forward windows
 # ---------------------------------------------------------------------------
 
+
 class TestWalkForwardWindows:
     def test_default_17_windows(self):
         windows = generate_walk_forward_windows()
@@ -57,8 +58,11 @@ class TestWalkForwardWindows:
 
     def test_custom_params(self):
         windows = generate_walk_forward_windows(
-            train_months=12, val_months=2, test_months=2,
-            first_train_start="2021-01-01", last_test_end="2022-08-31",
+            train_months=12,
+            val_months=2,
+            test_months=2,
+            first_train_start="2021-01-01",
+            last_test_end="2022-08-31",
         )
         assert len(windows) == 3
         assert windows[0].train_start == "2021-01-01"
@@ -135,31 +139,36 @@ class TestWalkForwardWindows:
 # Label computation
 # ---------------------------------------------------------------------------
 
+
 class TestComputeLabels:
     """Test label computation with a mock storage."""
 
     @pytest.fixture
     def mock_storage(self):
         """Minimal mock that returns deterministic bar data."""
+
         class _MockStorage:
             def load_daily_bars(self, symbol, start, end):
                 dates = pd.bdate_range(start, end)
                 rng = np.random.default_rng(hash(symbol) % 2**32)
                 close = 100 + np.cumsum(rng.normal(0, 1, len(dates)))
-                return pd.DataFrame({
-                    "date": dates.strftime("%Y-%m-%d"),
-                    "symbol": symbol,
-                    "close": close,
-                    "open": close * 1.01,
-                    "high": close * 1.02,
-                    "low": close * 0.98,
-                    "volume": np.full(len(dates), 1_000_000),
-                    "amount": close * 1_000_000,
-                    "adj_factor": np.ones(len(dates)),
-                })
+                return pd.DataFrame(
+                    {
+                        "date": dates.strftime("%Y-%m-%d"),
+                        "symbol": symbol,
+                        "close": close,
+                        "open": close * 1.01,
+                        "high": close * 1.02,
+                        "low": close * 0.98,
+                        "volume": np.full(len(dates), 1_000_000),
+                        "amount": close * 1_000_000,
+                        "adj_factor": np.ones(len(dates)),
+                    }
+                )
 
             def load_fundamentals_filled(self, symbol, start, end):
                 return pd.DataFrame()
+
         return _MockStorage()
 
     def test_label_shape(self, mock_storage):
@@ -184,7 +193,10 @@ class TestComputeLabels:
         """With normalize=True, per-day labels should have mean≈0, std≈1."""
         pool = [f"S{i}" for i in range(30)]
         labels = compute_labels(
-            mock_storage, pool, "2024-01-01", "2024-06-30",
+            mock_storage,
+            pool,
+            "2024-01-01",
+            "2024-06-30",
             normalize=True,
         )
         unstacked = labels.unstack("symbol")
@@ -227,6 +239,7 @@ class TestComputeLabels:
 # load_factor_panel
 # ---------------------------------------------------------------------------
 
+
 class TestLoadFactorPanel:
     def test_parquet_path_priority(self, tmp_path):
         """When parquet exists, should load from it instead of DB."""
@@ -253,6 +266,7 @@ class TestLoadFactorPanel:
 # build_window_datasets — data leakage prevention
 # ---------------------------------------------------------------------------
 
+
 class TestBuildWindowDatasets:
     def test_train_excludes_last_horizon_days(self):
         """Training set should not include last label_horizon days to prevent leakage."""
@@ -261,7 +275,8 @@ class TestBuildWindowDatasets:
         idx = pd.MultiIndex.from_product([dates, symbols], names=["date", "symbol"])
         panel = pd.DataFrame(
             np.random.randn(len(idx), 3).astype("float32"),
-            index=idx, columns=["F1", "F2", "F3"],
+            index=idx,
+            columns=["F1", "F2", "F3"],
         )
         labels = pd.Series(np.random.randn(len(idx)), index=idx, name="label")
 
@@ -276,8 +291,11 @@ class TestBuildWindowDatasets:
         )
 
         class MockStorage:
-            def load_constituents_union(self, s, e): return ["A", "B"]
-            def load_constituents_for_date(self, d): return ["A", "B"]
+            def load_constituents_union(self, s, e):
+                return ["A", "B"]
+
+            def load_constituents_for_date(self, d):
+                return ["A", "B"]
 
         datasets = build_window_datasets(panel, labels, window, MockStorage(), label_horizon=5)
         X_train, _ = datasets["train"]
@@ -291,6 +309,7 @@ class TestBuildWindowDatasets:
 # ---------------------------------------------------------------------------
 # LambdaRank helpers
 # ---------------------------------------------------------------------------
+
 
 class TestDiscretizeLabels:
     @pytest.fixture
@@ -362,30 +381,44 @@ class TestComputeGroups:
 
     def test_unequal_groups(self):
         """Days may have different stock counts (missing data)."""
-        idx = pd.MultiIndex.from_tuples([
-            ("2024-01-01", "A"), ("2024-01-01", "B"), ("2024-01-01", "C"),
-            ("2024-01-02", "A"), ("2024-01-02", "B"),
-        ], names=["date", "symbol"])
+        idx = pd.MultiIndex.from_tuples(
+            [
+                ("2024-01-01", "A"),
+                ("2024-01-01", "B"),
+                ("2024-01-01", "C"),
+                ("2024-01-02", "A"),
+                ("2024-01-02", "B"),
+            ],
+            names=["date", "symbol"],
+        )
         groups = compute_groups(idx)
         assert sum(groups) == 5
         assert len(groups) == 2
 
     def test_sorted_chronologically(self):
         """Groups must be in date order; unsorted input raises."""
-        idx = pd.MultiIndex.from_tuples([
-            ("2024-01-03", "A"),
-            ("2024-01-01", "B"), ("2024-01-01", "C"),
-            ("2024-01-02", "A"),
-        ], names=["date", "symbol"])
+        idx = pd.MultiIndex.from_tuples(
+            [
+                ("2024-01-03", "A"),
+                ("2024-01-01", "B"),
+                ("2024-01-01", "C"),
+                ("2024-01-02", "A"),
+            ],
+            names=["date", "symbol"],
+        )
         with pytest.raises(ValueError, match="sorted by date"):
             compute_groups(idx)
 
     def test_sorted_input_works(self):
         """Sorted input returns correct groups."""
-        idx = pd.MultiIndex.from_tuples([
-            ("2024-01-01", "B"), ("2024-01-01", "C"),
-            ("2024-01-02", "A"),
-            ("2024-01-03", "A"),
-        ], names=["date", "symbol"])
+        idx = pd.MultiIndex.from_tuples(
+            [
+                ("2024-01-01", "B"),
+                ("2024-01-01", "C"),
+                ("2024-01-02", "A"),
+                ("2024-01-03", "A"),
+            ],
+            names=["date", "symbol"],
+        )
         groups = compute_groups(idx)
         assert groups == [2, 1, 1]

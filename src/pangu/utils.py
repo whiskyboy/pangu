@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 # Retry / circuit-breaker infrastructure — PRD §4.1.1
 # ---------------------------------------------------------------------------
 
+
 class CircuitBreaker:
     """Simple consecutive-failure circuit breaker (thread-safe)."""
 
@@ -50,8 +51,7 @@ class CircuitBreaker:
                 )
 
 
-def retry_call(fn, *, max_retries: int = 3, backoff_base: float = 2.0,
-               circuit: CircuitBreaker | None = None):
+def retry_call(fn, *, max_retries: int = 3, backoff_base: float = 2.0, circuit: CircuitBreaker | None = None):
     """Call *fn()* with exponential back-off and optional circuit breaker.
 
     Returns the result of *fn()* on success, raises the last exception on
@@ -84,6 +84,7 @@ def retry_call(fn, *, max_retries: int = 3, backoff_base: float = 2.0,
 # ThrottleMixin — shared rate-limiting for AkShare providers
 # ---------------------------------------------------------------------------
 
+
 class ThrottleMixin:
     """Mixin providing ``_throttle()`` for AkShare API rate limiting."""
 
@@ -104,6 +105,7 @@ class ThrottleMixin:
 # Date helper
 # ---------------------------------------------------------------------------
 
+
 def date_str(days_ago: int = 0) -> str:
     """Return ``(now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")``."""
     from pangu.tz import now
@@ -114,6 +116,7 @@ def date_str(days_ago: int = 0) -> str:
 # ---------------------------------------------------------------------------
 # Rebalance day gate (ISO week start)
 # ---------------------------------------------------------------------------
+
 
 def is_rebalance_day(today: str, db) -> bool:  # type: ignore[no-untyped-def]
     """Return True iff *today* is the first trading day of its ISO week.

@@ -33,6 +33,7 @@ _WINDOW_FILE_RE = re.compile(r"wf_window_(\d+)(?:_seed(\d+))?\.txt$")
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def evaluate_models(
     model_dir: str,
     top_n: int = 20,
@@ -70,6 +71,7 @@ def evaluate_models(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_window_boosters(model_dir: str) -> list[tuple[int, list[lgb.Booster]]]:
     """Scan *model_dir* for ``wf_window_*.txt`` files grouped by window.
 
@@ -97,8 +99,7 @@ def _load_window_boosters(model_dir: str) -> list[tuple[int, list[lgb.Booster]]]
     results = [(wid, boosters) for wid, boosters in sorted(grouped.items())]
     n_models = sum(len(bs) for _, bs in results)
     if n_models > len(results):
-        logger.info("Loaded %d windows (%d models, multi-seed) from %s",
-                    len(results), n_models, model_dir)
+        logger.info("Loaded %d windows (%d models, multi-seed) from %s", len(results), n_models, model_dir)
     else:
         logger.info("Loaded %d window models from %s", len(results), model_dir)
     return results
@@ -132,6 +133,7 @@ def _averaged_importance(boosters: list[lgb.Booster]) -> dict[str, float]:
 # 1. Global feature importance
 # ---------------------------------------------------------------------------
 
+
 def _compute_global_importance(
     windows: list[tuple[int, list[lgb.Booster]]],
     top_n: int,
@@ -154,13 +156,15 @@ def _compute_global_importance(
     for feat in all_features:
         vals = [pw.get(feat, 0.0) for pw in per_window_pcts]
         non_zero_count = sum(1 for v in vals if v > 0)
-        feature_stats.append({
-            "feature": feat,
-            "mean_pct": float(np.mean(vals)),
-            "std_pct": float(np.std(vals)),
-            "windows_used": non_zero_count,
-            "windows_total": n_windows,
-        })
+        feature_stats.append(
+            {
+                "feature": feat,
+                "mean_pct": float(np.mean(vals)),
+                "std_pct": float(np.std(vals)),
+                "windows_used": non_zero_count,
+                "windows_total": n_windows,
+            }
+        )
 
     feature_stats.sort(key=lambda x: x["mean_pct"], reverse=True)
     return {"top_features": feature_stats[:top_n], "total_features": len(all_features)}
@@ -169,6 +173,7 @@ def _compute_global_importance(
 # ---------------------------------------------------------------------------
 # 2. Per-window summary
 # ---------------------------------------------------------------------------
+
 
 def _compute_per_window_summary(windows: list[tuple[int, list[lgb.Booster]]]) -> list[dict]:
     """Tree count + top-5 features per window.
@@ -181,20 +186,23 @@ def _compute_per_window_summary(windows: list[tuple[int, list[lgb.Booster]]]) ->
         tree_counts = [b.num_trees() for b in boosters]
         pcts = _averaged_importance(boosters)
         top5 = sorted(pcts, key=pcts.get, reverse=True)[:5] if pcts else []  # type: ignore[arg-type]
-        summaries.append({
-            "window_id": wid,
-            "num_trees": min(tree_counts),
-            "num_trees_max": max(tree_counts),
-            "n_seeds": len(boosters),
-            "top5_features": top5,
-            "underfitting": min(tree_counts) < MIN_TREES_THRESHOLD,
-        })
+        summaries.append(
+            {
+                "window_id": wid,
+                "num_trees": min(tree_counts),
+                "num_trees_max": max(tree_counts),
+                "n_seeds": len(boosters),
+                "top5_features": top5,
+                "underfitting": min(tree_counts) < MIN_TREES_THRESHOLD,
+            }
+        )
     return summaries
 
 
 # ---------------------------------------------------------------------------
 # 3. Feature drift
 # ---------------------------------------------------------------------------
+
 
 def _compute_feature_drift(windows: list[tuple[int, list[lgb.Booster]]]) -> dict:
     """Jaccard similarity of top-K features between adjacent windows.
@@ -217,11 +225,13 @@ def _compute_feature_drift(windows: list[tuple[int, list[lgb.Booster]]]) -> dict
         wid_b, top_b = window_topk[i + 1]
         union = len(top_a | top_b)
         jaccard = len(top_a & top_b) / union if union > 0 else 0.0
-        pairs.append({
-            "from_window": wid_a,
-            "to_window": wid_b,
-            "jaccard": float(jaccard),
-        })
+        pairs.append(
+            {
+                "from_window": wid_a,
+                "to_window": wid_b,
+                "jaccard": float(jaccard),
+            }
+        )
 
     jaccards = [p["jaccard"] for p in pairs]
     return {"pairs": pairs, "mean_jaccard": float(np.mean(jaccards))}
@@ -230,6 +240,7 @@ def _compute_feature_drift(windows: list[tuple[int, list[lgb.Booster]]]) -> dict
 # ---------------------------------------------------------------------------
 # 4. Zero-importance features
 # ---------------------------------------------------------------------------
+
 
 def _compute_zero_importance(windows: list[tuple[int, list[lgb.Booster]]]) -> dict:
     """Find features with zero importance across windows.
@@ -254,8 +265,7 @@ def _compute_zero_importance(windows: list[tuple[int, list[lgb.Booster]]]) -> di
 
     always_zero = sorted(f for f, c in zero_counts.items() if c == n_windows)
     frequently_zero = sorted(
-        f for f, c in zero_counts.items()
-        if c >= n_windows * FREQ_ZERO_THRESHOLD and c < n_windows
+        f for f, c in zero_counts.items() if c >= n_windows * FREQ_ZERO_THRESHOLD and c < n_windows
     )
 
     return {
@@ -268,6 +278,7 @@ def _compute_zero_importance(windows: list[tuple[int, list[lgb.Booster]]]) -> di
 # ---------------------------------------------------------------------------
 # Report formatting
 # ---------------------------------------------------------------------------
+
 
 def format_model_report(results: dict) -> str:
     """Format model evaluation results as a terminal-friendly report."""
@@ -312,9 +323,7 @@ def format_model_report(results: dict) -> str:
             trees_min = pw["num_trees"]
             trees_max = pw.get("num_trees_max", trees_min)
             trees_str = f"{trees_min}~{trees_max}" if trees_min != trees_max else str(trees_min)
-            lines.append(
-                f"  {pw['window_id']:>6}  {trees_str:>10}{flag}  {pw.get('n_seeds', 1):>5}  {top5}"
-            )
+            lines.append(f"  {pw['window_id']:>6}  {trees_str:>10}{flag}  {pw.get('n_seeds', 1):>5}  {top5}")
         else:
             lines.append(f"  {pw['window_id']:>6}  {pw['num_trees']:>5}{flag}  {top5}")
     underfitting = [pw for pw in per_window if pw["underfitting"]]

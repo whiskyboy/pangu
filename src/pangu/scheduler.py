@@ -1,20 +1,24 @@
 """PanGu scheduler — APScheduler-based task orchestration.
 
-Registers cron tasks (times configurable via [scheduler] in settings.toml):
-  T1 sync_global_market   — trading days (default 08:00)
-  T2 poll_news             — hourly (default 07:00-20:00)
-  T3 sync_domestic_market  — trading days (default 15:30)
-  T4 generate_signals      — trading days (default 08:15)
-  T5 sync_reference_data   — monthly (default 1st at 06:00)
-  T6 verify_signals        — trading days (default 20:00)
-  T7 update_model          — monthly (when ml.enabled, default 1st at 02:00)
+Task numbering follows logical dependency (data → model → signals), NOT
+scheduling order. Actual daily run order (assuming month start):
+  T2 (hourly)  → T5 (02:00) → T1 (06:00, monthly) → T4 (07:00) →
+  T6 (08:15)   → T3 (18:00)
+
+Registered cron tasks (times configurable via [scheduler] in settings.toml):
+  T1 sync_reference_data    — monthly (default 1st at 06:00)
+  T2 poll_news              — hourly (default 00:00-23:00, 24x/day)
+  T3 sync_domestic_market   — trading days (default 18:00)
+  T4 sync_global_market     — trading days (default 07:00)
+  T5 update_model           — monthly (when ml.enabled, default 1st at 02:00)
+  T6 generate_signals       — trading days (default 08:15)
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -24,10 +28,8 @@ from pangu.data.news import AkShareNewsDataProvider
 from pangu.data.stock_pool import StockPoolManager
 from pangu.data.storage import Database
 from pangu.factor.fundamental import FundamentalFactorEngine
-from pangu.factor.macro import MacroFactorEngine
 from pangu.factor.technical import PandasTAFactorEngine
 from pangu.notification import NotificationManager
-from pangu.strategy.factor import MultiFactorStrategy
 from pangu.strategy.llm import LLMJudgeEngineImpl
 from pangu.tasks import (
     generate_signals,
@@ -36,10 +38,12 @@ from pangu.tasks import (
     sync_global_market,
     sync_reference_data,
     update_model,
-    verify_signals,
 )
-from pangu.tz import now as _now
 from pangu.tz import today_str
+
+if TYPE_CHECKING:
+    from pangu.portfolio import PortfolioState
+    from pangu.strategy.ml.ml_strategy import MLScoringStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +65,13 @@ class Components:
     stock_pool: StockPoolManager
     tech_engine: PandasTAFactorEngine
     fund_engine: FundamentalFactorEngine
-    macro_engine: MacroFactorEngine
-    factor_strategy: MultiFactorStrategy
     judge_engine: LLMJudgeEngineImpl
     notif_manager: NotificationManager
     watchlist_path: str = "config/watchlist.yaml"
-    ml_strategy: Any = None  # MLScoringStrategy when ml.enabled = true
-    portfolio_state: Any = None  # PortfolioState (target portfolio JSON)
+    ml_strategy: MLScoringStrategy | None = None
+    ml_enabled: bool = False
+    portfolio_state: PortfolioState | None = field(default=None)
+    initial_capital: float = 100_000.0  # for T6 share-size suggestions
 
     async def alert(self, msg: str) -> None:
         """Send a plain-text alert via notification channels."""
@@ -79,7 +83,7 @@ class Components:
 
 
 class TradingScheduler:
-    """APScheduler-based orchestrator for the 5 trading tasks."""
+    """APScheduler-based orchestrator for the 7 trading tasks."""
 
     def __init__(
         self,
@@ -112,74 +116,89 @@ class TradingScheduler:
     # ------------------------------------------------------------------
 
     def _register_jobs(self) -> None:
-        """Register the 5 cron tasks from config (with sensible defaults)."""
+        """Register the 6 cron tasks from config (with sensible defaults).
+
+        Numbering reflects logical dependency (data → model → signals), not
+        scheduling order. Source filenames are kept (named by function).
+        """
         cfg = self._sched_cfg
 
-        # T1: sync global market
-        t1_h, t1_m = _parse_time(cfg.get("global_market_sync_time", "08:00"))
+        # T1: sync reference data (calendar + index constituents) — monthly
+        t1_h, t1_m = _parse_time(cfg.get("reference_data_sync_time", "06:00"))
+        t1_day = cfg.get("reference_data_sync_day", 1)
         self._scheduler.add_job(
-            self._run_if_trading_day, "cron",
-            args=[self.sync_global_market],
-            hour=t1_h, minute=t1_m, id="t1_sync_global_market",
-            name="T1 全球市场同步",
+            self.sync_reference_data,
+            "cron",
+            day=t1_day,
+            hour=t1_h,
+            minute=t1_m,
+            id="t1_sync_reference_data",
+            name="T1 参考数据同步",
         )
 
-        # T2: poll news
-        t2_start, _ = _parse_time(cfg.get("news_poll_start_time", "07:00"))
-        t2_end, _ = _parse_time(cfg.get("news_poll_end_time", "20:00"))
+        # T2: poll news — hourly cycle by default (00:00-23:00)
+        t2_start, _ = _parse_time(cfg.get("news_poll_start_time", "00:00"))
+        t2_end, _ = _parse_time(cfg.get("news_poll_end_time", "23:00"))
         self._scheduler.add_job(
-            self.poll_news, "cron",
-            hour=f"{t2_start}-{t2_end}", minute=0, id="t2_poll_news",
+            self.poll_news,
+            "cron",
+            hour=f"{t2_start}-{t2_end}",
+            minute=0,
+            id="t2_poll_news",
             name="T2 快讯采集",
         )
 
-        # T3: sync domestic market
-        t3_h, t3_m = _parse_time(cfg.get("domestic_market_sync_time", "15:30"))
+        # T3: sync domestic market (K-lines + fundamentals) — trading days
+        t3_h, t3_m = _parse_time(cfg.get("domestic_kline_sync_time", "18:00"))
         self._scheduler.add_job(
-            self._run_if_trading_day, "cron",
+            self._run_if_trading_day,
+            "cron",
             args=[self.sync_domestic_market],
-            hour=t3_h, minute=t3_m, id="t3_sync_domestic_market",
+            hour=t3_h,
+            minute=t3_m,
+            id="t3_sync_domestic_market",
             name="T3 国内行情同步",
         )
 
-        # T4: generate signals
-        t4_h, t4_m = _parse_time(cfg.get("signal_generate_time", "08:15"))
+        # T4: sync overnight global market — trading days
+        t4_h, t4_m = _parse_time(cfg.get("international_data_sync_time", "07:00"))
         self._scheduler.add_job(
-            self._run_if_trading_day, "cron",
-            args=[self.generate_signals],
-            hour=t4_h, minute=t4_m, id="t4_generate_signals",
-            name="T4 信号生成",
+            self._run_if_trading_day,
+            "cron",
+            args=[self.sync_global_market],
+            hour=t4_h,
+            minute=t4_m,
+            id="t4_sync_global_market",
+            name="T4 全球行情同步",
         )
 
-        # T5: sync reference data — 1st of each month at 06:00
-        cal_day = cfg.get("calendar_sync_day", 1)
-        self._scheduler.add_job(
-            self.sync_reference_data, "cron",
-            day=cal_day, hour=6, minute=0, id="t5_sync_reference_data",
-            name="T5 基础数据同步",
-        )
-
-        # T6: verify signals — after T3 (default 20:00)
-        t6_h, t6_m = _parse_time(cfg.get("signal_verify_time", "20:00"))
-        self._scheduler.add_job(
-            self._run_if_trading_day, "cron",
-            args=[self.verify_signals],
-            hour=t6_h, minute=t6_m, id="t6_verify_signals",
-            name="T6 信号验证",
-        )
-
-        # T7: monthly model update (only when ml.enabled)
-        if self._c.ml_strategy is not None:
-            from pangu.config import get_settings
-            ml_settings = get_settings().ml
-            t7_day = ml_settings.get("update_day", 1)
-            t7_h, t7_m = _parse_time(ml_settings.get("update_time", "02:00"))
+        # T5: monthly model update — gated by ml.enabled config so a fresh
+        # deployment (ml.enabled=true but no model files yet) can still
+        # auto-train on the next month boundary.
+        if self._c.ml_enabled:
+            t5_h, t5_m = _parse_time(cfg.get("model_training_time", "02:00"))
+            t5_day = cfg.get("model_training_day", 1)
             self._scheduler.add_job(
-                self.update_model, "cron",
-                day=t7_day, hour=t7_h, minute=t7_m,
-                id="t7_update_model",
-                name="T7 模型更新",
+                self.update_model,
+                "cron",
+                day=t5_day,
+                hour=t5_h,
+                minute=t5_m,
+                id="t5_update_model",
+                name="T5 月度模型训练",
             )
+
+        # T6: generate signals — trading days
+        t6_h, t6_m = _parse_time(cfg.get("signal_generation_time", "08:15"))
+        self._scheduler.add_job(
+            self._run_if_trading_day,
+            "cron",
+            args=[self.generate_signals],
+            hour=t6_h,
+            minute=t6_m,
+            id="t6_generate_signals",
+            name="T6 信号生成与调仓",
+        )
 
     # ------------------------------------------------------------------
     # Trading day gate
@@ -189,17 +208,16 @@ class TradingScheduler:
         """Run *task_fn* only if today is a trading day."""
         today = today_str()
         if not self._c.db.is_trading_day(today):
-            logger.info("Skipping %s — %s is not a trading day",
-                        task_fn.__name__, today)
+            logger.info("Skipping %s — %s is not a trading day", task_fn.__name__, today)
             return
         await task_fn()
 
     # ------------------------------------------------------------------
-    # T1–T5: Thin wrappers delegating to task modules
+    # T1–T6: Thin wrappers delegating to task modules
     # ------------------------------------------------------------------
 
-    async def sync_global_market(self) -> None:
-        await sync_global_market(self._c)
+    async def sync_reference_data(self) -> None:
+        await sync_reference_data(self._c)
 
     async def poll_news(self) -> None:
         await poll_news(self._c)
@@ -207,54 +225,35 @@ class TradingScheduler:
     async def sync_domestic_market(self) -> None:
         await sync_domestic_market(self._c)
 
-    async def generate_signals(self) -> None:
-        await generate_signals(self._c)
-
-    async def sync_reference_data(self) -> None:
-        await sync_reference_data(self._c)
-
-    async def verify_signals(self) -> None:
-        await verify_signals(self._c)
+    async def sync_global_market(self) -> None:
+        await sync_global_market(self._c)
 
     async def update_model(self) -> None:
         await update_model(self._c)
 
+    async def generate_signals(self) -> None:
+        await generate_signals(self._c)
+
     # ------------------------------------------------------------------
-    # Manual trigger (for CLI / first-run)
+    # Manual trigger
     # ------------------------------------------------------------------
 
-    async def run_once(self) -> None:
-        """Run all tasks sequentially (for manual / first-run use).
+    async def run_signals(self) -> None:
+        """Manual trigger for T6 signal generation.
 
-        Order follows data dependencies:
-          T5 calendar → T3 domestic (K-lines + fundamentals) →
-          T1 global → T2 news → T4 signals
-
-        T5 is skipped if index constituents were synced within the last 7 days.
+        Auto-runs T4 (international data) if today's global snapshot is
+        missing. T3 K-line freshness is only warned about (08:15 cannot
+        get same-day K-lines anyway — they're populated at T3's 18:00 cron).
         """
-        logger.info("=== run_once: executing all tasks ===")
+        from pangu.tz import today_str
 
-        # Skip T5 if index constituents recently synced
-        skip_t5 = False
-        try:
-            rows = self._c.db.load_all_index_constituents()
-            if rows and isinstance(rows, list) and len(rows) > 0:
-                import datetime as _dt_mod
-                latest = max(r.get("date", "") for r in rows)
-                latest_date = _dt_mod.date.fromisoformat(latest)
-                days_ago = (_now().date() - latest_date).days
-                if days_ago <= 7:
-                    logger.info("[T5] Index constituents synced %d day(s) ago, skipping", days_ago)
-                    skip_t5 = True
-        except Exception:  # noqa: BLE001
-            pass
-        if not skip_t5:
-            await self.sync_reference_data()
+        today = today_str()
+        snaps = self._c.db.load_latest_global_snapshots()
+        need_t4 = snaps.empty or (isinstance(snaps["date"].max(), str) and snaps["date"].max() < today)
+        if need_t4:
+            logger.info("[run signals] Today's global snapshot missing — running T4 first")
+            await self.sync_global_market()
+        else:
+            logger.info("[run signals] Today's global snapshot already present — skipping T4")
 
-        await self.sync_domestic_market()
-        await self.sync_global_market()
-        await self.poll_news()
         await self.generate_signals()
-        await self.verify_signals()
-        logger.info("=== run_once complete ===")
-

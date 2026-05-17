@@ -42,8 +42,7 @@ def _price_limit_ratio(symbol: str, is_st: bool = False) -> float:
     STAR (688/689) and GEM (300/301) always use ±20% (even for ST on GEM).
     Main-board ST stocks use ±5%; all other main-board stocks use ±10%.
     """
-    if (_is_star_market(symbol)
-            or symbol.startswith("300") or symbol.startswith("301")):
+    if _is_star_market(symbol) or symbol.startswith("300") or symbol.startswith("301"):
         return 0.20
     if is_st:
         return 0.05
@@ -65,8 +64,8 @@ def _round_price(value: float) -> float:
 class BacktestResult:
     """Container for backtest output."""
 
-    nav: pd.Series                          # daily portfolio net asset value
-    benchmark_nav: pd.Series                # daily benchmark NAV
+    nav: pd.Series  # daily portfolio net asset value
+    benchmark_nav: pd.Series  # daily benchmark NAV
     holdings: pd.DataFrame = field(default_factory=pd.DataFrame)  # daily holdings
     rebalance_log: list[dict] = field(default_factory=list)
     metrics: dict = field(default_factory=dict)
@@ -174,6 +173,60 @@ class BacktestEngine:
             ``max_per_sector`` is set. Stocks missing from the map are
             grouped under "未知" sector with the same cap.
         """
+        from pangu.backtest.target_provider import ScoreBasedProvider
+
+        # Wrap the legacy score-based selection inside the new provider API
+        # and delegate to run_with_provider. universe_fn / sector_map / cap
+        # are now owned by the provider, not the engine itself.
+        common_stocks = scores.columns.intersection(close_prices.columns).intersection(open_prices.columns)
+        if exclude_prefixes:
+            common_stocks = pd.Index([s for s in common_stocks if not any(s.startswith(p) for p in exclude_prefixes)])
+        scores_aligned = scores.reindex(columns=common_stocks)
+
+        provider = ScoreBasedProvider(
+            scores_aligned,
+            top_n=self._top_n,
+            n_drop=self._n_drop,
+            universe_fn=universe_fn,
+            sector_map=sector_map,
+            max_per_sector=self._max_per_sector,
+        )
+
+        return self.run_with_provider(
+            provider,
+            open_prices=open_prices,
+            close_prices=close_prices,
+            benchmark_close=benchmark_close,
+            start=start,
+            end=end,
+            volume=volume,
+            adj_factor=adj_factor,
+            is_st=is_st,
+            exclude_prefixes=exclude_prefixes,
+            tradeable_universe=common_stocks,
+        )
+
+    def run_with_provider(
+        self,
+        target_provider,
+        *,
+        open_prices: pd.DataFrame,
+        close_prices: pd.DataFrame,
+        benchmark_close: pd.Series,
+        start: str | None = None,
+        end: str | None = None,
+        volume: pd.DataFrame | None = None,
+        adj_factor: pd.DataFrame | None = None,
+        is_st: pd.DataFrame | None = None,
+        exclude_prefixes: tuple[str, ...] = ("688", "689"),
+        tradeable_universe: pd.Index | None = None,
+    ) -> BacktestResult:
+        """Run backtest driven by a ``TargetProvider``.
+
+        This is the new public API. ``run(scores=..., ...)`` is preserved
+        as a thin wrapper that constructs a ``ScoreBasedProvider``.
+        ``ReplayProvider`` callers should use this method directly.
+        """
         # Align date range
         dates = close_prices.index.sort_values()
         if start:
@@ -184,17 +237,16 @@ class BacktestEngine:
         if len(dates) < 2:
             raise ValueError(f"Not enough dates for backtest: {len(dates)}")
 
-        # Align all inputs to common dates and stocks
-        common_stocks = scores.columns.intersection(
-            close_prices.columns
-        ).intersection(open_prices.columns)
-        # Exclude structurally untradeable stocks (e.g. STAR market 688/689)
-        if exclude_prefixes:
-            common_stocks = pd.Index([
-                s for s in common_stocks
-                if not any(s.startswith(p) for p in exclude_prefixes)
-            ])
-        scores = scores.reindex(index=dates, columns=common_stocks)
+        # Build the eligible-stock universe
+        if tradeable_universe is not None:
+            common_stocks = tradeable_universe
+        else:
+            common_stocks = close_prices.columns.intersection(open_prices.columns)
+            if exclude_prefixes:
+                common_stocks = pd.Index(
+                    [s for s in common_stocks if not any(s.startswith(p) for p in exclude_prefixes)]
+                )
+
         open_prices = open_prices.reindex(index=dates, columns=common_stocks)
         close_prices = close_prices.reindex(index=dates, columns=common_stocks)
         if volume is not None:
@@ -207,21 +259,27 @@ class BacktestEngine:
 
         logger.info(
             "Backtest: %s ~ %s, %d days, %d stocks, top_n=%d, n_drop=%d%s",
-            dates[0].date(), dates[-1].date(), len(dates),
-            len(common_stocks), self._top_n, self._n_drop,
+            dates[0].date(),
+            dates[-1].date(),
+            len(dates),
+            len(common_stocks),
+            self._top_n,
+            self._n_drop,
             f", max_per_sector={self._max_per_sector}" if self._max_per_sector else "",
         )
 
-        # Forward-fill close prices so suspended stocks retain last-known value
         close_prices = close_prices.ffill()
 
-        # Run simulation
         nav_values, rebal_log, holdings_records = self._simulate(
-            dates, scores, open_prices, close_prices, universe_fn, volume,
-            adj_factor, is_st, sector_map,
+            dates,
+            target_provider,
+            open_prices,
+            close_prices,
+            volume,
+            adj_factor,
+            is_st,
         )
 
-        # Build results
         nav = pd.Series(nav_values, index=dates, name="nav")
 
         # Benchmark NAV: use the close before backtest start as base
@@ -253,14 +311,12 @@ class BacktestEngine:
     def _simulate(
         self,
         dates: pd.DatetimeIndex,
-        scores: pd.DataFrame,
+        target_provider,
         open_prices: pd.DataFrame,
         close_prices: pd.DataFrame,
-        universe_fn: callable | None = None,
         volume: pd.DataFrame | None = None,
         adj_factor: pd.DataFrame | None = None,
         is_st: pd.DataFrame | None = None,
-        sector_map: dict[str, str] | None = None,
     ) -> tuple[list[float], list[dict], list[dict]]:
         """Day-by-day simulation loop."""
         cash = self._capital
@@ -275,8 +331,7 @@ class BacktestEngine:
             # --- Dividend processing ---
             # Detect ex-dividend events via adj_factor changes and credit
             # cash for held stocks. Uses 20% tax rate (holding < 1 month).
-            if (adj_factor is not None and prev_date is not None
-                    and holdings):
+            if adj_factor is not None and prev_date is not None and holdings:
                 prev_adj = adj_factor.loc[prev_date]
                 curr_adj = adj_factor.loc[date]
                 prev_cls = close_prices.loc[prev_date]
@@ -284,80 +339,41 @@ class BacktestEngine:
                     old_af = prev_adj.get(stock, np.nan)
                     new_af = curr_adj.get(stock, np.nan)
                     pc = prev_cls.get(stock, np.nan)
-                    if (np.isfinite(old_af) and np.isfinite(new_af)
-                            and np.isfinite(pc) and old_af > 0
-                            and new_af > old_af > 0):
+                    if (
+                        np.isfinite(old_af)
+                        and np.isfinite(new_af)
+                        and np.isfinite(pc)
+                        and old_af > 0
+                        and new_af > old_af > 0
+                    ):
                         div_per_share = pc * (1 - old_af / new_af)
                         cash += shares * div_per_share * 0.80
 
             # Rebalance on first trading day of each new ISO week,
             # plus the very first trading day of the backtest.
-            is_first_day = (prev_date is None and i == 0)
-            is_new_week = (prev_date is not None
-                           and date.isocalendar()[1] != prev_date.isocalendar()[1])
+            is_first_day = prev_date is None and i == 0
+            is_new_week = prev_date is not None and date.isocalendar()[1] != prev_date.isocalendar()[1]
             is_rebal = is_first_day or is_new_week
 
             if is_rebal:
-                # First day: use own score (no T-1 available); otherwise T-1
+                # First day: use own date as score reference (no T-1 available)
                 score_date = date if is_first_day else prev_date
-                prev_scores = scores.loc[score_date].dropna()
 
-                if universe_fn is not None:
-                    # Use score_date constituents (not rebalance date) to avoid
-                    # future information when T crosses a constituent change.
-                    universe = universe_fn(score_date.strftime("%Y-%m-%d"))
-                    prev_scores = prev_scores[prev_scores.index.isin(universe)]
-
-                if len(prev_scores) >= self._top_n:
-                    if self._n_drop > 0 and holdings:
-                        # Qlib-style TopkDropout: sell the worst n_drop held
-                        # stocks, buy the best n_drop non-held stocks.
-                        # Portfolio size stays constant at top_n.
-                        held = set(holdings.keys())
-                        # Rank held stocks by current score
-                        held_scores = {
-                            s: prev_scores.get(s, float("-inf"))
-                            for s in held
-                        }
-                        sorted_held = sorted(
-                            held_scores, key=held_scores.get, reverse=True
-                        )
-                        # Keep the best (top_n - n_drop) held stocks
-                        n_keep = max(0, min(len(sorted_held), self._top_n - self._n_drop))
-                        kept = sorted_held[:n_keep]
-                        # Fill remaining slots from top-ranked non-held stocks
-                        n_buy = self._top_n - len(kept)
-                        top_ranked = prev_scores.nlargest(
-                            self._top_n + self._n_drop + n_buy
-                        )
-                        kept_set = set(kept)
-                        to_buy = [
-                            s for s in top_ranked.index
-                            if s not in kept_set
-                        ][:n_buy]
-                        target = kept + to_buy
-                    else:
-                        target = prev_scores.nlargest(self._top_n).index.tolist()
-                else:
-                    target = prev_scores.sort_values(ascending=False).index.tolist()
-
-                # Apply sector cap: trim excess stocks per sector, keeping
-                # highest-scored. This is a hard constraint that overrides
-                # TopkDropout's keep decisions.
-                if self._max_per_sector and sector_map is not None:
-                    target = self._apply_sector_cap(
-                        target, prev_scores, sector_map,
-                    )
+                target = target_provider.get_target(date, score_date, dict(holdings))
 
                 today_open = open_prices.loc[date]
-                prev_close_prices = (close_prices.loc[prev_date]
-                                     if prev_date is not None
-                                     else today_open)
+                prev_close_prices = close_prices.loc[prev_date] if prev_date is not None else today_open
                 today_volume = volume.loc[date] if volume is not None and date in volume.index else None
                 today_st = is_st.loc[date] if is_st is not None and date in is_st.index else None
                 cash, holdings, log_entry = self._rebalance(
-                    date, cash, holdings, target, today_open, prev_close_prices,
-                    today_volume, today_st,
+                    date,
+                    cash,
+                    holdings,
+                    target,
+                    today_open,
+                    prev_close_prices,
+                    today_volume,
+                    today_st,
                 )
                 if log_entry:
                     rebal_log.append(log_entry)
@@ -369,20 +385,22 @@ class BacktestEngine:
                 price = today_close.get(stock, np.nan)
                 mv = shares * price if np.isfinite(price) else 0.0
                 port_value += mv
-                holdings_records.append({
-                    "date": date, "symbol": stock, "shares": shares,
-                    "market_value": mv,
-                    "weight": 0.0,  # filled below
-                })
+                holdings_records.append(
+                    {
+                        "date": date,
+                        "symbol": stock,
+                        "shares": shares,
+                        "market_value": mv,
+                        "weight": 0.0,  # filled below
+                    }
+                )
 
             # Fill weights now that port_value is known
             if holdings:
                 start_idx = len(holdings_records) - len(holdings)
                 for j in range(start_idx, len(holdings_records)):
                     if port_value > 0:
-                        holdings_records[j]["weight"] = (
-                            holdings_records[j]["market_value"] / port_value
-                        )
+                        holdings_records[j]["weight"] = holdings_records[j]["market_value"] / port_value
 
             nav_values.append(port_value)
             prev_date = date
@@ -390,65 +408,16 @@ class BacktestEngine:
         return nav_values, rebal_log, holdings_records
 
     # ------------------------------------------------------------------
-    # Sector cap
-    # ------------------------------------------------------------------
-
-    def _apply_sector_cap(
-        self,
-        target: list[str],
-        scores: pd.Series,
-        sector_map: dict[str, str],
-    ) -> list[str]:
-        """Trim target list so no sector has more than max_per_sector stocks.
-
-        Iterates through candidates ordered by score (descending) and keeps
-        the best stocks per sector.  If removing over-cap stocks leaves
-        room, fills from the next-best candidates in scores (not in target).
-        """
-        cap = self._max_per_sector
-        if not cap:
-            return target
-
-        # Sort target by score descending so we keep the best per sector
-        target_sorted = sorted(target, key=lambda s: scores.get(s, float("-inf")), reverse=True)
-        sector_counts: dict[str, int] = {}
-        result: list[str] = []
-
-        # First pass: pick from target stocks respecting cap
-        for sym in target_sorted:
-            sector = sector_map.get(sym, "未知")
-            cnt = sector_counts.get(sector, 0)
-            if cnt < cap:
-                result.append(sym)
-                sector_counts[sector] = cnt + 1
-            if len(result) >= self._top_n:
-                break
-
-        # Second pass: if underfilled, add non-target candidates by score
-        if len(result) < self._top_n:
-            result_set = set(result)
-            for sym in scores.sort_values(ascending=False).index:
-                if sym in result_set:
-                    continue
-                sector = sector_map.get(sym, "未知")
-                cnt = sector_counts.get(sector, 0)
-                if cnt < cap:
-                    result.append(sym)
-                    result_set.add(sym)
-                    sector_counts[sector] = cnt + 1
-                if len(result) >= self._top_n:
-                    break
-
-        return result
-
-    # ------------------------------------------------------------------
     # Rebalance
     # ------------------------------------------------------------------
 
     @staticmethod
     def _is_at_limit(
-        open_price: float, prev_close: float, direction: str,
-        symbol: str = "", is_st: bool = False,
+        open_price: float,
+        prev_close: float,
+        direction: str,
+        symbol: str = "",
+        is_st: bool = False,
     ) -> bool:
         """Check if stock is at price limit.
 
@@ -513,12 +482,9 @@ class BacktestEngine:
 
         # --- Step 0: Classify ---
         # Held ST stocks are force-sold regardless of target membership
-        need_to_sell = [s for s in sorted(holdings)
-                        if s not in target_set or _stock_is_st(s)]
-        need_to_adjust = [s for s in target
-                          if s in holdings_set and not _stock_is_st(s)]
-        need_to_buy = [s for s in target
-                       if s not in holdings_set and not _stock_is_st(s)]
+        need_to_sell = [s for s in sorted(holdings) if s not in target_set or _stock_is_st(s)]
+        need_to_adjust = [s for s in target if s in holdings_set and not _stock_is_st(s)]
+        need_to_buy = [s for s in target if s not in holdings_set and not _stock_is_st(s)]
 
         # --- Step 1: Sell NeedToSell ---
         new_holdings: dict[str, int] = {}
@@ -526,10 +492,11 @@ class BacktestEngine:
             shares = holdings[stock]
             price = open_prices.get(stock, np.nan)
             pc = prev_close.get(stock, np.nan)
-            if (_has_valid_price(stock)
-                    and not _is_suspended(stock)
-                    and not self._is_at_limit(price, pc, "down", stock,
-                                              is_st=_stock_is_st(stock))):
+            if (
+                _has_valid_price(stock)
+                and not _is_suspended(stock)
+                and not self._is_at_limit(price, pc, "down", stock, is_st=_stock_is_st(stock))
+            ):
                 sell_value = shares * price
                 cash += sell_value - self._sell_cost(sell_value)
                 turnover += sell_value
@@ -543,17 +510,17 @@ class BacktestEngine:
             new_holdings[stock] = holdings[stock]
 
         # --- Step 2: Build allocation pools ---
-        adjustable_pool = [
-            s for s in need_to_adjust
-            if _has_valid_price(s) and not _is_suspended(s)
-        ]
+        adjustable_pool = [s for s in need_to_adjust if _has_valid_price(s) and not _is_suspended(s)]
         can_buy = [
-            s for s in need_to_buy
+            s
+            for s in need_to_buy
             if _has_valid_price(s)
             and not _is_suspended(s)
             and not self._is_at_limit(
                 open_prices.get(s, np.nan),
-                prev_close.get(s, np.nan), "up", s,
+                prev_close.get(s, np.nan),
+                "up",
+                s,
                 is_st=_stock_is_st(s),
             )
         ]
@@ -586,8 +553,7 @@ class BacktestEngine:
 
             if share_diff > 0:
                 # Buy more
-                if self._is_at_limit(price, pc, "up", stock,
-                                     is_st=_stock_is_st(stock)):
+                if self._is_at_limit(price, pc, "up", stock, is_st=_stock_is_st(stock)):
                     new_holdings.setdefault(stock, current_shares)
                     continue
                 cost_basis = share_diff * price
@@ -606,8 +572,7 @@ class BacktestEngine:
 
             elif share_diff < 0:
                 # Sell excess
-                if self._is_at_limit(price, pc, "down", stock,
-                                     is_st=_stock_is_st(stock)):
+                if self._is_at_limit(price, pc, "down", stock, is_st=_stock_is_st(stock)):
                     new_holdings.setdefault(stock, current_shares)
                     continue
                 sell_shares = min(-share_diff, current_shares)
@@ -643,7 +608,10 @@ class BacktestEngine:
     # ------------------------------------------------------------------
 
     def _compute_metrics(
-        self, nav: pd.Series, benchmark_nav: pd.Series, rebal_log: list[dict],
+        self,
+        nav: pd.Series,
+        benchmark_nav: pd.Series,
+        rebal_log: list[dict],
     ) -> dict:
         """Compute standard backtest metrics."""
         ret = nav.pct_change().dropna()
@@ -668,10 +636,7 @@ class BacktestEngine:
 
         total_turnover = sum(e.get("turnover", 0.0) for e in rebal_log)
         avg_nav = nav.mean()
-        annual_turnover = (
-            total_turnover / avg_nav / n_years
-            if (avg_nav > 0 and n_years > 0) else 0.0
-        )
+        annual_turnover = total_turnover / avg_nav / n_years if (avg_nav > 0 and n_years > 0) else 0.0
 
         return {
             "total_return": round(float(total_return), 4),

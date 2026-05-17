@@ -52,11 +52,13 @@ class AkShareFundamentalProvider(ThrottleMixin):
         self._throttle()
 
         from pangu.tz import now as _now
+
         if start_year is None:
             start_year = str(_now().year - 1)
         df = retry_call(
             lambda: self._ak.stock_financial_analysis_indicator(
-                symbol=symbol, start_year=start_year,
+                symbol=symbol,
+                start_year=start_year,
             ),
             circuit=self._circuit,
         )
@@ -169,7 +171,10 @@ class AkShareFundamentalProvider(ThrottleMixin):
         return result
 
     def get_financial_indicator(
-        self, symbol: str, start: str | None = None, end: str | None = None,
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
     ) -> pd.DataFrame:
         """Return standardized financial indicators DataFrame.
 
@@ -208,6 +213,8 @@ class AkShareFundamentalProvider(ThrottleMixin):
 
         except Exception:  # noqa: BLE001
             logger.warning(
-                "get_financial_indicator(%s) failed", symbol, exc_info=True,
+                "get_financial_indicator(%s) failed",
+                symbol,
+                exc_info=True,
             )
             return pd.DataFrame()

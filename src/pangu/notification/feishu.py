@@ -1,15 +1,14 @@
-"""Feishu (Lark) notifier — PRD §4.5.2.
+"""Feishu (Lark) notifier.
 
 Uses lark-oapi SDK for:
 - Auto-pairing: user sends any DM to bot → open_id persisted via WS long connection
-- Signal push: interactive card via OpenAPI im.v1.message.create
+- Markdown card push via OpenAPI im.v1.message.create
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import math
 import threading
 from collections.abc import Callable
 
@@ -20,141 +19,13 @@ from lark_oapi.api.im.v1 import (
     P2ImMessageReceiveV1,
 )
 
-from pangu.models import Action, SignalStatus, TradeSignal
 from pangu.notification import NotificationProvider  # noqa: F401 — backward compat
-from pangu.strategy.llm.prompts import FACTOR_LABELS
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Feishu notifier
-# ---------------------------------------------------------------------------
-
-_ACTION_ICON = {
-    Action.BUY: "🟢 买入信号",
-    Action.SELL: "🔴 卖出信号",
-    Action.HOLD: "⚪ 持有观望",
-}
-
-_STATUS_LABEL = {
-    SignalStatus.NEW_ENTRY: "⚡ 首次入选",
-    SignalStatus.SUSTAINED: "🔄 维持关注",
-    SignalStatus.EXIT: "⛔ 退出",
-}
-
-
-def _stars(confidence: float) -> str:
-    """Convert 0-1 confidence to star rating."""
-    n = max(1, min(5, round(confidence * 5)))
-    return "⭐" * n
-
-
-def format_signal_card(signal: TradeSignal) -> dict:
-    """Build a Feishu interactive card JSON for *signal*."""
-    ts = signal.timestamp.strftime("%Y-%m-%d %H:%M")
-    header = f"{_ACTION_ICON.get(signal.action, '⚪')} | {ts}"
-    status = _STATUS_LABEL.get(signal.signal_status, str(signal.signal_status.value))
-
-    lines = [
-        f"**股票**: {signal.name} ({signal.symbol})",
-        f"**信号状态**: {status}",
-    ]
-
-    meta = signal.metadata or {}
-
-    if signal.factor_score is not None:
-        rank_str = ""
-        if meta.get("factor_rank") is not None and meta.get("pool_size"):
-            rank_str = f"  排名: {meta['factor_rank']}/{meta['pool_size']}"
-        lines.append(f"**因子评分**: {signal.factor_score:.2f}{rank_str}")
-
-    action_verb = "买入" if signal.action is Action.BUY else "卖出" if signal.action is Action.SELL else "观望"
-    lines.append(f"**建议操作**: 以 ¥{signal.price:,.2f} {action_verb}")
-
-    if signal.stop_loss is not None:
-        pct = (signal.stop_loss - signal.price) / signal.price * 100
-        lines.append(f"**止损价**: ¥{signal.stop_loss:,.2f} ({pct:+.1f}%)")
-    if signal.take_profit is not None:
-        pct = (signal.take_profit - signal.price) / signal.price * 100
-        lines.append(f"**止盈价**: ¥{signal.take_profit:,.2f} ({pct:+.1f}%)")
-
-    lines.append(f"**置信度**: {_stars(signal.confidence)} ({signal.confidence:.2f})")
-
-    if signal.reason:
-        lines.append(f"\n📊 **分析**: {signal.reason}")
-
-    # Metadata extras
-    if "news_title" in meta:
-        lines.append(f"📰 **事件**: {meta['news_title']}")
-
-    lines.append(f"\n_信号来源: {signal.source}_")
-
-    content = "\n".join(lines)
-
-    elements: list[dict] = [{"tag": "markdown", "content": content}]
-
-    # LLM analysis collapsible section
-    panel_lines: list[str] = []
-
-    # Factor details at top of panel
-    factor_details = meta.get("factor_details")
-    if factor_details:
-        factor_items = []
-        for key, val in factor_details.items():
-            label = FACTOR_LABELS.get(key, key)
-            if isinstance(val, float) and math.isnan(val):
-                factor_items.append(f"{label}: 缺失")
-            elif isinstance(val, float):
-                factor_items.append(f"{label}: {val:.4f}")
-            else:
-                factor_items.append(f"{label}: {val}")
-        panel_lines.append(f"📊 **关键因子**: {' | '.join(factor_items)}")
-
-    # LLM reasoning
-    if meta.get("bull_reason"):
-        panel_lines.append(f"🐂 **牛方观点**: {meta['bull_reason']}")
-    if meta.get("bear_reason"):
-        panel_lines.append(f"🐻 **熊方观点**: {meta['bear_reason']}")
-    if meta.get("judge_conclusion"):
-        panel_lines.append(f"⚖️ **裁判结论**: {meta['judge_conclusion']}")
-    if meta.get("short_term_outlook"):
-        panel_lines.append(f"📅 **短期展望**: {meta['short_term_outlook']}")
-    if meta.get("mid_term_outlook"):
-        panel_lines.append(f"📆 **中期展望**: {meta['mid_term_outlook']}")
-
-    if panel_lines:
-        elements.append({"tag": "hr"})
-        elements.append({
-            "tag": "collapsible_panel",
-            "expanded": False,
-            "header": {
-                "title": {
-                    "tag": "plain_text",
-                    "content": "🤖 LLM 综合分析",
-                },
-            },
-            "elements": [
-                {"tag": "markdown", "content": "\n".join(panel_lines)},
-            ],
-        })
-
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": header},
-            "template": (
-                "green" if signal.action is Action.BUY
-                else "red" if signal.action is Action.SELL
-                else "grey"
-            ),
-        },
-        "elements": elements,
-    }
-
-
 class FeishuNotifier:
-    """Send trade signals via Feishu bot private message.
+    """Send notifications via Feishu bot private message.
 
     Supports auto-pairing: call ``start_ws_client()`` to listen for user DMs.
     When a user sends any message to the bot, their ``open_id`` is captured
@@ -170,12 +41,7 @@ class FeishuNotifier:
     ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
-        self._client = (
-            lark.Client.builder()
-            .app_id(app_id)
-            .app_secret(app_secret)
-            .build()
-        )
+        self._client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
         self._open_id = open_id
         self._on_bind = on_bind
         self._ws_thread: threading.Thread | None = None
@@ -223,11 +89,7 @@ class FeishuNotifier:
             CreateMessageRequest.builder()
             .receive_id_type("open_id")
             .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(open_id)
-                .msg_type("text")
-                .content(content)
-                .build()
+                CreateMessageRequestBody.builder().receive_id(open_id).msg_type("text").content(content).build()
             )
             .build()
         )
@@ -249,11 +111,7 @@ class FeishuNotifier:
             CreateMessageRequest.builder()
             .receive_id_type("open_id")
             .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(self._open_id)
-                .msg_type(msg_type)
-                .content(content)
-                .build()
+                CreateMessageRequestBody.builder().receive_id(self._open_id).msg_type(msg_type).content(content).build()
             )
             .build()
         )
@@ -268,14 +126,6 @@ class FeishuNotifier:
         except Exception:
             logger.exception("Feishu send exception")
             return False
-
-    async def send_signal(self, signal: TradeSignal) -> bool:
-        """Send a trade signal as an interactive card."""
-        if not self._open_id:
-            logger.warning("FeishuNotifier: no open_id bound, skipping push")
-            return False
-        card = format_signal_card(signal)
-        return self._send_message("interactive", json.dumps(card))
 
     async def send_text(self, text: str) -> bool:
         """Send a plain-text message."""

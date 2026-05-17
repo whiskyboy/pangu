@@ -11,14 +11,11 @@ import pandas as pd
 import yaml
 
 from pangu.models import (
-    Action,
     NewsCategory,
     NewsItem,
     Region,
-    SignalStatus,
-    TradeSignal,
 )
-from pangu.tz import now as _tz_now
+from pangu.strategy.llm import DebateNotes, Pick, RebalanceDecision
 
 # ---------------------------------------------------------------------------
 # FakeMarketDataProvider  (was in pangu.data.market)
@@ -50,63 +47,150 @@ class FakeMarketDataProvider:
         dates = pd.bdate_range(start, end)
         n = len(dates)
         if n == 0:
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-            )
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"])
         close = base * np.cumprod(1 + rng.normal(0.001, 0.02, n))
         open_ = close * rng.uniform(0.98, 1.02, n)
         high = np.maximum(open_, close) * rng.uniform(1.0, 1.03, n)
         low = np.minimum(open_, close) * rng.uniform(0.97, 1.0, n)
         volume = rng.integers(1_000_000, 10_000_000, n)
-        return pd.DataFrame({
-            "date": dates,
-            "open": open_,
-            "high": high,
-            "low": low,
-            "close": close,
-            "volume": volume,
-            "amount": close * volume,
-            "adj_factor": 1.0,
-        })
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "amount": close * volume,
+                "adj_factor": 1.0,
+            }
+        )
 
     def _get_us_indices(self) -> pd.DataFrame:
-        return pd.DataFrame([
-            {"symbol": "SPX", "name": "S&P 500", "date": "2026-01-02", "open": 5180.0,
-             "high": 5220.0, "low": 5170.0, "close": 5200.0, "volume": 3e9,
-             "change_pct": 0.3, "source": "us_index"},
-            {"symbol": "DJI", "name": "Dow Jones", "date": "2026-01-02", "open": 38900.0,
-             "high": 39100.0, "low": 38800.0, "close": 39000.0, "volume": 2e9,
-             "change_pct": 0.2, "source": "us_index"},
-            {"symbol": "IXIC", "name": "NASDAQ", "date": "2026-01-02", "open": 16400.0,
-             "high": 16600.0, "low": 16350.0, "close": 16500.0, "volume": 4e9,
-             "change_pct": 0.5, "source": "us_index"},
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": "SPX",
+                    "name": "S&P 500",
+                    "date": "2026-01-02",
+                    "open": 5180.0,
+                    "high": 5220.0,
+                    "low": 5170.0,
+                    "close": 5200.0,
+                    "volume": 3e9,
+                    "change_pct": 0.3,
+                    "source": "us_index",
+                },
+                {
+                    "symbol": "DJI",
+                    "name": "Dow Jones",
+                    "date": "2026-01-02",
+                    "open": 38900.0,
+                    "high": 39100.0,
+                    "low": 38800.0,
+                    "close": 39000.0,
+                    "volume": 2e9,
+                    "change_pct": 0.2,
+                    "source": "us_index",
+                },
+                {
+                    "symbol": "IXIC",
+                    "name": "NASDAQ",
+                    "date": "2026-01-02",
+                    "open": 16400.0,
+                    "high": 16600.0,
+                    "low": 16350.0,
+                    "close": 16500.0,
+                    "volume": 4e9,
+                    "change_pct": 0.5,
+                    "source": "us_index",
+                },
+            ]
+        )
 
     def _get_hk_indices(self) -> pd.DataFrame:
-        return pd.DataFrame([
-            {"symbol": "HSI", "name": "恒生指数", "date": "2026-01-02", "open": 17600.0,
-             "high": 17700.0, "low": 17400.0, "close": 17500.0, "volume": 1e9,
-             "change_pct": -0.3, "source": "hk_index"},
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": "HSI",
+                    "name": "恒生指数",
+                    "date": "2026-01-02",
+                    "open": 17600.0,
+                    "high": 17700.0,
+                    "low": 17400.0,
+                    "close": 17500.0,
+                    "volume": 1e9,
+                    "change_pct": -0.3,
+                    "source": "hk_index",
+                },
+            ]
+        )
 
     def _get_commodity_futures(self) -> pd.DataFrame:
-        return pd.DataFrame([
-            {"symbol": "GC", "name": "COMEX黄金", "date": "2026-01-02", "open": 2340.0,
-             "high": 2360.0, "low": 2330.0, "close": 2350.0, "volume": 1e6,
-             "change_pct": 0.1, "source": "commodity"},
-            {"symbol": "SI", "name": "COMEX白银", "date": "2026-01-02", "open": 28.3,
-             "high": 28.8, "low": 28.1, "close": 28.5, "volume": 5e5,
-             "change_pct": -0.2, "source": "commodity"},
-            {"symbol": "CL", "name": "WTI原油", "date": "2026-01-02", "open": 77.5,
-             "high": 78.5, "low": 77.0, "close": 78.0, "volume": 8e5,
-             "change_pct": 0.8, "source": "commodity"},
-            {"symbol": "HG", "name": "LME铜", "date": "2026-01-02", "open": 4.15,
-             "high": 4.25, "low": 4.1, "close": 4.2, "volume": 3e5,
-             "change_pct": 0.4, "source": "commodity"},
-            {"symbol": "FEF", "name": "铁矿石", "date": "2026-01-02", "open": 830.0,
-             "high": 835.0, "low": 815.0, "close": 820.0, "volume": 2e5,
-             "change_pct": -1.0, "source": "commodity"},
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": "GC",
+                    "name": "COMEX黄金",
+                    "date": "2026-01-02",
+                    "open": 2340.0,
+                    "high": 2360.0,
+                    "low": 2330.0,
+                    "close": 2350.0,
+                    "volume": 1e6,
+                    "change_pct": 0.1,
+                    "source": "commodity",
+                },
+                {
+                    "symbol": "SI",
+                    "name": "COMEX白银",
+                    "date": "2026-01-02",
+                    "open": 28.3,
+                    "high": 28.8,
+                    "low": 28.1,
+                    "close": 28.5,
+                    "volume": 5e5,
+                    "change_pct": -0.2,
+                    "source": "commodity",
+                },
+                {
+                    "symbol": "CL",
+                    "name": "WTI原油",
+                    "date": "2026-01-02",
+                    "open": 77.5,
+                    "high": 78.5,
+                    "low": 77.0,
+                    "close": 78.0,
+                    "volume": 8e5,
+                    "change_pct": 0.8,
+                    "source": "commodity",
+                },
+                {
+                    "symbol": "HG",
+                    "name": "LME铜",
+                    "date": "2026-01-02",
+                    "open": 4.15,
+                    "high": 4.25,
+                    "low": 4.1,
+                    "close": 4.2,
+                    "volume": 3e5,
+                    "change_pct": 0.4,
+                    "source": "commodity",
+                },
+                {
+                    "symbol": "FEF",
+                    "name": "铁矿石",
+                    "date": "2026-01-02",
+                    "open": 830.0,
+                    "high": 835.0,
+                    "low": 815.0,
+                    "close": 820.0,
+                    "volume": 2e5,
+                    "change_pct": -1.0,
+                    "source": "commodity",
+                },
+            ]
+        )
 
     def get_global_snapshot(self) -> pd.DataFrame:
         return pd.concat(
@@ -120,21 +204,21 @@ class FakeMarketDataProvider:
         dates = pd.bdate_range(start, end)
         n = len(dates)
         if n == 0:
-            return pd.DataFrame(
-                columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"]
-            )
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume", "amount", "adj_factor"])
         base = 3500.0
         close = base * np.cumprod(1 + rng.normal(0.0005, 0.01, n))
-        return pd.DataFrame({
-            "date": [d.strftime("%Y-%m-%d") for d in dates],
-            "open": close * rng.uniform(0.99, 1.01, n),
-            "high": close * rng.uniform(1.0, 1.02, n),
-            "low": close * rng.uniform(0.98, 1.0, n),
-            "close": close,
-            "volume": rng.integers(1_000_000, 5_000_000, n).astype(float),
-            "amount": rng.integers(10_000_000, 50_000_000, n).astype(float),
-            "adj_factor": np.ones(n),
-        })
+        return pd.DataFrame(
+            {
+                "date": [d.strftime("%Y-%m-%d") for d in dates],
+                "open": close * rng.uniform(0.99, 1.01, n),
+                "high": close * rng.uniform(1.0, 1.02, n),
+                "low": close * rng.uniform(0.98, 1.0, n),
+                "close": close,
+                "volume": rng.integers(1_000_000, 5_000_000, n).astype(float),
+                "amount": rng.integers(10_000_000, 50_000_000, n).astype(float),
+                "adj_factor": np.ones(n),
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -146,15 +230,22 @@ class FakeFundamentalDataProvider:
     """Deterministic fake data for testing."""
 
     def get_financial_indicator(
-        self, symbol: str, start: str | None = None, end: str | None = None,
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
     ) -> pd.DataFrame:
-        return pd.DataFrame([{
-            "symbol": symbol,
-            "date": "2025-12-31",
-            "roe_ttm": 0.18,
-            "revenue_yoy": 0.12,
-            "profit_yoy": 0.15,
-        }])
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": symbol,
+                    "date": "2025-12-31",
+                    "roe_ttm": 0.18,
+                    "revenue_yoy": 0.12,
+                    "profit_yoy": 0.15,
+                }
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +327,7 @@ class FakeStockPool:
         if self._path.exists():
             data = yaml.safe_load(self._path.read_text())
             watchlist = (data or {}).get("watchlist") or []
-            self._symbols = [
-                item["symbol"] for item in watchlist if "symbol" in item
-            ]
+            self._symbols = [item["symbol"] for item in watchlist if "symbol" in item]
 
     def get_watchlist(self) -> list[str]:
         return list(self._symbols)
@@ -256,6 +345,7 @@ class FakeStockPool:
 
     def get_stock_metadata(self) -> dict:
         from pangu.models import StockMeta
+
         return {s: StockMeta(name=s, sector="") for s in self._symbols}
 
     def sync_index_constituents(self) -> int:
@@ -268,66 +358,31 @@ class FakeStockPool:
 
 
 class FakeLLMJudgeEngine:
-    """Deterministic judge based on factor_score. For testing only.
+    """Deterministic pool-level judge. For testing only.
 
-    Unlike LLMJudgeEngineImpl, no error handling — expects well-formed input.
+    ``judge_rebalance`` simply returns the top ``n_drop`` symbols of each
+    pool (ML-rank order) as Picks, with a fixed reason string. No LLM call.
     """
 
-    async def judge_stock(
+    async def judge_rebalance(
         self,
-        symbol: str,
-        name: str,
-        factor_score: float,
-        factor_rank: int,
-        factor_details: dict[str, float],
-        stock_news: list[NewsItem],
-        announcements: list[NewsItem],
+        *,
+        today: str,
+        sell_candidates: list[dict[str, Any]],
+        buy_candidates: list[dict[str, Any]],
         telegraph: list[NewsItem],
         global_market: pd.DataFrame,
-        price: float,
-    ) -> TradeSignal:
-
-        if factor_score >= 0.7:
-            action = Action.BUY
-        elif factor_score <= 0.3:
-            action = Action.SELL
-        else:
-            action = Action.HOLD
-
-        return TradeSignal(
-            timestamp=_tz_now(),
-            symbol=symbol,
-            name=name,
-            action=action,
-            signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0,
-            price=price,
-            confidence=factor_score,
-            source="fake_llm_judge",
-            reason=f"fake judge: score={factor_score:.2f}",
-            factor_score=factor_score,
-            metadata={},
+        top_n: int,
+        n_drop: int,
+        universe_size: int = 0,
+        timeout: float = 120.0,
+    ) -> RebalanceDecision:
+        sells = [Pick(symbol=c["symbol"], reason="fake sell", evidence="") for c in sell_candidates[:n_drop]]
+        buys = [Pick(symbol=c["symbol"], reason="fake buy", evidence="") for c in buy_candidates[:n_drop]]
+        return RebalanceDecision(
+            sells=sells,
+            buys=buys,
+            sell_debate=DebateNotes(bull="fake-bull", bear="fake-bear"),
+            buy_debate=DebateNotes(bull="fake-bull", bear="fake-bear"),
+            source="llm_judge",
         )
-
-    async def judge_pool(
-        self,
-        candidates: list[dict[str, Any]],
-        telegraph: list[NewsItem],
-        global_market: pd.DataFrame,
-    ) -> list[TradeSignal]:
-        signals = []
-        for c in candidates:
-            signal = await self.judge_stock(
-                symbol=c["symbol"],
-                name=c["name"],
-                factor_score=c["factor_score"],
-                factor_rank=c["factor_rank"],
-                factor_details=c.get("factor_details", {}),
-                stock_news=c.get("stock_news", []),
-                announcements=c.get("announcements", []),
-                telegraph=telegraph,
-                global_market=global_market,
-                price=c["price"],
-            )
-            signals.append(signal)
-        return signals

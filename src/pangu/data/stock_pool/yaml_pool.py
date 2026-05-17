@@ -171,11 +171,13 @@ class StockPoolManager:
         if not results:
             for r in rows:
                 if input_str in r.get("name", ""):
-                    results.append({
-                        "symbol": r.get("symbol", ""),
-                        "name": r.get("name", ""),
-                        "sector": r.get("sector", ""),
-                    })
+                    results.append(
+                        {
+                            "symbol": r.get("symbol", ""),
+                            "name": r.get("name", ""),
+                            "sector": r.get("sector", ""),
+                        }
+                    )
         return results
 
     def add_to_watchlist(
@@ -287,9 +289,7 @@ class StockPoolManager:
                     from pangu.tz import now as _tz_now
 
                     try:
-                        ipo_date = datetime.strptime(ipo_date_str, "%Y%m%d").replace(
-                            tzinfo=_get_tz()
-                        )
+                        ipo_date = datetime.strptime(ipo_date_str, "%Y%m%d").replace(tzinfo=_get_tz())
                         if (_tz_now() - ipo_date).days < self._min_listing_days:
                             logger.info("filtered %s: IPO < %d days", symbol, self._min_listing_days)
                             continue
@@ -298,9 +298,7 @@ class StockPoolManager:
 
                 result.append(symbol)
             except Exception:  # noqa: BLE001
-                logger.warning(
-                    "filter check failed for %s, keeping it", symbol, exc_info=True
-                )
+                logger.warning("filter check failed for %s, keeping it", symbol, exc_info=True)
                 result.append(symbol)
 
         return result
@@ -373,13 +371,15 @@ class StockPoolManager:
                         sector = info_map.get("行业", "")
                 except Exception:  # noqa: BLE001
                     logger.warning("sync_index(%s): sector lookup failed for %s", index_code, symbol)
-                all_rows.append({
-                    "symbol": symbol,
-                    "name": name,
-                    "index_code": index_code,
-                    "sector": sector,
-                    "date": today,
-                })
+                all_rows.append(
+                    {
+                        "symbol": symbol,
+                        "name": name,
+                        "index_code": index_code,
+                        "sector": sector,
+                        "date": today,
+                    }
+                )
                 if idx % 50 == 0:
                     logger.info("sync_index(%s): %d/%d stocks processed", index_code, idx, total)
 
@@ -391,7 +391,9 @@ class StockPoolManager:
         return count
 
     def sync_historical_constituents(
-        self, start: str = "2019-01-01", end: str | None = None,
+        self,
+        start: str = "2019-01-01",
+        end: str | None = None,
     ) -> tuple[int, set[str]]:
         """Fetch historical index constituents from BaoStock, sampled semi-annually.
 
@@ -458,12 +460,14 @@ class StockPoolManager:
                     if not code.startswith(("sh.", "sz.")):
                         continue
                     symbol = code[3:]
-                    all_rows.append({
-                        "date": d,
-                        "index_code": idx_code,
-                        "symbol": symbol,
-                        "name": r.get("code_name", ""),
-                    })
+                    all_rows.append(
+                        {
+                            "date": d,
+                            "index_code": idx_code,
+                            "symbol": symbol,
+                            "name": r.get("code_name", ""),
+                        }
+                    )
                     all_symbols.add(symbol)
 
             logger.info("sync_historical: %s — %d rows so far", d, len(all_rows))
@@ -473,7 +477,9 @@ class StockPoolManager:
         count = self._storage.save_index_constituents(all_rows)
         logger.info(
             "sync_historical: %d records saved, %d unique stocks, %d dates",
-            count, len(all_symbols), len(dates),
+            count,
+            len(all_symbols),
+            len(dates),
         )
         return count, all_symbols
 
@@ -499,8 +505,7 @@ class StockPoolManager:
         if symbols is None:
             with self._storage._lock:
                 rows = self._storage._conn.execute(
-                    "SELECT DISTINCT symbol FROM index_constituents "
-                    "WHERE sector IS NULL OR sector = ''"
+                    "SELECT DISTINCT symbol FROM index_constituents WHERE sector IS NULL OR sector = ''"
                 ).fetchall()
             symbols = {r[0] for r in rows}
 
@@ -528,13 +533,21 @@ class StockPoolManager:
                 logger.debug("backfill_sectors: failed for %s", symbol)
 
             if i % 50 == 0:
-                logger.info("backfill_sectors: %d/%d symbols queried (%d found, %d failed)",
-                            i, len(symbols), len(sector_map), failed)
+                logger.info(
+                    "backfill_sectors: %d/%d symbols queried (%d found, %d failed)",
+                    i,
+                    len(symbols),
+                    len(sector_map),
+                    failed,
+                )
 
         updated = self._storage.update_constituent_sectors(sector_map)
         logger.info(
             "backfill_sectors: %d symbols queried, %d sectors found, %d DB rows updated, %d failed",
-            len(symbols), len(sector_map), updated, failed,
+            len(symbols),
+            len(sector_map),
+            updated,
+            failed,
         )
         return updated
 

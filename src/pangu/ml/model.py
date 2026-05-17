@@ -145,7 +145,8 @@ class LGBModel:
         self.params["n_estimators"] = n_estimators  # restore
 
         self.model.fit(
-            X_train, y_train,
+            X_train,
+            y_train,
             sample_weight=sample_weight,
             eval_set=[(X_val, y_val)],
             callbacks=[
@@ -163,12 +164,15 @@ class LGBModel:
         if best_iter < self.min_iterations and best_iter < n_estimators:
             logger.info(
                 "  Early stop at %d < min_iterations=%d, retraining with %d rounds",
-                best_iter, self.min_iterations, self.min_iterations,
+                best_iter,
+                self.min_iterations,
+                self.min_iterations,
             )
             retrain_params = {k: v for k, v in model_params.items() if k != "n_estimators"}
             self.model = lgb.LGBMRegressor(n_estimators=self.min_iterations, **retrain_params)
             self.model.fit(
-                X_train, y_train,
+                X_train,
+                y_train,
                 sample_weight=sample_weight,
                 eval_set=[(X_val, y_val)],
                 callbacks=[lgb.log_evaluation(period=0)],
@@ -252,7 +256,8 @@ class LGBRankerModel:
         self.params["n_estimators"] = n_estimators  # restore
 
         self.model.fit(
-            X_train, y_train,
+            X_train,
+            y_train,
             group=groups_train,
             eval_set=[(X_val, y_val)],
             eval_group=[groups_val],
@@ -268,12 +273,15 @@ class LGBRankerModel:
         if best_iter < self.min_iterations and best_iter < n_estimators:
             logger.info(
                 "  Early stop at %d < min_iterations=%d, retraining with %d rounds",
-                best_iter, self.min_iterations, self.min_iterations,
+                best_iter,
+                self.min_iterations,
+                self.min_iterations,
             )
             retrain_params = {k: v for k, v in self.params.items() if k != "n_estimators"}
             self.model = lgb.LGBMRanker(n_estimators=self.min_iterations, **retrain_params)
             self.model.fit(
-                X_train, y_train,
+                X_train,
+                y_train,
                 group=groups_train,
                 eval_set=[(X_val, y_val)],
                 eval_group=[groups_val],
@@ -321,6 +329,7 @@ class LGBRankerModel:
 # Per-window evaluation metrics
 # ---------------------------------------------------------------------------
 
+
 def _compute_ic(y_true: pd.Series, y_pred: pd.Series) -> dict:
     """Compute daily IC and Rank IC, averaged across dates.
 
@@ -342,8 +351,7 @@ def _compute_ic(y_true: pd.Series, y_pred: pd.Series) -> dict:
         rank_ic_list.append(ric)
 
     if not ic_list:
-        return {"ic_mean": np.nan, "ic_std": np.nan,
-                "rank_ic_mean": np.nan, "rank_ic_std": np.nan}
+        return {"ic_mean": np.nan, "ic_std": np.nan, "rank_ic_mean": np.nan, "rank_ic_std": np.nan}
 
     return {
         "ic_mean": np.mean(ic_list),
@@ -370,6 +378,7 @@ def _average_seed_scores(scores_list: list[pd.Series]) -> pd.Series:
 # ---------------------------------------------------------------------------
 # Walk-Forward orchestrator
 # ---------------------------------------------------------------------------
+
 
 def train_walk_forward(
     storage: "DataStorage",
@@ -493,19 +502,23 @@ def train_walk_forward(
     # Resolve horizon settings
     horizon_list = label_horizon if isinstance(label_horizon, list) else [label_horizon]
     max_horizon = max(horizon_list)
-    horizon_desc = (
-        f"multi-horizon {horizon_list}" if len(horizon_list) > 1
-        else f"{horizon_list[0]}-day"
-    )
+    horizon_desc = f"multi-horizon {horizon_list}" if len(horizon_list) > 1 else f"{horizon_list[0]}-day"
 
     seeds_desc = f", n_seeds={n_seeds}" if n_seeds > 1 else ""
     window_type = "expanding" if expanding else f"fixed {train_months}mo"
     logger.info(
         "Walk-Forward: %d windows (%s), mode=%s, early_stop=%s, "
         "time_decay_halflife=%dd, train_subsample_stride=%s, labels=%s%s, test covers %s ~ %s",
-        len(windows), window_type, mode, early_stop_metric,
-        time_decay_halflife, train_subsample_stride or "none",
-        horizon_desc, seeds_desc, windows[0].test_start, global_end,
+        len(windows),
+        window_type,
+        mode,
+        early_stop_metric,
+        time_decay_halflife,
+        train_subsample_stride or "none",
+        horizon_desc,
+        seeds_desc,
+        windows[0].test_start,
+        global_end,
     )
 
     # Determine pool: all historical constituents across entire range
@@ -523,23 +536,25 @@ def train_walk_forward(
     panel_start = panel_dates.min().strftime("%Y-%m-%d")
     if panel_start > windows[0].train_start:
         logger.warning(
-            "Factor data starts at %s, but first train window starts at %s. "
-            "Early training samples will be reduced.",
-            panel_start, windows[0].train_start,
+            "Factor data starts at %s, but first train window starts at %s. Early training samples will be reduced.",
+            panel_start,
+            windows[0].train_start,
         )
     logger.info("Factor panel: %s rows × %d cols", f"{panel.shape[0]:,}", panel.shape[1])
 
     # 2. Compute labels
     logger.info("Computing %s excess return labels...", horizon_desc)
     labels = compute_labels(
-        storage, pool, global_start, global_end,
+        storage,
+        pool,
+        global_start,
+        global_end,
         horizon=label_horizon,
         horizon_weights=label_horizon_weights,
         normalize=normalize_label,
     )
     n_valid = labels.notna().sum()
-    logger.info("Labels: %s valid / %s total (normalize=%s)",
-                f"{n_valid:,}", f"{len(labels):,}", normalize_label)
+    logger.info("Labels: %s valid / %s total (normalize=%s)", f"{n_valid:,}", f"{len(labels):,}", normalize_label)
 
     # 3. Walk-Forward training
     all_test_scores: list[pd.Series] = []
@@ -549,14 +564,23 @@ def train_walk_forward(
     for w in windows:
         logger.info(
             "Window %02d: train %s~%s | val %s~%s | test %s~%s",
-            w.window_id, w.train_start, w.train_end,
-            w.val_start, w.val_end, w.test_start, w.test_end,
+            w.window_id,
+            w.train_start,
+            w.train_end,
+            w.val_start,
+            w.val_end,
+            w.test_start,
+            w.test_end,
         )
 
         # Use max_horizon for leakage prevention: exclude last N days
         # where N = max horizon (e.g. 20d labels peek 20 days ahead)
         datasets = build_window_datasets(
-            panel, labels, w, storage, label_horizon=max_horizon,
+            panel,
+            labels,
+            w,
+            storage,
+            label_horizon=max_horizon,
             train_subsample_stride=train_subsample_stride,
         )
         X_train, y_train = datasets["train"]
@@ -569,7 +593,9 @@ def train_walk_forward(
 
         logger.info(
             "  Samples: train=%d, val=%d, test=%d",
-            len(X_train), len(X_val), len(X_test),
+            len(X_train),
+            len(X_val),
+            len(X_test),
         )
 
         # Compute sample weights (time decay)
@@ -578,7 +604,9 @@ def train_walk_forward(
             train_weights = compute_time_decay_weights(X_train.index, time_decay_halflife)
             logger.info(
                 "  Time decay: halflife=%dd, weight range [%.3f, %.3f]",
-                time_decay_halflife, train_weights.min(), train_weights.max(),
+                time_decay_halflife,
+                train_weights.min(),
+                train_weights.max(),
             )
 
         # Pre-compute ranking artifacts (shared across seeds)
@@ -605,8 +633,12 @@ def train_walk_forward(
                     min_iterations=min_iterations,
                 )
                 fit_info = model.fit(
-                    X_train, y_train_rank, groups_train,
-                    X_val, y_val_rank, groups_val,
+                    X_train,
+                    y_train_rank,
+                    groups_train,
+                    X_val,
+                    y_val_rank,
+                    groups_val,
                 )
             else:
                 model = LGBModel(
@@ -665,17 +697,24 @@ def train_walk_forward(
 
         val_metric_str = (
             f"val_ndcg={metrics.get('val_ndcg', float('nan')):.6f}"
-            if is_ranking else
-            f"val_mse={metrics.get('val_mse', float('nan')):.6f}"
+            if is_ranking
+            else f"val_mse={metrics.get('val_mse', float('nan')):.6f}"
         )
-        iter_str = (f"best_iter={best_iter_min}~{best_iter_max}" if best_iter_min != best_iter_max
-                    else f"best_iter={best_iter_min}")
+        iter_str = (
+            f"best_iter={best_iter_min}~{best_iter_max}"
+            if best_iter_min != best_iter_max
+            else f"best_iter={best_iter_min}"
+        )
         seed_label = f"Combined ({n_seeds} seeds): " if n_seeds > 1 else ""
         logger.info(
             "  %s%s  %s  test IC=%.4f  RankIC=%.4f  val IC=%.4f  RankIC=%.4f",
-            seed_label, iter_str, val_metric_str,
-            metrics["test_ic_mean"], metrics["test_rank_ic_mean"],
-            metrics["val_ic_mean"], metrics["val_rank_ic_mean"],
+            seed_label,
+            iter_str,
+            val_metric_str,
+            metrics["test_ic_mean"],
+            metrics["test_rank_ic_mean"],
+            metrics["val_ic_mean"],
+            metrics["val_rank_ic_mean"],
         )
 
     # 4. Assemble score matrices (test + val)
@@ -701,25 +740,41 @@ def train_walk_forward(
 
     test_path = out / "score_matrix_test.parquet"
     score_matrix_test.to_parquet(test_path)
-    logger.info("Test score matrix saved: %s (%d days × %d stocks)",
-                test_path, score_matrix_test.shape[0], score_matrix_test.shape[1])
+    logger.info(
+        "Test score matrix saved: %s (%d days × %d stocks)",
+        test_path,
+        score_matrix_test.shape[0],
+        score_matrix_test.shape[1],
+    )
 
     val_path = out / "score_matrix_val.parquet"
     score_matrix_val.to_parquet(val_path)
-    logger.info("Val score matrix saved: %s (%d days × %d stocks)",
-                val_path, score_matrix_val.shape[0], score_matrix_val.shape[1])
+    logger.info(
+        "Val score matrix saved: %s (%d days × %d stocks)",
+        val_path,
+        score_matrix_val.shape[0],
+        score_matrix_val.shape[1],
+    )
 
     # Summary
     metrics_df = pd.DataFrame(window_metrics)
     seeds_info = f", {n_seeds} seeds" if n_seeds > 1 else ""
     logger.info("\n=== Walk-Forward Summary (%s%s) ===", mode, seeds_info)
     logger.info("Windows: %d", len(metrics_df))
-    logger.info("Test  — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
-                metrics_df["test_ic_mean"].mean(), metrics_df["test_ic_mean"].std(),
-                metrics_df["test_rank_ic_mean"].mean(), metrics_df["test_rank_ic_mean"].std())
-    logger.info("Val   — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
-                metrics_df["val_ic_mean"].mean(), metrics_df["val_ic_mean"].std(),
-                metrics_df["val_rank_ic_mean"].mean(), metrics_df["val_rank_ic_mean"].std())
+    logger.info(
+        "Test  — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
+        metrics_df["test_ic_mean"].mean(),
+        metrics_df["test_ic_mean"].std(),
+        metrics_df["test_rank_ic_mean"].mean(),
+        metrics_df["test_rank_ic_mean"].std(),
+    )
+    logger.info(
+        "Val   — Mean IC: %.4f ± %.4f, Mean Rank IC: %.4f ± %.4f",
+        metrics_df["val_ic_mean"].mean(),
+        metrics_df["val_ic_mean"].std(),
+        metrics_df["val_rank_ic_mean"].mean(),
+        metrics_df["val_rank_ic_mean"].std(),
+    )
     if is_ranking:
         if "val_ndcg" in metrics_df.columns:
             logger.info("Mean Val NDCG: %.6f", metrics_df["val_ndcg"].mean())
@@ -727,3 +782,184 @@ def train_walk_forward(
         logger.info("Mean Val MSE: %.6f", metrics_df["val_mse"].mean())
 
     return score_matrix_test, score_matrix_val
+
+
+def train(
+    storage: "DataStorage",
+    factors_path: str | None = None,
+    model_dir: str = "models",
+    *,
+    first_train_start: str = "2020-01-01",
+    val_months: int = 3,
+    time_decay_halflife: int = 120,
+    n_seeds: int = 5,
+    label_horizon: int = 5,
+    params: dict | None = None,
+    early_stopping_rounds: int = EARLY_STOPPING_ROUNDS,
+    min_iterations: int = MIN_ITERATIONS,
+) -> dict:
+    """Single-window production training (all history + last ``val_months`` validation).
+
+    **No ``train_months`` parameter by design**: production training always uses
+    ALL available history starting from ``first_train_start``. This is the key
+    safety guarantee vs ``train_walk_forward`` (which slides a fixed-size train
+    window for backtest research).
+
+    Window layout:
+      - train_start = ``first_train_start`` (fixed)
+      - train_end   = ``latest_bar - val_months`` (computed from DB)
+      - val_start   = train_end + 1 day
+      - val_end     = latest_bar (most recent T3 sync)
+
+    Model files: ``wf_window_NN_seed*.txt`` where ``NN = year * 12 + month`` of
+    ``latest_bar``. The integer is monotonically increasing across calendar
+    months → ``MLScorer.reload()`` picks the latest via ``max(window_id)``.
+
+    Returns
+    -------
+    dict with: window_id, train_start, train_end, val_start, val_end,
+               n_samples_train, n_samples_val, val_ic_mean, val_rank_ic_mean,
+               model_paths (list[Path]).
+    """
+    from datetime import datetime as _dt
+
+    from dateutil.relativedelta import relativedelta
+
+    if n_seeds < 1:
+        raise ValueError(f"n_seeds must be >= 1, got {n_seeds}")
+
+    latest_bar = storage.get_latest_bar_date()
+    if latest_bar is None:
+        raise RuntimeError("No bar data in database; run T3 sync first.")
+
+    last_bar_dt = _dt.strptime(latest_bar, "%Y-%m-%d")
+    val_end = latest_bar
+    val_start_dt = last_bar_dt - relativedelta(months=val_months) + relativedelta(days=1)
+    val_start = val_start_dt.strftime("%Y-%m-%d")
+    train_end_dt = val_start_dt - relativedelta(days=1)
+    train_end = train_end_dt.strftime("%Y-%m-%d")
+
+    if first_train_start >= train_end:
+        raise ValueError(
+            f"first_train_start ({first_train_start}) must be before train_end ({train_end}). "
+            f"Reduce val_months or wait for more data."
+        )
+
+    window_id = last_bar_dt.year * 12 + last_bar_dt.month
+
+    logger.info(
+        "Production train: window_id=%d, train %s~%s, val %s~%s, n_seeds=%d, td_halflife=%dd",
+        window_id,
+        first_train_start,
+        train_end,
+        val_start,
+        val_end,
+        n_seeds,
+        time_decay_halflife,
+    )
+
+    pool = storage.load_constituents_union(first_train_start, val_end)
+    logger.info("Pool: %d stocks", len(pool))
+
+    panel = load_factor_panel(storage, pool, first_train_start, val_end, factors_path)
+    if panel.empty:
+        raise ValueError("Empty factor panel. Check data availability.")
+    logger.info("Factor panel: %s rows × %d cols", f"{panel.shape[0]:,}", panel.shape[1])
+
+    labels = compute_labels(storage, pool, first_train_start, val_end, horizon=label_horizon)
+    n_valid = labels.notna().sum()
+    logger.info("Labels: %s valid / %s total", f"{n_valid:,}", f"{len(labels):,}")
+
+    # Build train/val splits directly (no test split)
+    dates = panel.index.get_level_values("date")
+    train_pool = set(storage.load_constituents_union(first_train_start, train_end))
+    val_pool = set(storage.load_constituents_for_date(val_start))
+
+    # Train: union pool, exclude last `label_horizon` days (leakage prevention)
+    train_mask = (dates >= first_train_start) & (dates <= train_end)
+    train_subset = panel.loc[train_mask]
+    if not train_subset.empty:
+        unique_dates = train_subset.index.get_level_values("date").unique().sort_values()
+        if len(unique_dates) > label_horizon:
+            cutoff = unique_dates[-label_horizon]
+            train_subset = train_subset.loc[train_subset.index.get_level_values("date") < cutoff]
+    symbols = train_subset.index.get_level_values("symbol")
+    train_subset = train_subset.loc[symbols.isin(train_pool)]
+    train_idx = train_subset.index.intersection(labels.index)
+    X_train = train_subset.loc[train_idx]
+    y_train = labels.loc[train_idx].dropna()
+    X_train = X_train.loc[y_train.index]
+
+    # Val: point-in-time snapshot pool
+    val_mask = (dates >= val_start) & (dates <= val_end)
+    val_subset = panel.loc[val_mask]
+    symbols = val_subset.index.get_level_values("symbol")
+    val_subset = val_subset.loc[symbols.isin(val_pool)]
+    val_idx = val_subset.index.intersection(labels.index)
+    X_val = val_subset.loc[val_idx]
+    y_val = labels.loc[val_idx].dropna()
+    X_val = X_val.loc[y_val.index]
+
+    if X_train.empty or X_val.empty:
+        raise ValueError(f"Insufficient data: train={len(X_train)}, val={len(X_val)}")
+
+    logger.info("Samples: train=%d, val=%d", len(X_train), len(X_val))
+
+    train_weights = None
+    if time_decay_halflife > 0:
+        train_weights = compute_time_decay_weights(X_train.index, time_decay_halflife)
+        logger.info(
+            "Time decay halflife=%dd, weight range [%.3f, %.3f]",
+            time_decay_halflife,
+            train_weights.min(),
+            train_weights.max(),
+        )
+
+    Path(model_dir).mkdir(parents=True, exist_ok=True)
+    model_paths: list[Path] = []
+    seed_val_scores: list[pd.Series] = []
+    best_iters: list[int] = []
+
+    for seed in range(n_seeds):
+        seed_params = {**(params or {}), "random_state": seed}
+        model = LGBModel(
+            seed_params,
+            early_stopping_rounds=early_stopping_rounds,
+            min_iterations=min_iterations,
+        )
+        fit_info = model.fit(X_train, y_train, X_val, y_val, sample_weight=train_weights)
+        best_iters.append(fit_info["best_iteration"])
+
+        if not X_val.empty:
+            seed_val_scores.append(model.predict(X_val))
+
+        suffix = f"_seed{seed}" if n_seeds > 1 else ""
+        model_path = Path(model_dir) / f"wf_window_{window_id:02d}{suffix}.txt"
+        model.save(str(model_path))
+        model_paths.append(model_path)
+        logger.info("  Seed %d: best_iter=%d, saved %s", seed, fit_info["best_iteration"], model_path.name)
+
+    val_ic: dict = {"ic_mean": float("nan"), "rank_ic_mean": float("nan")}
+    if seed_val_scores:
+        combined_val = _average_seed_scores(seed_val_scores) if n_seeds > 1 else seed_val_scores[0]
+        val_ic = _compute_ic(y_val, combined_val)
+        logger.info(
+            "Val IC=%.4f  RankIC=%.4f  (best_iter range %d~%d)",
+            val_ic["ic_mean"],
+            val_ic["rank_ic_mean"],
+            min(best_iters),
+            max(best_iters),
+        )
+
+    return {
+        "window_id": window_id,
+        "train_start": first_train_start,
+        "train_end": train_end,
+        "val_start": val_start,
+        "val_end": val_end,
+        "n_samples_train": len(X_train),
+        "n_samples_val": len(X_val),
+        "val_ic_mean": val_ic["ic_mean"],
+        "val_rank_ic_mean": val_ic["rank_ic_mean"],
+        "model_paths": model_paths,
+    }

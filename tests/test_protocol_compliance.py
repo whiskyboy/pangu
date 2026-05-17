@@ -1,15 +1,11 @@
-"""Protocol compliance tests — verify stub implementations satisfy all Protocol signatures.
-
-For each Protocol defined in M1.2, we create a minimal concrete class and use
-`isinstance(..., Protocol)` / `runtime_checkable` + signature inspection to ensure
-the contracts are correct.
-"""
+"""Protocol compliance tests — verify stub implementations satisfy all Protocol signatures."""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 
@@ -26,13 +22,13 @@ from pangu.models import (
     SignalStatus,
     TradeSignal,
 )
-from pangu.notification.feishu import NotificationProvider
-from pangu.strategy.factor.protocol import Strategy
+from pangu.notification.protocol import NotificationProvider
 from pangu.strategy.llm.client import LLMJudgeEngine
 
 # ---------------------------------------------------------------------------
 # Minimal stub implementations
 # ---------------------------------------------------------------------------
+
 
 class _StubMarket:
     def get_daily_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -47,7 +43,10 @@ class _StubMarket:
 
 class _StubFundamental:
     def get_financial_indicator(
-        self, symbol: str, start: str | None = None, end: str | None = None,
+        self,
+        symbol: str,
+        start: str | None = None,
+        end: str | None = None,
     ) -> pd.DataFrame:
         return pd.DataFrame()
 
@@ -85,7 +84,9 @@ class _StubStockPool:
 
 class _StubFactorEngine:
     def compute(
-        self, bars: pd.DataFrame, global_data: pd.DataFrame | None = None
+        self,
+        bars: pd.DataFrame,
+        global_data: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         return pd.DataFrame()
 
@@ -93,48 +94,24 @@ class _StubFactorEngine:
         return []
 
 
-class _StubStrategy:
-    def generate_signals(
-        self,
-        tech_df: dict[str, pd.DataFrame],
-        fund_df: pd.DataFrame,
-        macro_factors: dict[str, float],
-        *,
-        prev_pool: pd.DataFrame | None = None,
-        sector_map: dict[str, str] | None = None,
-    ) -> tuple[pd.DataFrame, list[TradeSignal]]:
-        return pd.DataFrame(), []
-
-
 class _StubLLMJudge:
-    async def judge_stock(
-        self, symbol: str, name: str,
-        factor_score: float, factor_rank: int,
-        factor_details: dict[str, float],
-        stock_news: list[NewsItem], announcements: list[NewsItem],
-        telegraph: list[NewsItem], global_market: pd.DataFrame,
-        price: float,
-        *, factor_signal: str = "", universe_size: int = 0,
-    ) -> TradeSignal:
-        return TradeSignal(
-            timestamp=datetime(2026, 1, 1), symbol=symbol, name=name,
-            action=Action.HOLD, signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0, price=price, confidence=0.5,
-            source="stub", reason="stub",
-        )
-
-    async def judge_pool(
-        self, candidates: list, telegraph: list[NewsItem],
+    async def judge_rebalance(
+        self,
+        *,
+        today: str,
+        sell_candidates: list[dict[str, Any]],
+        buy_candidates: list[dict[str, Any]],
+        telegraph: list[NewsItem],
         global_market: pd.DataFrame,
-        *, universe_size: int = 0,
-    ) -> list[TradeSignal]:
-        return []
+        top_n: int,
+        n_drop: int,
+        universe_size: int = 0,
+        timeout: float = 120.0,
+    ) -> Any:
+        return None
 
 
 class _StubNotifier:
-    async def send_signal(self, signal: TradeSignal) -> bool:
-        return True
-
     async def send_text(self, text: str) -> bool:
         return True
 
@@ -146,8 +123,9 @@ class _StubNotifier:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _protocol_methods(protocol_cls: type) -> dict[str, inspect.Signature]:
-    """Return {name: Signature} for every abstract method on *protocol_cls*."""
+    """Return {name: Signature} for every public method on *protocol_cls*."""
     methods: dict[str, inspect.Signature] = {}
     for name, obj in inspect.getmembers(protocol_cls, predicate=inspect.isfunction):
         if name.startswith("_"):
@@ -157,28 +135,29 @@ def _protocol_methods(protocol_cls: type) -> dict[str, inspect.Signature]:
 
 
 def _assert_signatures_match(
-    protocol_cls: type, impl_cls: type, *, label: str
+    protocol_cls: type,
+    impl_cls: type,
+    *,
+    label: str,
 ) -> None:
-    """Assert that *impl_cls* has all methods of *protocol_cls* with compatible signatures."""
+    """Assert *impl_cls* has all methods of *protocol_cls* with compatible signatures."""
     proto_methods = _protocol_methods(protocol_cls)
     assert proto_methods, f"{label}: protocol exposes no public methods"
     for method_name, proto_sig in proto_methods.items():
         impl_method = getattr(impl_cls, method_name, None)
-        assert impl_method is not None, (
-            f"{label}: missing method '{method_name}'"
-        )
+        assert impl_method is not None, f"{label}: missing method '{method_name}'"
         impl_sig = inspect.signature(impl_method)
         proto_params = list(proto_sig.parameters.values())[1:]  # skip 'self'
         impl_params = list(impl_sig.parameters.values())[1:]
         assert len(impl_params) == len(proto_params), (
-            f"{label}.{method_name}: expected {len(proto_params)} params, "
-            f"got {len(impl_params)}"
+            f"{label}.{method_name}: expected {len(proto_params)} params, got {len(impl_params)}"
         )
 
 
 # ---------------------------------------------------------------------------
 # Data model tests
 # ---------------------------------------------------------------------------
+
 
 class TestModels:
     """Verify data-class instantiation and enum values."""
@@ -261,47 +240,57 @@ class TestModels:
 # Protocol compliance tests
 # ---------------------------------------------------------------------------
 
+
 class TestProtocolCompliance:
     """Verify stub implementations match Protocol method signatures."""
 
     def test_market_data_provider(self) -> None:
         _assert_signatures_match(
-            MarketDataProvider, _StubMarket, label="MarketDataProvider"
+            MarketDataProvider,
+            _StubMarket,
+            label="MarketDataProvider",
         )
 
     def test_fundamental_data_provider(self) -> None:
         _assert_signatures_match(
-            FundamentalDataProvider, _StubFundamental, label="FundamentalDataProvider"
+            FundamentalDataProvider,
+            _StubFundamental,
+            label="FundamentalDataProvider",
         )
 
     def test_news_data_provider(self) -> None:
         _assert_signatures_match(
-            NewsDataProvider, _StubNews, label="NewsDataProvider"
+            NewsDataProvider,
+            _StubNews,
+            label="NewsDataProvider",
         )
 
     def test_stock_pool(self) -> None:
         _assert_signatures_match(
-            StockPool, _StubStockPool, label="StockPool"
+            StockPool,
+            _StubStockPool,
+            label="StockPool",
         )
 
     def test_factor_engine(self) -> None:
         _assert_signatures_match(
-            FactorEngine, _StubFactorEngine, label="FactorEngine"
-        )
-
-    def test_strategy(self) -> None:
-        _assert_signatures_match(
-            Strategy, _StubStrategy, label="Strategy"
+            FactorEngine,
+            _StubFactorEngine,
+            label="FactorEngine",
         )
 
     def test_llm_judge_engine(self) -> None:
         _assert_signatures_match(
-            LLMJudgeEngine, _StubLLMJudge, label="LLMJudgeEngine"
+            LLMJudgeEngine,
+            _StubLLMJudge,
+            label="LLMJudgeEngine",
         )
 
     def test_notification_provider(self) -> None:
         _assert_signatures_match(
-            NotificationProvider, _StubNotifier, label="NotificationProvider"
+            NotificationProvider,
+            _StubNotifier,
+            label="NotificationProvider",
         )
 
 
@@ -336,30 +325,22 @@ class TestStubInvocation:
         assert isinstance(fe.compute(pd.DataFrame()), pd.DataFrame)
         assert isinstance(fe.get_factor_names(), list)
 
-    def test_strategy_stubs_return(self) -> None:
-        s = _StubStrategy()
-        pool_df, signals = s.generate_signals({}, pd.DataFrame(), {})
-        assert isinstance(pool_df, pd.DataFrame)
-        assert isinstance(signals, list)
-
     def test_llm_judge_stubs_return(self) -> None:
         e = _StubLLMJudge()
-        result = asyncio.run(e.judge_pool([], [], pd.DataFrame()))
-        assert isinstance(result, list)
+        result = asyncio.run(
+            e.judge_rebalance(
+                today="2025-01-01",
+                sell_candidates=[],
+                buy_candidates=[],
+                telegraph=[],
+                global_market=pd.DataFrame(),
+                top_n=25,
+                n_drop=3,
+            ),
+        )
+        assert result is None
 
     def test_notifier_stubs_return(self) -> None:
         n = _StubNotifier()
-        sig = TradeSignal(
-            timestamp=datetime(2026, 1, 1),
-            symbol="600519",
-            name="贵州茅台",
-            action=Action.BUY,
-            signal_status=SignalStatus.NEW_ENTRY,
-            days_in_top_n=0,
-            price=1800.0,
-            confidence=0.85,
-            source="factor",
-            reason="test",
-        )
-        result = asyncio.run(n.send_signal(sig))
-        assert result is True
+        assert asyncio.run(n.send_text("hi")) is True
+        assert asyncio.run(n.send_markdown("title", "body")) is True

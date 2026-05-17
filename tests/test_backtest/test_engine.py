@@ -18,7 +18,8 @@ def sample_data():
 
     close = pd.DataFrame(
         100 + np.cumsum(np.random.randn(30, 5), axis=0),
-        index=dates, columns=stocks,
+        index=dates,
+        columns=stocks,
     )
     open_ = close.shift(1).bfill()
 
@@ -54,7 +55,8 @@ def test_backtest_rebalance_happens(sample_data):
     np.random.seed(99)
     scores = pd.DataFrame(
         np.random.randn(30, 5),
-        index=scores.index, columns=scores.columns,
+        index=scores.index,
+        columns=scores.columns,
     )
     engine = BacktestEngine(top_n=2)
     result = engine.run(scores, open_, close, benchmark)
@@ -74,8 +76,7 @@ def test_backtest_top_n_respected(sample_data):
 def test_backtest_date_range(sample_data):
     scores, open_, close, benchmark = sample_data
     engine = BacktestEngine(top_n=2)
-    result = engine.run(scores, open_, close, benchmark,
-                        start="2024-01-15", end="2024-01-25")
+    result = engine.run(scores, open_, close, benchmark, start="2024-01-15", end="2024-01-25")
 
     assert len(result.nav) < 30
     assert result.nav.index[0] >= pd.Timestamp("2024-01-15")
@@ -116,8 +117,13 @@ class TestRebalanceEdgeCases:
         cash = 50_000.0
 
         new_cash, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # A is limit-up but overweight → should sell excess (can sell at limit-up)
         assert new_h["A"] < 5000, "Should sell excess of limit-up overweight stock"
@@ -137,8 +143,13 @@ class TestRebalanceEdgeCases:
         cash = 100_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # A is limit-up and underweight → cannot buy more, stays at 100
         assert new_h["A"] == 100
@@ -155,8 +166,13 @@ class TestRebalanceEdgeCases:
         cash = 300_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # D should NOT be bought (limit-up NeedToBuy)
         assert "D" not in new_h or new_h.get("D", 0) == 0
@@ -177,8 +193,13 @@ class TestRebalanceEdgeCases:
         cash = 100_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # A stays at 1000 (can't trade)
         assert new_h["A"] == 1000
@@ -200,8 +221,13 @@ class TestRebalanceEdgeCases:
         cash = 50_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # X stays (stuck)
         assert new_h["X"] == 1000
@@ -226,15 +252,18 @@ class TestRebalanceEdgeCases:
         cash = 100_000.0
 
         new_cash, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # Should NOT go negative on cash
         assert new_cash >= 0, f"Cash went negative: {new_cash}"
         # All three should have positions
-        total_mv = sum(
-            new_h[s] * open_prices[s] for s in new_h if s in open_prices.index
-        )
+        total_mv = sum(new_h[s] * open_prices[s] for s in new_h if s in open_prices.index)
         assert total_mv + new_cash <= 155_000 * 1.01  # no over-allocation
 
     def test_partial_fill_on_cash_shortage(self):
@@ -248,8 +277,13 @@ class TestRebalanceEdgeCases:
         cash = 15_000.0  # enough for ~1500 shares total, ~750 each
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # A (higher score) should get full allocation: ~7425/10 = 742 → 700
         assert new_h.get("A", 0) == 700
@@ -267,8 +301,13 @@ class TestRebalanceEdgeCases:
         cash = 100_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # B is at limit-down but can be bought
         assert new_h.get("B", 0) > 0
@@ -284,8 +323,13 @@ class TestRebalanceEdgeCases:
         cash = 0.0
 
         new_cash, new_h, log = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         # X at limit-up, not in target → should be sold
         assert "X" not in new_h
@@ -332,8 +376,14 @@ class TestSTStockHandling:
         cash = 300_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume, is_st,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
+            is_st,
         )
         assert "B" not in new_h, "ST stock should not be bought"
         assert new_h.get("A", 0) > 0
@@ -351,8 +401,14 @@ class TestSTStockHandling:
         cash = 200_000.0
 
         _, new_h, log = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume, is_st,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
+            is_st,
         )
         assert "B" not in new_h, "ST stock should be force-sold"
         assert log is not None and "B" in log["sells"]
@@ -368,8 +424,13 @@ class TestSTStockHandling:
         cash = 200_000.0
 
         _, new_h, _ = engine._rebalance(
-            pd.Timestamp("2024-01-08"), cash, holdings, target,
-            open_prices, prev_close, volume,
+            pd.Timestamp("2024-01-08"),
+            cash,
+            holdings,
+            target,
+            open_prices,
+            prev_close,
+            volume,
         )
         assert new_h.get("A", 0) > 0
         assert new_h.get("B", 0) > 0
@@ -379,85 +440,77 @@ class TestSTStockHandling:
 # Sector cap tests
 # ---------------------------------------------------------------
 
+
 class TestApplySectorCap:
-    """Tests for _apply_sector_cap method."""
+    """Tests for the sector-cap helper (now in target_provider module)."""
 
-    def _make_engine(self, top_n=5, max_per_sector=2):
-        return BacktestEngine(top_n=top_n, max_per_sector=max_per_sector)
+    def _apply(self, target, scores, sector_map, *, top_n=5, max_per_sector=2):
+        from pangu.backtest.target_provider import _apply_sector_cap
 
-    def test_no_cap_returns_target_unchanged(self):
-        """When max_per_sector is None, target is returned as-is."""
-        engine = BacktestEngine(top_n=5, max_per_sector=None)
-        target = ["A", "B", "C"]
-        scores = pd.Series({"A": 3.0, "B": 2.0, "C": 1.0})
-        sector_map = {"A": "银行", "B": "银行", "C": "银行"}
-        result = engine._apply_sector_cap(target, scores, sector_map)
-        assert result == target
+        return _apply_sector_cap(
+            target,
+            scores,
+            sector_map,
+            top_n=top_n,
+            max_per_sector=max_per_sector,
+        )
 
     def test_cap_trims_excess_from_same_sector(self):
         """Three stocks from same sector, cap=2 → keeps best 2."""
-        engine = self._make_engine(top_n=3, max_per_sector=2)
         target = ["A", "B", "C"]
         scores = pd.Series({"A": 3.0, "B": 2.0, "C": 1.0, "D": 0.5, "E": 0.3})
         sector_map = {"A": "银行", "B": "银行", "C": "银行", "D": "科技", "E": "医药"}
-        result = engine._apply_sector_cap(target, scores, sector_map)
+        result = self._apply(target, scores, sector_map, top_n=3, max_per_sector=2)
         assert len(result) == 3
-        # A, B kept (best 2 from 银行); C trimmed; D fills the gap
         assert "A" in result
         assert "B" in result
         assert "C" not in result
-        assert "D" in result  # filled from non-target candidates
+        assert "D" in result
 
     def test_cap_preserves_order_by_score(self):
         """Result should contain highest-scored stocks per sector."""
-        engine = self._make_engine(top_n=4, max_per_sector=1)
         target = ["A", "B", "C", "D"]
         scores = pd.Series({"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "E": 0.9, "F": 0.8})
         sector_map = {"A": "银行", "B": "银行", "C": "科技", "D": "科技", "E": "医药", "F": "消费"}
-        result = engine._apply_sector_cap(target, scores, sector_map)
+        result = self._apply(target, scores, sector_map, top_n=4, max_per_sector=1)
         assert len(result) == 4
-        assert "A" in result  # best 银行
-        assert "B" not in result  # second 银行, capped
-        assert "C" in result  # best 科技
-        assert "D" not in result  # second 科技, capped
+        assert "A" in result
+        assert "B" not in result
+        assert "C" in result
+        assert "D" not in result
 
     def test_unknown_sector_treated_as_single_group(self):
         """Stocks missing from sector_map get '未知' sector, also capped."""
-        engine = self._make_engine(top_n=3, max_per_sector=1)
         target = ["A", "B", "C"]
         scores = pd.Series({"A": 3.0, "B": 2.0, "C": 1.0, "D": 0.5})
-        sector_map = {}  # all unknown
-        result = engine._apply_sector_cap(target, scores, sector_map)
-        # cap=1 on "未知" → only 1 from target, then fill 2 more (but all are "未知" too)
-        assert len(result) == 1  # can only fit 1 in "未知" sector
+        sector_map = {}
+        result = self._apply(target, scores, sector_map, top_n=3, max_per_sector=1)
+        assert len(result) == 1
 
     def test_underfill_adds_non_target_candidates(self):
         """When cap removes too many, second pass fills from non-target stocks."""
-        engine = self._make_engine(top_n=3, max_per_sector=1)
-        target = ["A", "B"]  # both 银行
+        target = ["A", "B"]
         scores = pd.Series({"A": 5.0, "B": 4.0, "C": 3.0, "D": 2.0})
         sector_map = {"A": "银行", "B": "银行", "C": "科技", "D": "医药"}
-        result = engine._apply_sector_cap(target, scores, sector_map)
+        result = self._apply(target, scores, sector_map, top_n=3, max_per_sector=1)
         assert len(result) == 3
-        assert "A" in result  # best 银行 from target
-        assert "B" not in result  # second 银行, capped
-        assert "C" in result  # filled from non-target
-        assert "D" in result  # filled from non-target
+        assert "A" in result
+        assert "B" not in result
+        assert "C" in result
+        assert "D" in result
 
     def test_cap_with_multiple_sectors(self):
         """Mixed sectors with cap=2, verifies per-sector counting."""
-        engine = self._make_engine(top_n=5, max_per_sector=2)
         target = ["A", "B", "C", "D", "E"]
         scores = pd.Series({"A": 5.0, "B": 4.0, "C": 3.0, "D": 2.0, "E": 1.0})
         sector_map = {"A": "银行", "B": "科技", "C": "银行", "D": "银行", "E": "科技"}
-        result = engine._apply_sector_cap(target, scores, sector_map)
-        # 银行: A(5), C(3) kept, D(2) capped; 科技: B(4), E(1) kept
+        result = self._apply(target, scores, sector_map, top_n=5, max_per_sector=2)
         assert "A" in result
         assert "B" in result
         assert "C" in result
         assert "D" not in result
         assert "E" in result
-        assert len(result) == 4  # only 4 fit (need non-target to fill 5th)
+        assert len(result) == 4
 
     def test_sector_cap_in_full_backtest(self, sample_data):
         """Sector cap integrates correctly with full backtest run."""

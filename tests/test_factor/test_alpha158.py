@@ -24,6 +24,7 @@ from pangu.factor.alpha158 import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_multi_stock_bars(n_days: int = 120, n_stocks: int = 5) -> pd.DataFrame:
     """Generate deterministic multi-stock OHLCV data in long format."""
     rng = np.random.default_rng(42)
@@ -45,18 +46,20 @@ def _make_multi_stock_bars(n_days: int = 120, n_stocks: int = 5) -> pd.DataFrame
         precloses = np.concatenate([[opens[0]], closes[:-1]])
 
         for i in range(n_days):
-            rows.append({
-                "symbol": sym,
-                "date": dates[i].strftime("%Y-%m-%d"),
-                "open": opens[i],
-                "high": highs[i],
-                "low": lows[i],
-                "close": closes[i],
-                "volume": volumes[i],
-                "amount": amounts[i],
-                "adj_factor": adj_factors[i],
-                "preclose": precloses[i],
-            })
+            rows.append(
+                {
+                    "symbol": sym,
+                    "date": dates[i].strftime("%Y-%m-%d"),
+                    "open": opens[i],
+                    "high": highs[i],
+                    "low": lows[i],
+                    "close": closes[i],
+                    "volume": volumes[i],
+                    "amount": amounts[i],
+                    "adj_factor": adj_factors[i],
+                    "preclose": precloses[i],
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -70,41 +73,43 @@ def _make_fundamentals(bars: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for sym in symbols:
         for d in dates:
-            rows.append({
-                "symbol": sym,
-                "date": d,
-                "pe_ttm": rng.uniform(5, 50),
-                "pb": rng.uniform(0.5, 5),
-                "ps_ttm": rng.uniform(0.5, 10),
-                "pcf_ttm": rng.uniform(-5, 20),
-                "roe_ttm": rng.uniform(0.02, 0.25),
-                "revenue_yoy": rng.uniform(-0.3, 0.5),
-                "profit_yoy": rng.uniform(-0.5, 1.0),
-                "market_cap": rng.uniform(1e9, 1e11),
-                "gross_margin": rng.uniform(0.1, 0.6),
-                "net_profit_margin": rng.uniform(0.02, 0.3),
-                "debt_ratio": rng.uniform(0.2, 0.8),
-                "asset_turnover": rng.uniform(0.1, 2.0),
-                "current_ratio": rng.uniform(0.5, 3.0),
-                "equity_yoy": rng.uniform(-0.2, 0.5),
-                "asset_yoy": rng.uniform(-0.1, 0.4),
-                "cashflow_per_share": rng.uniform(-1.0, 5.0),
-                "cashflow_to_profit": rng.uniform(-0.5, 2.0),
-                "roa": rng.uniform(0.01, 0.15),
-                "operating_profit_ratio": rng.uniform(0.05, 0.4),
-                "ocf_to_revenue": rng.uniform(-0.2, 0.5),
-                "eps_weighted": rng.uniform(0.1, 5.0),
-                "quick_ratio": rng.uniform(0.3, 2.5),
-                "receivables_turnover": rng.uniform(1.0, 20.0),
-                "inventory_turnover": rng.uniform(0.5, 15.0),
-                "cost_profit_ratio": rng.uniform(0.05, 0.5),
-                "dividend_payout_ratio": rng.uniform(0.0, 0.8),
-                "cash_ratio": rng.uniform(0.1, 1.5),
-                "equity_ratio": rng.uniform(0.3, 3.0),
-                "shareholder_equity_ratio": rng.uniform(0.2, 0.8),
-                "undistributed_per_share": rng.uniform(0.5, 10.0),
-                "capital_reserve_per_share": rng.uniform(0.1, 5.0),
-            })
+            rows.append(
+                {
+                    "symbol": sym,
+                    "date": d,
+                    "pe_ttm": rng.uniform(5, 50),
+                    "pb": rng.uniform(0.5, 5),
+                    "ps_ttm": rng.uniform(0.5, 10),
+                    "pcf_ttm": rng.uniform(-5, 20),
+                    "roe_ttm": rng.uniform(0.02, 0.25),
+                    "revenue_yoy": rng.uniform(-0.3, 0.5),
+                    "profit_yoy": rng.uniform(-0.5, 1.0),
+                    "market_cap": rng.uniform(1e9, 1e11),
+                    "gross_margin": rng.uniform(0.1, 0.6),
+                    "net_profit_margin": rng.uniform(0.02, 0.3),
+                    "debt_ratio": rng.uniform(0.2, 0.8),
+                    "asset_turnover": rng.uniform(0.1, 2.0),
+                    "current_ratio": rng.uniform(0.5, 3.0),
+                    "equity_yoy": rng.uniform(-0.2, 0.5),
+                    "asset_yoy": rng.uniform(-0.1, 0.4),
+                    "cashflow_per_share": rng.uniform(-1.0, 5.0),
+                    "cashflow_to_profit": rng.uniform(-0.5, 2.0),
+                    "roa": rng.uniform(0.01, 0.15),
+                    "operating_profit_ratio": rng.uniform(0.05, 0.4),
+                    "ocf_to_revenue": rng.uniform(-0.2, 0.5),
+                    "eps_weighted": rng.uniform(0.1, 5.0),
+                    "quick_ratio": rng.uniform(0.3, 2.5),
+                    "receivables_turnover": rng.uniform(1.0, 20.0),
+                    "inventory_turnover": rng.uniform(0.5, 15.0),
+                    "cost_profit_ratio": rng.uniform(0.05, 0.5),
+                    "dividend_payout_ratio": rng.uniform(0.0, 0.8),
+                    "cash_ratio": rng.uniform(0.1, 1.5),
+                    "equity_ratio": rng.uniform(0.3, 3.0),
+                    "shareholder_equity_ratio": rng.uniform(0.2, 0.8),
+                    "undistributed_per_share": rng.uniform(0.5, 10.0),
+                    "capital_reserve_per_share": rng.uniform(0.1, 5.0),
+                }
+            )
 
     return pd.DataFrame(rows)
 
@@ -133,6 +138,7 @@ def wide_tables(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
 # Factor names
 # ---------------------------------------------------------------------------
 
+
 class TestFactorNames:
     def test_count(self):
         assert len(FACTOR_NAMES) == 191
@@ -141,25 +147,47 @@ class TestFactorNames:
         assert len(set(FACTOR_NAMES)) == 191
 
     def test_kbar_first_9(self):
-        expected = ["KMID", "KLEN", "KMID2", "KUP", "KUP2",
-                     "KLOW", "KLOW2", "KSFT", "KSFT2"]
+        expected = ["KMID", "KLEN", "KMID2", "KUP", "KUP2", "KLOW", "KLOW2", "KSFT", "KSFT2"]
         assert FACTOR_NAMES[:9] == expected
 
     def test_price_next_5(self):
         assert FACTOR_NAMES[9:14] == ["OPEN0", "HIGH0", "LOW0", "VWAP0", "OVERNIGHT_RET"]
 
     def test_fundamentals_last(self):
-        expected = ["PE", "PB", "PS", "PCF", "ROE", "REVENUE_YOY", "PROFIT_YOY",
-                     "LN_MKTCAP", "TURNOVER", "GROSS_MARGIN",
-                     "NET_PROFIT_MARGIN", "DEBT_RATIO", "ASSET_TURNOVER",
-                     "CURRENT_RATIO", "EQUITY_YOY", "ASSET_YOY",
-                     "CASHFLOW_PER_SHARE", "CASHFLOW_TO_PROFIT",
-                     "ROA", "OPERATING_PROFIT_RATIO", "OCF_TO_REVENUE",
-                     "EPS_WEIGHTED", "QUICK_RATIO", "RECEIVABLES_TURNOVER",
-                     "INVENTORY_TURNOVER", "COST_PROFIT_RATIO",
-                     "DIVIDEND_PAYOUT_RATIO", "CASH_RATIO", "EQUITY_RATIO",
-                     "SHAREHOLDER_EQUITY_RATIO", "UNDISTRIBUTED_PER_SHARE",
-                     "CAPITAL_RESERVE_PER_SHARE"]
+        expected = [
+            "PE",
+            "PB",
+            "PS",
+            "PCF",
+            "ROE",
+            "REVENUE_YOY",
+            "PROFIT_YOY",
+            "LN_MKTCAP",
+            "TURNOVER",
+            "GROSS_MARGIN",
+            "NET_PROFIT_MARGIN",
+            "DEBT_RATIO",
+            "ASSET_TURNOVER",
+            "CURRENT_RATIO",
+            "EQUITY_YOY",
+            "ASSET_YOY",
+            "CASHFLOW_PER_SHARE",
+            "CASHFLOW_TO_PROFIT",
+            "ROA",
+            "OPERATING_PROFIT_RATIO",
+            "OCF_TO_REVENUE",
+            "EPS_WEIGHTED",
+            "QUICK_RATIO",
+            "RECEIVABLES_TURNOVER",
+            "INVENTORY_TURNOVER",
+            "COST_PROFIT_RATIO",
+            "DIVIDEND_PAYOUT_RATIO",
+            "CASH_RATIO",
+            "EQUITY_RATIO",
+            "SHAREHOLDER_EQUITY_RATIO",
+            "UNDISTRIBUTED_PER_SHARE",
+            "CAPITAL_RESERVE_PER_SHARE",
+        ]
         assert FACTOR_NAMES[-32:] == expected
 
     def test_get_factor_names_matches(self, engine: Alpha158Engine):
@@ -170,22 +198,26 @@ class TestFactorNames:
 # KBar factors
 # ---------------------------------------------------------------------------
 
+
 class TestKBar:
     def test_all_9_returned(self, wide_tables):
         result = _compute_kbar(
-            wide_tables["O"], wide_tables["H"],
-            wide_tables["L"], wide_tables["C"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
         )
         assert len(result) == 9
-        expected_keys = {"KMID", "KLEN", "KMID2", "KUP", "KUP2",
-                         "KLOW", "KLOW2", "KSFT", "KSFT2"}
+        expected_keys = {"KMID", "KLEN", "KMID2", "KUP", "KUP2", "KLOW", "KLOW2", "KSFT", "KSFT2"}
         assert set(result.keys()) == expected_keys
 
     def test_klen_positive(self, wide_tables):
         """KLEN = (H-L)/O should always be positive (H >= L)."""
         result = _compute_kbar(
-            wide_tables["O"], wide_tables["H"],
-            wide_tables["L"], wide_tables["C"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
         )
         klen = result["KLEN"]
         assert (klen.dropna() >= 0).all().all()
@@ -193,8 +225,10 @@ class TestKBar:
     def test_kup_klow_non_negative(self, wide_tables):
         """Upper and lower shadows should be non-negative."""
         result = _compute_kbar(
-            wide_tables["O"], wide_tables["H"],
-            wide_tables["L"], wide_tables["C"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
         )
         assert (result["KUP"].dropna() >= -1e-10).all().all()
         assert (result["KLOW"].dropna() >= -1e-10).all().all()
@@ -202,8 +236,10 @@ class TestKBar:
     def test_ksft2_range(self, wide_tables):
         """KSFT2 = (2C-H-L)/(H-L+eps) should be in [-1, 1]."""
         result = _compute_kbar(
-            wide_tables["O"], wide_tables["H"],
-            wide_tables["L"], wide_tables["C"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
         )
         ksft2 = result["KSFT2"].dropna()
         assert (ksft2 >= -1.01).all().all()
@@ -219,29 +255,36 @@ class TestKBar:
         C = pd.DataFrame([[11.0]], index=idx, columns=cols)
 
         result = _compute_kbar(O, H, L, C)
-        assert abs(result["KMID"].iloc[0, 0] - 0.1) < 1e-6    # (11-10)/10
-        assert abs(result["KLEN"].iloc[0, 0] - 0.4) < 1e-6    # (12-8)/10
-        assert abs(result["KUP"].iloc[0, 0] - 0.1) < 1e-6     # (12-11)/10
-        assert abs(result["KLOW"].iloc[0, 0] - 0.2) < 1e-6    # (10-8)/10
+        assert abs(result["KMID"].iloc[0, 0] - 0.1) < 1e-6  # (11-10)/10
+        assert abs(result["KLEN"].iloc[0, 0] - 0.4) < 1e-6  # (12-8)/10
+        assert abs(result["KUP"].iloc[0, 0] - 0.1) < 1e-6  # (12-11)/10
+        assert abs(result["KLOW"].iloc[0, 0] - 0.2) < 1e-6  # (10-8)/10
 
 
 # ---------------------------------------------------------------------------
 # Price factors
 # ---------------------------------------------------------------------------
 
+
 class TestPrice:
     def test_all_5_returned(self, wide_tables):
         result = _compute_price(
-            wide_tables["O"], wide_tables["H"], wide_tables["L"],
-            wide_tables["C"], wide_tables["VWAP"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
+            wide_tables["VWAP"],
         )
         assert set(result.keys()) == {"OPEN0", "HIGH0", "LOW0", "VWAP0", "OVERNIGHT_RET"}
 
     def test_high0_ge_low0(self, wide_tables):
         """HIGH0 >= LOW0 always."""
         result = _compute_price(
-            wide_tables["O"], wide_tables["H"], wide_tables["L"],
-            wide_tables["C"], wide_tables["VWAP"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
+            wide_tables["VWAP"],
         )
         diff = result["HIGH0"] - result["LOW0"]
         assert (diff.dropna() >= -1e-10).all().all()
@@ -249,8 +292,11 @@ class TestPrice:
     def test_close_ratio_near_1(self, wide_tables):
         """OPEN0, HIGH0, LOW0 should be reasonable ratios near 1."""
         result = _compute_price(
-            wide_tables["O"], wide_tables["H"], wide_tables["L"],
-            wide_tables["C"], wide_tables["VWAP"],
+            wide_tables["O"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["C"],
+            wide_tables["VWAP"],
         )
         for name in ["OPEN0", "HIGH0", "LOW0", "VWAP0"]:
             vals = result[name].dropna()
@@ -262,10 +308,14 @@ class TestPrice:
 # Rolling simple
 # ---------------------------------------------------------------------------
 
+
 class TestRollingSimple:
     def test_factor_count(self, wide_tables):
         result = _compute_rolling_simple(
-            wide_tables["C"], wide_tables["H"], wide_tables["L"], wide_tables["V"],
+            wide_tables["C"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["V"],
         )
         # 11 ops × 5 windows = 55
         assert len(result) == 55
@@ -273,7 +323,10 @@ class TestRollingSimple:
     def test_nan_warmup(self, wide_tables):
         """First 59 rows should be NaN for window=60 factors."""
         result = _compute_rolling_simple(
-            wide_tables["C"], wide_tables["H"], wide_tables["L"], wide_tables["V"],
+            wide_tables["C"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["V"],
         )
         ma60 = result["MA60"]
         # First 58 rows (0-indexed) should be NaN (need 60 values for window=60)
@@ -284,7 +337,10 @@ class TestRollingSimple:
     def test_ma_reasonable(self, wide_tables):
         """MA_d / C should be roughly near 1 for stable prices."""
         result = _compute_rolling_simple(
-            wide_tables["C"], wide_tables["H"], wide_tables["L"], wide_tables["V"],
+            wide_tables["C"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["V"],
         )
         ma5 = result["MA5"].dropna()
         # MA5/C should be close to 1 for prices with small drift
@@ -294,7 +350,10 @@ class TestRollingSimple:
     def test_rsv_range(self, wide_tables):
         """RSV should be in [0, 1]."""
         result = _compute_rolling_simple(
-            wide_tables["C"], wide_tables["H"], wide_tables["L"], wide_tables["V"],
+            wide_tables["C"],
+            wide_tables["H"],
+            wide_tables["L"],
+            wide_tables["V"],
         )
         for d in [5, 10, 20, 30, 60]:
             rsv = result[f"RSV{d}"].dropna()
@@ -305,6 +364,7 @@ class TestRollingSimple:
 # ---------------------------------------------------------------------------
 # Rolling complex
 # ---------------------------------------------------------------------------
+
 
 class TestRollingComplex:
     def test_factor_count(self, wide_tables):
@@ -354,6 +414,7 @@ class TestRollingComplex:
 # Rolling regression
 # ---------------------------------------------------------------------------
 
+
 class TestRollingRegression:
     def test_factor_count(self, wide_tables):
         result = _compute_rolling_regression(wide_tables["C"])
@@ -398,6 +459,7 @@ class TestRollingRegression:
 # RANK / IMAX / IMIN helpers
 # ---------------------------------------------------------------------------
 
+
 class TestRollingHelpers:
     def test_rolling_rank_known(self):
         """Rank of max value in window should be 1.0."""
@@ -431,6 +493,7 @@ class TestRollingHelpers:
 # Full compute pipeline
 # ---------------------------------------------------------------------------
 
+
 class TestFullCompute:
     def test_output_shape(self, bars, fundamentals, engine):
         panel = engine.compute(bars, fundamentals)
@@ -463,6 +526,7 @@ class TestFullCompute:
 # Forward-adjusted prices
 # ---------------------------------------------------------------------------
 
+
 class TestAdjFactor:
     def test_split_continuity(self, engine):
         """Stock split: adj_factor < 1 for pre-split, adjusted prices continuous."""
@@ -478,17 +542,19 @@ class TestAdjFactor:
         volumes = [1_000_000] * n
         amounts = [c * v for c, v in zip(closes, volumes)]
 
-        bars = pd.DataFrame({
-            "symbol": ["A"] * n,
-            "date": dates,
-            "open": opens,
-            "high": highs,
-            "low": lows,
-            "close": closes,
-            "volume": volumes,
-            "amount": amounts,
-            "adj_factor": adj_factors,
-        })
+        bars = pd.DataFrame(
+            {
+                "symbol": ["A"] * n,
+                "date": dates,
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": volumes,
+                "amount": amounts,
+                "adj_factor": adj_factors,
+            }
+        )
 
         wide = _prepare_wide_tables(bars)
         adj_close = wide["C"]
