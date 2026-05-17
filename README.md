@@ -125,11 +125,6 @@ cp .env.example .env
 ### CLI 用法
 
 ```bash
-# 自选股管理
-pangu pool list                            # 查看自选股
-pangu pool add 600519 / 贵州茅台            # 添加（代码或名称）
-pangu pool remove 600519                   # 移除
-
 # 数据回填（首次部署或长时间间断后；推荐用 pangu run init 一键完成）
 pangu backfill constituents --start 2019-01-01     # 同步历史成分股
 pangu backfill bars --start 2019-01-01             # 拉历史日 K（耗时）
@@ -173,10 +168,9 @@ docker compose logs -f worker    # 查看日志
 pangu/
 ├── config/
 │   ├── settings.toml              # 主配置
-│   ├── watchlist.yaml             # 自选股列表
 │   └── global_market_mapping.yaml # 国际行情符号映射
 ├── src/pangu/
-│   ├── cli.py                     # CLI 入口 (pool / run / status / backfill / train / backtest …)
+│   ├── cli.py                     # CLI 入口 (run / status / backfill / train / backtest …)
 │   ├── main.py                    # Components 组装 + 任务入口
 │   ├── config.py                  # TOML 配置加载
 │   ├── models.py                  # 数据模型 (TradeSignal, NewsItem, Action 等)
@@ -246,19 +240,6 @@ GEMINI_API_KEY=your-gemini-key           # fallback
 # 用户私聊 Bot 即自动完成绑定，无需配置 open_id
 FEISHU_APP_ID=cli_xxxx
 FEISHU_APP_SECRET=your-secret
-```
-
-### 自选股 (`config/watchlist.yaml`)
-
-```yaml
-watchlist:
-  - symbol: "600519"
-    name: "贵州茅台"
-    sector: "白酒"
-  - symbol: "000858"
-    name: "五粮液"
-    sector: "白酒"
-  # 建议 15-30 只，覆盖 3-5 个行业
 ```
 
 ### 生产环境关键参数 (`config/settings.toml`)

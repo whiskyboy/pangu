@@ -40,7 +40,7 @@ from pangu.data.fundamental import (  # noqa: E402
 )
 from pangu.data.market import BaoStockMarketDataProvider, CompositeMarketDataProvider  # noqa: E402
 from pangu.data.news import AkShareNewsDataProvider  # noqa: E402
-from pangu.data.stock_pool import StockPoolManager  # noqa: E402
+from pangu.data.stock_pool import IndexStockPool  # noqa: E402
 from pangu.data.storage import Database  # noqa: E402
 from pangu.factor.fundamental import FundamentalFactorEngine  # noqa: E402
 from pangu.factor.technical import PandasTAFactorEngine  # noqa: E402
@@ -86,15 +86,9 @@ def build_components() -> tuple[Components, str, Settings]:
         providers=[akshare_fund],
     )
 
-    sys_cfg = settings.system
     pool_cfg = settings.stock_pool
-    stock_pool = StockPoolManager(
-        watchlist_path=sys_cfg.get("watchlist_path", "config/watchlist.yaml"),
+    stock_pool = IndexStockPool(
         storage=db,
-        market_provider=market,
-        news_provider=news,
-        fundamental_provider=fundamental,
-        min_listing_days=pool_cfg.get("min_listing_days", 60),
         indices=pool_cfg.get("indices"),
     )
 

@@ -24,7 +24,7 @@ from pangu.scheduler import Components, TradingScheduler
 
 
 @pytest.fixture
-def mock_components(tmp_path) -> Components:
+def mock_components() -> Components:
     """Build a Components instance with mocked dependencies (ML path enabled)."""
     db = MagicMock()
     db.is_trading_day.return_value = True
@@ -75,7 +75,6 @@ def mock_components(tmp_path) -> Components:
         fund_engine=fund_engine,
         judge_engine=judge_engine,
         notif_manager=notif_manager,
-        watchlist_path=str(tmp_path / "watchlist.yaml"),
         ml_strategy=ml_strategy,
         ml_enabled=True,
         portfolio_state=portfolio_state,

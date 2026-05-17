@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import yaml
 
 from pangu.models import (
     NewsCategory,
@@ -319,26 +317,10 @@ class FakeNewsDataProvider:
 
 
 class FakeStockPool:
-    """Loads watchlist from YAML; factor pool is an empty stub."""
+    """In-memory stock pool fake with a fixed symbol list."""
 
-    def __init__(self, watchlist_path: str | Path = "config/watchlist.yaml") -> None:
-        self._path = Path(watchlist_path)
-        self._symbols: list[str] = []
-        if self._path.exists():
-            data = yaml.safe_load(self._path.read_text())
-            watchlist = (data or {}).get("watchlist") or []
-            self._symbols = [item["symbol"] for item in watchlist if "symbol" in item]
-
-    def get_watchlist(self) -> list[str]:
-        return list(self._symbols)
-
-    def add_to_watchlist(self, symbol: str) -> None:
-        if symbol not in self._symbols:
-            self._symbols.append(symbol)
-
-    def remove_from_watchlist(self, symbol: str) -> None:
-        if symbol in self._symbols:
-            self._symbols.remove(symbol)
+    def __init__(self, symbols: list[str] | None = None) -> None:
+        self._symbols: list[str] = list(symbols or [])
 
     def get_all_symbols(self) -> list[str]:
         return list(self._symbols)
@@ -346,7 +328,14 @@ class FakeStockPool:
     def get_stock_metadata(self) -> dict:
         from pangu.models import StockMeta
 
-        return {s: StockMeta(name=s, sector="") for s in self._symbols}
+        meta: dict[str, StockMeta] = {}
+        for s in self._symbols:
+            if s in _STOCKS:
+                name, sector = _STOCKS[s]
+                meta[s] = StockMeta(name=name, sector=sector)
+            else:
+                meta[s] = StockMeta(name=s, sector="")
+        return meta
 
     def sync_index_constituents(self) -> int:
         return 0

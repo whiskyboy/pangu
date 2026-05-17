@@ -39,7 +39,7 @@ class TestBasicLoading:
             log_level = "INFO"
 
             [stock_pool]
-            min_listing_days = 60
+            indices = ["000300", "000905"]
 
             [strategy]
             buy_threshold = 0.7
@@ -47,7 +47,7 @@ class TestBasicLoading:
         )
         s = load_settings(path)
         assert s.system["timezone"] == "Asia/Shanghai"
-        assert s.stock_pool["min_listing_days"] == 60
+        assert s.stock_pool["indices"] == ["000300", "000905"]
         assert s.strategy["buy_threshold"] == 0.7
 
     def test_missing_section_defaults_to_empty(self, tmp_path: Path) -> None:

@@ -19,94 +19,6 @@ def main() -> None:
 
 
 # ---------------------------------------------------------------------------
-# pool commands
-# ---------------------------------------------------------------------------
-
-
-@main.group()
-def pool() -> None:
-    """Manage the watchlist stock pool."""
-
-
-@pool.command("list")
-def pool_list() -> None:
-    """List all stocks in the watchlist."""
-    from pangu.main import build_components, load_env
-
-    load_env()
-    c, _, _ = build_components()
-
-    entries = c.stock_pool._entries  # noqa: SLF001
-    if not entries:
-        click.echo("Watchlist is empty.")
-        return
-
-    click.echo(f"{'Symbol':<10} {'Name':<12} {'Sector'}")
-    click.echo("─" * 40)
-    for e in entries:
-        sym = e.get("symbol", "")
-        name = e.get("name", "")
-        sector = e.get("sector", "")
-        click.echo(f"{sym:<10} {name:<12} {sector}")
-    click.echo(f"\nTotal: {len(entries)} stocks")
-
-
-@pool.command("add")
-@click.argument("input_str")
-@click.option("--name", default="", help="Stock name (auto-resolved if omitted)")
-@click.option("--sector", default="", help="Sector (auto-resolved if omitted)")
-def pool_add(input_str: str, name: str, sector: str) -> None:
-    """Add a stock to the watchlist (by symbol or name)."""
-    from pangu.main import build_components, load_env
-
-    load_env()
-    c, _, _ = build_components()
-
-    # If input is a name, show candidates for confirmation
-    if not (input_str.isdigit() and len(input_str) == 6):
-        candidates = c.stock_pool.resolve_stock(input_str)
-        if not candidates:
-            click.echo(f"❌ Could not resolve '{input_str}' to any stock.")
-            sys.exit(1)
-        if len(candidates) > 1:
-            click.echo(f"Found {len(candidates)} matches for '{input_str}':")
-            for i, cd in enumerate(candidates, 1):
-                click.echo(f"  {i}. {cd['symbol']} {cd['name']} ({cd['sector']})")
-            choice = click.prompt("Select", type=int, default=1)
-            if choice < 1 or choice > len(candidates):
-                click.echo("Invalid choice.")
-                sys.exit(1)
-            selected = candidates[choice - 1]
-            name = name or selected["name"]
-            sector = sector or selected["sector"]
-            input_str = selected["symbol"]
-
-    result = c.stock_pool.add_to_watchlist(input_str, name=name, sector=sector)
-    if result:
-        click.echo(f"✅ Added {result} to watchlist")
-    else:
-        click.echo(f"❌ Failed to add '{input_str}'")
-        sys.exit(1)
-
-
-@pool.command("remove")
-@click.argument("input_str")
-def pool_remove(input_str: str) -> None:
-    """Remove a stock from the watchlist (by symbol or name)."""
-    from pangu.main import build_components, load_env
-
-    load_env()
-    c, _, _ = build_components()
-
-    result = c.stock_pool.remove_from_watchlist(input_str)
-    if result:
-        click.echo(f"✅ Removed {result} from watchlist")
-    else:
-        click.echo(f"❌ '{input_str}' not found in watchlist")
-        sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
 # run commands
 # ---------------------------------------------------------------------------
 
@@ -1308,10 +1220,6 @@ def status() -> None:
     click.echo(f"  Latest signal:  {s['latest_signal']}")
     click.echo(f"  Calendar:       {s['calendar_count']:,} trading days")
     click.echo(f"  News:           {s['news_count']:,} items")
-
-    # Watchlist
-    watchlist = c.stock_pool.get_watchlist()
-    click.echo(f"  Watchlist:      {len(watchlist)} stocks")
 
     # Task runs (last 24h)
     from pangu.tz import now as _tz_now

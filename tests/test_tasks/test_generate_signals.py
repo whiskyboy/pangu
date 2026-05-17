@@ -64,7 +64,6 @@ def stock_pool() -> MagicMock:
     sp = MagicMock()
     universe = [f"60{i:04d}" for i in range(30)]
     sp.get_all_symbols.return_value = universe
-    sp.get_watchlist.return_value = []
     # Stock metadata = symbol → StockMeta(name=symbol)
     from pangu.models import StockMeta
 

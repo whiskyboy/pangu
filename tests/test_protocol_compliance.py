@@ -63,15 +63,6 @@ class _StubNews:
 
 
 class _StubStockPool:
-    def get_watchlist(self) -> list[str]:
-        return []
-
-    def add_to_watchlist(self, symbol: str) -> None:
-        pass
-
-    def remove_from_watchlist(self, symbol: str) -> None:
-        pass
-
     def get_all_symbols(self) -> list[str]:
         return []
 
@@ -314,11 +305,9 @@ class TestStubInvocation:
 
     def test_stock_pool_stubs_return(self) -> None:
         sp = _StubStockPool()
-        assert isinstance(sp.get_watchlist(), list)
-        sp.add_to_watchlist("000001")
-        sp.remove_from_watchlist("000001")
         assert isinstance(sp.get_all_symbols(), list)
         assert isinstance(sp.get_stock_metadata(), dict)
+        assert sp.sync_index_constituents() == 0
 
     def test_factor_engine_stubs_return(self) -> None:
         fe = _StubFactorEngine()

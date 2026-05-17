@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
 from pangu.models import NewsItem, Region
@@ -107,37 +105,24 @@ class TestFakeNewsDataProvider:
 
 
 class TestFakeStockPool:
-    def test_loads_watchlist_from_yaml(self, fake_stock_pool: FakeStockPool) -> None:
-        wl = fake_stock_pool.get_watchlist()
-        assert wl == ["600519", "000858", "300750"]
-
-    def test_add_to_watchlist(self, fake_stock_pool: FakeStockPool) -> None:
-        fake_stock_pool.add_to_watchlist("601318")
-        assert "601318" in fake_stock_pool.get_watchlist()
-
-    def test_add_duplicate_no_effect(self, fake_stock_pool: FakeStockPool) -> None:
-        fake_stock_pool.add_to_watchlist("600519")
-        assert fake_stock_pool.get_watchlist().count("600519") == 1
-
-    def test_remove_from_watchlist(self, fake_stock_pool: FakeStockPool) -> None:
-        fake_stock_pool.remove_from_watchlist("600519")
-        assert "600519" not in fake_stock_pool.get_watchlist()
-
-    def test_remove_nonexistent_no_error(self, fake_stock_pool: FakeStockPool) -> None:
-        fake_stock_pool.remove_from_watchlist("999999")  # should not raise
-
-    def test_get_all_symbols(self, fake_stock_pool: FakeStockPool) -> None:
+    def test_loads_symbols(self, fake_stock_pool: FakeStockPool) -> None:
         assert fake_stock_pool.get_all_symbols() == ["600519", "000858", "300750"]
 
     def test_get_stock_metadata(self, fake_stock_pool: FakeStockPool) -> None:
         meta = fake_stock_pool.get_stock_metadata()
         assert isinstance(meta, dict)
+        assert set(meta.keys()) == {"600519", "000858", "300750"}
+        assert meta["600519"].name == "贵州茅台"
 
-    def test_watchlist_returns_copy(self, fake_stock_pool: FakeStockPool) -> None:
-        wl1 = fake_stock_pool.get_watchlist()
-        wl2 = fake_stock_pool.get_watchlist()
-        assert wl1 is not wl2
+    def test_get_all_symbols_returns_copy(self, fake_stock_pool: FakeStockPool) -> None:
+        s1 = fake_stock_pool.get_all_symbols()
+        s2 = fake_stock_pool.get_all_symbols()
+        assert s1 is not s2
 
-    def test_missing_yaml_file(self, tmp_path: Path) -> None:
-        sp = FakeStockPool(watchlist_path=tmp_path / "nonexistent.yaml")
-        assert sp.get_watchlist() == []
+    def test_empty_pool(self) -> None:
+        sp = FakeStockPool()
+        assert sp.get_all_symbols() == []
+        assert sp.get_stock_metadata() == {}
+
+    def test_sync_index_constituents(self, fake_stock_pool: FakeStockPool) -> None:
+        assert fake_stock_pool.sync_index_constituents() == 0

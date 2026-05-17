@@ -25,7 +25,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pangu.data.fundamental import CompositeFundamentalProvider
 from pangu.data.market import CompositeMarketDataProvider
 from pangu.data.news import AkShareNewsDataProvider
-from pangu.data.stock_pool import StockPoolManager
+from pangu.data.stock_pool import IndexStockPool
 from pangu.data.storage import Database
 from pangu.factor.fundamental import FundamentalFactorEngine
 from pangu.factor.technical import PandasTAFactorEngine
@@ -62,12 +62,11 @@ class Components:
     market: CompositeMarketDataProvider
     news: AkShareNewsDataProvider
     fundamental: CompositeFundamentalProvider
-    stock_pool: StockPoolManager
+    stock_pool: IndexStockPool
     tech_engine: PandasTAFactorEngine
     fund_engine: FundamentalFactorEngine
     judge_engine: LLMJudgeEngineImpl
     notif_manager: NotificationManager
-    watchlist_path: str = "config/watchlist.yaml"
     ml_strategy: MLScoringStrategy | None = None
     ml_enabled: bool = False
     portfolio_state: PortfolioState | None = field(default=None)

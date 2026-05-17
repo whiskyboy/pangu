@@ -2,12 +2,9 @@
 timezone = "Asia/Shanghai"
 log_level = "INFO"
 db_path = "data/pangu.db"
-watchlist_path = "config/watchlist.yaml"
 global_market_mapping_path = "config/global_market_mapping.yaml"
 
 [stock_pool]
-# 过滤上市不满 N 天的新股 (避免数据不足导致因子计算异常)
-min_listing_days = 60
 # 因子池覆盖的指数代码 (000300=沪深300, 000905=中证500)
 indices = ["000300", "000905"]
 

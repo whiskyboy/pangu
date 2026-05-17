@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from tests.fakes import (
@@ -30,19 +28,6 @@ def fake_news() -> FakeNewsDataProvider:
 
 
 @pytest.fixture
-def fake_stock_pool(tmp_path: Path) -> FakeStockPool:
-    """FakeStockPool backed by a temporary watchlist YAML."""
-    yaml_content = """watchlist:
-  - symbol: "600519"
-    name: "贵州茅台"
-    sector: "白酒"
-  - symbol: "000858"
-    name: "五粮液"
-    sector: "白酒"
-  - symbol: "300750"
-    name: "宁德时代"
-    sector: "新能源"
-"""
-    p = tmp_path / "watchlist.yaml"  # type: ignore[operator]
-    p.write_text(yaml_content)
-    return FakeStockPool(watchlist_path=p)
+def fake_stock_pool() -> FakeStockPool:
+    """FakeStockPool with a fixed 3-stock universe."""
+    return FakeStockPool(["600519", "000858", "300750"])

@@ -149,9 +149,8 @@ Use deterministic fakes (`tests/fakes.py`), not mocks/patches. Tests are integra
 ## Configuration
 
 - `config/settings.toml` — Main config (DB path, stock pool indices, strategy params, scheduler times). Supports `$ENV_VAR` substitution.
-- `config/watchlist.yaml` — Stock watchlist.
 - `.env` — Environment variables (copy from `.env.example`): `AZURE_API_BASE`, `AZURE_API_KEY`, `AZURE_API_VERSION`, `AZURE_DEPLOYMENT` (LLM), `FEISHU_APP_ID`, `FEISHU_APP_SECRET` (notification).
-- Stock pool indices are configurable: `[stock_pool].indices = ["000300", "000905"]` (CSI300 + CSI500).
+- Stock pool indices are configurable: `[stock_pool].indices = ["000300", "000905"]` (CSI300 + CSI500). The pool is derived entirely from `index_constituents` — there is no manual watchlist.
 
 ## CLI Operations
 
@@ -189,7 +188,7 @@ cp .env.example .env   # Fill in API keys
 docker compose up -d    # Start
 ```
 
-Volumes: `./data:/app/data` (SQLite DB), `./config:/app/config` (settings/watchlist).
+Volumes: `./data:/app/data` (SQLite DB), `./config:/app/config` (settings + index constituents cache).
 
 ## Data Files (not in git)
 

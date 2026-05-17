@@ -123,9 +123,6 @@ cp .env.example .env
 ### CLI Usage
 
 ```bash
-# Watchlist
-pangu pool list / add / remove
-
 # Backfill (first deployment or long gap; `pangu run init` covers this in one go)
 pangu backfill constituents --start 2019-01-01
 pangu backfill bars --start 2019-01-01
