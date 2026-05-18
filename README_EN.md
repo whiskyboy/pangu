@@ -107,22 +107,25 @@ PanGu supports two distinct workflows. Pick your target scenario before reading 
 
 | Scenario | Goal | Typical Flow |
 |----------|------|--------------|
-| **A. Out-of-the-box (production)** | Run the daily model, generate rebalance decisions, push Feishu cards | `pangu run init` → (optional) `pangu run signals` to dry-run → `pangu run start` (daemon) |
+| **A. Out-of-the-box (production)** | Run the daily model, generate rebalance decisions, push Feishu cards | `pangu run init` (≈9-12h one-shot bootstrap) → (optional) `pangu run signals` dry-run → `pangu run start` or `docker compose up -d` (daemon) |
 | **B. Strategy research / backtest** | Recompute factors + train ML + iterate strategy logic across multiple windows | `pangu backfill *` → `pangu compute-factors` → `pangu train walkforward` → `pangu evaluate-* / pangu backtest` |
 
 Notes to avoid common pitfalls:
 
-- **T6 only fires on A-share trading days**, and **only Mondays** (the first trading day of each ISO week) actually rebalance the portfolio. Non-rebalance trading days just refresh ML scores / ranks. Weekends and holidays are skipped.
+- **First deployment MUST run `pangu run init` first**: it backfills historical bars + fundamentals (≈9-12h, upstream API throttled), computes factors, and trains the first model. The daemon will NOT do this for you — it only handles incremental sync and scheduled tasks.
+- **When does the first Feishu signal arrive?** After the daemon starts, T6 self-checks at 08:15 every trading day, but only the **first trading day of each ISO week** (usually Monday) pushes a rebalance card. Other trading days only refresh ML rankings without notifications.
+- **T6 only runs on A-share trading days** — weekends and holidays are skipped.
 - **Val/Test golden rule**: use `score_matrix_val.parquet` for hyperparameter tuning / strategy selection; reserve `score_matrix_test.parquet` for the final report — **never use the test set to select strategies** (see [Offline Training & Backtest](#offline-training--backtest) below).
 - **Production T5 (monthly auto-retrain) = single-window** `pangu train` (~15–20 min). **Walk-Forward = multi-window** `pangu train walkforward` (~2.5h, research only). Both produce identically named `wf_window_NN_seed*.txt` artifacts loadable by `MLScorer.reload()`.
-- **Backtest defaults to val scores**; before running `pangu backtest`, check the time range of `score_matrix_*.parquet` and pass matching `--start / --end` flags. The CLI auto-clamps to the score matrix but explicit dates are preferred.
+- **`pangu backtest --scores` is a required flag** (no default): pass `score_matrix_val.parquet` to tune, `score_matrix_test.parquet` for the final report. `--start / --end` must fall within the score file's date range (the CLI auto-clamps but explicit dates are preferred).
 
 ### Prerequisites
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) package manager
+- Python 3.12+ or Docker
+- [uv](https://docs.astral.sh/uv/) package manager (non-Docker path)
+- Disk ≈ 5GB (SQLite DB ~1-2GB + factors.parquet ~1.3GB + models ~50-200MB + headroom)
 - Feishu (Lark) app credentials (App ID / App Secret, see [Feishu Bot Setup Guide](docs/feishu-bot-setup.md))
-- Azure OpenAI or other LLM API key (see [LLM Provider Setup Guide](docs/litellm-setup.md))
+- An LLM API key — pick **one** of Azure OpenAI / DeepSeek / Gemini / OpenAI / etc. (see [LLM Provider Setup Guide](docs/litellm-setup.md))
 
 ### Installation
 
@@ -133,59 +136,98 @@ cd pangu
 uv sync
 
 cp .env.example .env
-# Edit .env with your API keys and Feishu credentials
+# Edit .env: per docs/litellm-setup.md fill credentials for ONE LLM provider; add Feishu App ID / Secret
 ```
 
-### CLI Usage
+### Scenario A — Out-of-the-box (production)
 
 ```bash
-# Backfill (first deployment or long gap; `pangu run init` covers this in one go)
-pangu backfill constituents --start 2019-01-01
-pangu backfill bars --start 2019-01-01
-pangu backfill fundamentals --start 2019-01-01
-pangu backfill index --start 2019-01-01
+# 1. One-shot bootstrap: 6 years of history + first model (≈9-12h; use screen / tmux)
+#    Idempotent — re-running skips completed steps; `--force` re-runs everything.
+uv run pangu run init
 
-# Offline training + evaluation (see "Offline Training & Backtest")
-pangu compute-factors                      # Alpha158 → data/factors.parquet
-pangu train                                # Single-window production training (full history)
-pangu train walkforward                    # Multi-window walk-forward (research / backtest only)
-pangu evaluate-scores --scores data/score_matrix_val.parquet
-pangu evaluate-models --model-dir models
-pangu backtest --scores data/score_matrix_val.parquet \
-    --start <val_start> --end <val_end>
-pangu replay --start 2026-01-01 --end 2026-05-15   # Replay historical decisions
+# 2. Optional: trigger a T6 dry-run to verify the Feishu push pipeline
+#    (only pushes a card on rebalance days; otherwise just runs the self-check).
+uv run pangu run signals
 
-# Runtime
-pangu run init                             # One-shot cold-start (idempotent by default; --force re-runs everything)
-pangu run signals [--initial-capital 200000]      # Manually trigger T6 (auto-runs T4 if today's snapshot is missing)
-pangu run start [--initial-capital 200000]        # Launch the scheduler daemon
-pangu status                               # DB stats + task_runs + portfolio snapshot
+# 3. Launch the daemon (foreground or under systemd)
+uv run pangu run start
+# Or Docker — see "Docker Deployment" below.
 ```
 
-> Use `uv run pangu` if the virtual environment is not activated.
+### Scenario B — Strategy research / backtest
+
+```bash
+# 1. Backfill historical data (skip if Scenario A already ran)
+uv run pangu backfill constituents --start 2019-01-01     # <1min → config/backfill_stock_pool.yaml
+uv run pangu backfill bars --start 2019-01-01             # ≈4-7h (BaoStock throttled)
+uv run pangu backfill fundamentals --start 2019-01-01     # ≈4-5h (incl. pub_date for PIT)
+uv run pangu backfill index --start 2019-01-01            # <1min
+
+# 2. Compute factors + walk-forward training (details in "Offline Training & Backtest")
+uv run pangu compute-factors                              # ≈10min → data/factors.parquet
+uv run pangu train walkforward --n-seeds 5                # ≈2.5h → 17 windows + score_matrix_{val,test}.parquet
+
+# 3. Evaluate + backtest
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
+uv run pangu evaluate-models --model-dir models
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>     # tune
+uv run pangu backtest --scores data/score_matrix_test.parquet --start <test_start> --end <test_end>  # final report
+uv run pangu replay --start 2026-01-01 --end 2026-05-15   # replay historical decisions
+```
+
+### Other common commands
+
+```bash
+uv run pangu status                       # DB stats + last 24h task_runs + portfolio snapshot
+uv run pangu train                        # Single-window production training (≈15-20min; same as T5)
+```
+
+> Skip the `uv run` prefix if your virtualenv is already activated.
 
 ### Docker Deployment
 
 ```bash
 cp .env.example .env
+# Edit .env: fill LLM provider credentials + Feishu credentials
+
+# 1. First deployment MUST bootstrap first (one-shot, ≈9-12h; the terminal can disconnect)
+docker compose run --rm worker pangu run init
+
+# 2. Launch the daemon
 docker compose up -d
 docker compose logs -f worker
 ```
+
+> Skipping `pangu run init` and starting the daemon directly leaves the system with no model / factors / bars — T5 and T6 will repeatedly fail and alert on Feishu.
+> The container runs in UTC by default, but APScheduler honors `config/settings.toml::[system].timezone` (default `Asia/Shanghai`) — no need to set `TZ`.
 
 ## Configuration
 
 ### Environment Variables (`.env`)
 
+PanGu uses LiteLLM to support multiple LLM providers — pick **one** and fill its credentials (these are alternatives, not a fallback chain). Then update `config/settings.toml::[llm].provider` to match (default `azure/$AZURE_DEPLOYMENT`). See [docs/litellm-setup.md](docs/litellm-setup.md) for the full provider list and switching guide.
+
 ```bash
-# LLM (see docs/litellm-setup.md)
+# === LLM Provider — pick ONE ===
+
+# Option A: Azure OpenAI (matches settings.toml default)
 AZURE_API_BASE=https://your-resource.openai.azure.com/
 AZURE_API_KEY=your-key
 AZURE_API_VERSION=2024-08-01-preview
 AZURE_DEPLOYMENT=your-deployment-name
-DEEPSEEK_API_KEY=your-deepseek-key       # fallback
-GEMINI_API_KEY=your-gemini-key           # fallback
 
-# Feishu Bot (see docs/feishu-bot-setup.md)
+# Option B: DeepSeek
+# DEEPSEEK_API_KEY=your-deepseek-key
+
+# Option C: Google Gemini
+# GEMINI_API_KEY=your-gemini-key
+
+# Option D: OpenAI
+# OPENAI_API_KEY=your-openai-key
+
+# === Feishu Bot (required; see docs/feishu-bot-setup.md) ===
+# The user only has to DM the Bot once to auto-bind — no open_id config required.
 FEISHU_APP_ID=cli_xxxx
 FEISHU_APP_SECRET=your-secret
 ```
@@ -212,16 +254,25 @@ FEISHU_APP_SECRET=your-secret
 
 Tasks run on the times configured under `[scheduler]` in `config/settings.toml`. Tasks marked "trading day" auto-skip non-trading days.
 
-| Task | Time | Frequency | Description |
-|------|------|-----------|-------------|
-| **T1** Reference Data Sync | 06:00 | 1st of each month | Trading calendar + index constituent snapshot |
-| **T2** News Polling | 00:00–23:00 hourly | Every hour (incl. weekends) | Financial headlines → dedup + expiry |
-| **T3** Domestic Market Sync | 18:00 | Trading days (after close) | Daily K + fundamentals + valuation (incremental) |
-| **T4** International Data Sync | 07:00 | Trading days | US / HK / commodity snapshots (overnight context) |
-| **T5** Monthly Model Training | 02:00 | 1st of each month | Single-window LightGBM training (≈15–20min) |
-| **T6** Signal Generation / Rebalance | 08:15 | Trading days (pre-market) | Self-check + LLM-TopkDropout rebalance on first ISO-week trading day |
+| Task | Default Time | Default Frequency | Config Key (`[scheduler]`) | Description |
+|------|--------------|-------------------|----------------------------|-------------|
+| **T1** Reference Data Sync | 06:00 | 1st of each month | `reference_data_sync_time` / `reference_data_sync_day` | Trading calendar + index constituent snapshot + cninfo company profiles |
+| **T2** News Polling | 00:00–23:00 hourly | Every hour (incl. weekends) | `news_poll_start_time` / `news_poll_end_time` / `news_poll_interval_minutes` | Financial headlines → dedup + expiry |
+| **T3** Domestic Market Sync | 18:00 | Trading days (after close) | `domestic_kline_sync_time` | Daily K + fundamentals + valuation (incremental) |
+| **T4** International Data Sync | 07:00 | Trading days | `international_data_sync_time` | US / HK / commodity snapshots (overnight context) |
+| **T5** Monthly Model Training | 02:00 | 1st of each month | `model_training_time` / `model_training_day` | Single-window LightGBM training (≈15–20min) |
+| **T6** Signal Generation / Rebalance | 08:15 | Trading days (pre-market) | `signal_generation_time` | Self-check + LLM-TopkDropout rebalance on first ISO-week trading day |
 
-> Task numbering reflects **logical dependencies** (data → model → signals), not scheduling order.
+> Task numbering reflects **logical dependencies** (data → model → signals), not scheduling order. All time fields use `"HH:MM"` format. The timezone is controlled globally by `[system].timezone` (default `Asia/Shanghai`) — containers / VPS in other system timezones do NOT need to set `TZ`; APScheduler fires according to the settings.toml timezone.
+
+Example: shift the rebalance push to 09:00 and the domestic sync 4 hours later:
+
+```toml
+# config/settings.toml
+[scheduler]
+signal_generation_time = "09:00"
+domestic_kline_sync_time = "22:00"
+```
 
 Every task is wrapped by `@scheduled_task`: exceptions auto-alert to Feishu and persist into `task_runs`. Use `pangu status` to view the last 24h of runs.
 

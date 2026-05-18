@@ -108,13 +108,15 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ### 第 9 步：验证推送
 
-通过 CLI 手动触发一次扫描来验证：
+通过 CLI 手动触发一次信号生成来验证：
 
 ```bash
-pangu run scan
+pangu run signals
 ```
 
-如果配置正确，你会在飞书中收到 Bot 的私聊信号推送消息。
+> 该命令会同步运行 T6（信号生成），如果当天 T4（国际行情快照）未生成会自动补跑。仅在 ISO 周首个交易日才会真正调仓并推送 Markdown 卡片；非调仓日只做数据自检。
+
+如果配置正确，且当前是调仓日，你会在飞书中收到 Bot 的私聊信号推送消息。
 
 ---
 

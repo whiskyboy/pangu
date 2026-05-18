@@ -106,22 +106,25 @@ PanGu 支持两种使用路径，请先选择目标场景再继续：
 
 | 场景 | 目标 | 典型流程 |
 |------|------|---------|
-| **A. 开箱即用（生产）** | 每日定时跑模型、生成调仓建议、飞书推送 | `pangu run init` → （可选）`pangu run signals` 验证 → `pangu run start`（daemon） |
+| **A. 开箱即用（生产）** | 每日定时跑模型、生成调仓建议、飞书推送 | `pangu run init`（≈9-12h，一次性 bootstrap）→（可选）`pangu run signals` 验证 →  `pangu run start` 或 `docker compose up -d`（daemon） |
 | **B. 策略研究 / 回测** | 自己跑因子 + ML 训练 + 多窗口回测、迭代策略 | `pangu backfill *` → `pangu compute-factors` → `pangu train walkforward` → `pangu evaluate-* / pangu backtest` |
 
 注意事项（避免常见误区）：
 
-- **T6 仅在 A 股交易日运行**，且**周一**（ISO 周第一个交易日）才真正调仓；其他交易日只刷新 ML 分数与排名，不动持仓。节假日和周末跳过。
+- **首次部署务必先跑 `pangu run init`**：拉历史 K 线 + 基本面（≈9-12h，受上游 API 限流影响） + 计算因子 + 训练首个模型。daemon 不会替你做这些事，启动后只跑增量同步与定时任务。
+- **首个调仓信号何时推送**：daemon 启动后，T6 会在每个交易日 08:15 自检；只有在 **ISO 周首个交易日**（通常周一）才推送调仓 Markdown 卡片。非调仓日只刷新 ML 排名、不会推送。
+- **T6 仅在 A 股交易日运行**，节假日和周末跳过。
 - **Val/Test 铁律**：`score_matrix_val.parquet` 用来调参 / 选策略；`score_matrix_test.parquet` 只用作最终报告——**绝不能用 test 选策略**（详见 [离线训练与回测](#离线训练与回测)）。
 - **生产 T5（月度自动再训练）= 单窗口** `pangu train`，约 15–20 分钟；**Walk-Forward = 多窗口** `pangu train walkforward`，约 2.5 小时，仅用于研究 / 回测。两者产物文件名一致（`wf_window_NN_seed*.txt`），都可被 `MLScorer.reload()` 加载。
-- **回测命令默认使用 val 分数**；提交回测前请先看 `score_matrix_*.parquet` 的时间范围，`--start / --end` 必须落在该范围内（命令行会自动收敛但显式指定更稳妥）。
+- **`pangu backtest` 的 `--scores` 是必传参数**（不区分 val/test）：用 `score_matrix_val.parquet` 调参，用 `score_matrix_test.parquet` 出最终报告。`--start / --end` 必须落在该 score 文件的日期范围内（命令行会自动收敛到 score 范围，但显式指定更稳妥）。
 
 ### 前置条件
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) 包管理器
+- Python 3.12+ 或 Docker（二选一）
+- [uv](https://docs.astral.sh/uv/) 包管理器（非 Docker 路径）
+- 磁盘空间 ≈ 5GB（SQLite DB ~1-2GB + factors.parquet ~1.3GB + models ~50-200MB + 备份余量）
 - 飞书开放平台自建应用（获取 App ID / App Secret，详见 [飞书 Bot 配置指南](docs/feishu-bot-setup.md)）
-- Azure OpenAI 或其他 LLM API Key（配置指南见 [LLM Provider 配置指南](docs/litellm-setup.md)）
+- LLM API Key（Azure OpenAI / DeepSeek / Gemini / OpenAI 等任选其一，配置指南见 [LLM Provider 配置指南](docs/litellm-setup.md)）
 
 ### 安装
 
@@ -135,48 +138,70 @@ uv sync
 
 # 复制环境变量模板并填写
 cp .env.example .env
-# 编辑 .env，填入 API Key、飞书凭据等
+# 编辑 .env，按 docs/litellm-setup.md 选一个 LLM provider 填凭据；填飞书 App ID / Secret
 ```
 
-### CLI 用法
+### 场景 A：开箱即用（生产）
 
 ```bash
-# 数据回填（首次部署或长时间间断后；推荐用 pangu run init 一键完成）
-pangu backfill constituents --start 2019-01-01     # 同步历史成分股
-pangu backfill bars --start 2019-01-01             # 拉历史日 K（耗时）
-pangu backfill fundamentals --start 2019-01-01     # 拉历史基本面 (含 pub_date PIT)
-pangu backfill index --start 2019-01-01            # 拉指数日 K
+# 1. 一键 bootstrap：拉 6 年历史数据 + 训练首个模型（约 9-12h；可在 screen / tmux 中跑）
+#    步骤幂等，中断后重跑会自动跳过已完成的部分；`--force` 全量重跑
+uv run pangu run init
 
-# 离线训练 + 评估（详见"离线训练与回测"小节）
-pangu compute-factors                      # 计算 Alpha158 191 因子 → data/factors.parquet
-pangu train                                # 生产单窗口训练（全部历史）→ models/wf_window_NN_seed*.txt
-pangu train walkforward                    # 多窗口 Walk-Forward 训练（研究/回测用）
-pangu evaluate-scores --scores data/score_matrix_val.parquet
-pangu evaluate-models --model-dir models
-pangu backtest --scores data/score_matrix_val.parquet \
-    --start <val_start> --end <val_end>    # 调参用 val 回测
-pangu replay --start 2026-01-01 --end 2026-05-15   # 用历史决策回放估算生产线收益
+# 2. 可选：手动触发一次 T6 验证飞书推送是否畅通（非调仓日只做自检，调仓日才推送卡片）
+uv run pangu run signals
 
-# 运行
-pangu run init                             # 一键冷启动（默认幂等 skip if exists；--force 全量重跑）
-pangu run signals [--initial-capital 200000]      # 手动触发 T6（缺 T4 快照则先跑 T4）
-pangu run start [--initial-capital 200000]        # 启动调度器（daemon）
-
-# 状态
-pangu status                               # DB 统计 + 任务运行历史 + 持仓快照
+# 3. 启动 daemon（前台跑或 systemd 托管）
+uv run pangu run start
+# 或 Docker 路径（见下文 "Docker 部署"）
 ```
 
-> 未激活虚拟环境时，使用 `uv run pangu` 代替 `pangu`。
+### 场景 B：策略研究 / 回测
+
+```bash
+# 1. 拉历史数据（如果已跑过场景 A 可跳过）
+uv run pangu backfill constituents --start 2019-01-01     # <1min，得到 config/backfill_stock_pool.yaml
+uv run pangu backfill bars --start 2019-01-01             # ≈4-7h，受 BaoStock 限流
+uv run pangu backfill fundamentals --start 2019-01-01     # ≈4-5h，含 pub_date PIT
+uv run pangu backfill index --start 2019-01-01            # <1min
+
+# 2. 计算因子 + Walk-Forward 训练（详见 "离线训练与回测"）
+uv run pangu compute-factors                              # ≈10min → data/factors.parquet
+uv run pangu train walkforward --n-seeds 5                # ≈2.5h → 17 窗口模型 + score_matrix_{val,test}.parquet
+
+# 3. 评估 + 回测
+uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
+uv run pangu evaluate-models --model-dir models
+uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>   # 调参
+uv run pangu backtest --scores data/score_matrix_test.parquet --start <test_start> --end <test_end> # 出报告
+uv run pangu replay --start 2026-01-01 --end 2026-05-15   # 用历史调仓快照回放
+```
+
+### 其他常用命令
+
+```bash
+uv run pangu status                       # DB 统计 + 最近 24h 任务运行历史 + 持仓快照
+uv run pangu train                        # 生产单窗口训练（≈15-20min；T5 月度任务也是它）
+```
+
+> 已激活虚拟环境（如 `source .venv/bin/activate`）则可省略 `uv run` 前缀。
 
 ### Docker 部署
 
 ```bash
 cp .env.example .env
-# 编辑 .env 填入凭据
+# 编辑 .env 填入 LLM provider 凭据 + 飞书凭据
 
-docker compose up -d             # 构建并启动
-docker compose logs -f worker    # 查看日志
+# 1. 首次部署必须先 bootstrap（在容器内一次性跑完，约 9-12h；终端可断开）
+docker compose run --rm worker pangu run init
+
+# 2. 启动 daemon
+docker compose up -d
+docker compose logs -f worker            # 查看日志
 ```
+
+> 不先跑 `pangu run init` 直接 `docker compose up -d` 的话，daemon 启动后 T5/T6 会因为缺少历史数据 / 模型反复告警飞书。
+> 容器内默认 UTC 时区，但 APScheduler 调度遵循 `config/settings.toml::[system].timezone`（默认 `Asia/Shanghai`），不需要额外设 `TZ` 环境变量。
 
 ## 项目结构
 
@@ -243,16 +268,27 @@ pangu/
 
 ### 环境变量 (`.env`)
 
+PanGu 通过 LiteLLM 支持多家 LLM provider，**选一个**填凭据即可（不是 fallback 关系）。同时需要修改 `config/settings.toml::[llm].provider` 与之对应（默认 `azure/$AZURE_DEPLOYMENT`）。完整 provider 列表与切换方法见 [docs/litellm-setup.md](docs/litellm-setup.md)。
+
 ```bash
-# LLM（详见 docs/litellm-setup.md）
+# === LLM Provider（任选一个填）===
+
+# 方案 A：Azure OpenAI（settings.toml 默认）
 AZURE_API_BASE=https://your-resource.openai.azure.com/
 AZURE_API_KEY=your-key
 AZURE_API_VERSION=2024-08-01-preview
 AZURE_DEPLOYMENT=your-deployment-name
-DEEPSEEK_API_KEY=your-deepseek-key       # fallback
-GEMINI_API_KEY=your-gemini-key           # fallback
 
-# 飞书 Bot（配置指南见 docs/feishu-bot-setup.md）
+# 方案 B：DeepSeek
+# DEEPSEEK_API_KEY=your-deepseek-key
+
+# 方案 C：Google Gemini
+# GEMINI_API_KEY=your-gemini-key
+
+# 方案 D：OpenAI
+# OPENAI_API_KEY=your-openai-key
+
+# === 飞书 Bot（必需；详见 docs/feishu-bot-setup.md）===
 # 用户私聊 Bot 即自动完成绑定，无需配置 open_id
 FEISHU_APP_ID=cli_xxxx
 FEISHU_APP_SECRET=your-secret
@@ -280,16 +316,25 @@ FEISHU_APP_SECRET=your-secret
 
 系统启动后按 `config/settings.toml` 的 `[scheduler]` 段调度以下 6 个任务（标记"交易日"的任务在非交易日自动跳过）：
 
-| 任务 | 时间 | 频率 | 说明 |
-|------|------|------|------|
-| **T1** 参考数据同步 | 06:00 | 每月 1 号 | 交易日历 + 指数成分股快照 |
-| **T2** 财经快讯轮询 | 00:00–23:00 整点 | 每小时（含周末） | 财联社快讯 → 去重 + 过期清理 |
-| **T3** 国内行情同步 | 18:00 | 每交易日盘后 | 日 K + 基本面 + 估值增量同步 |
-| **T4** 国际交易同步 | 07:00 | 每交易日 | 美股/港股/商品快照入库（隔夜参考） |
-| **T5** 月度模型训练 | 02:00 | 每月 1 号 | 单窗口 LightGBM 训练（≈15–20min） |
-| **T6** 信号生成 / 调仓 | 08:15 | 每交易日盘前 | 数据自检 + ISO 周首日 LLM-TopkDropout 调仓 |
+| 任务 | 默认时间 | 默认频率 | 配置键（`[scheduler]`） | 说明 |
+|------|---------|---------|------------------------|------|
+| **T1** 参考数据同步 | 06:00 | 每月 1 号 | `reference_data_sync_time` / `reference_data_sync_day` | 交易日历 + 指数成分股快照 + cninfo 公司画像 |
+| **T2** 财经快讯轮询 | 00:00–23:00 整点 | 每小时（含周末） | `news_poll_start_time` / `news_poll_end_time` / `news_poll_interval_minutes` | 财联社快讯 → 去重 + 过期清理 |
+| **T3** 国内行情同步 | 18:00 | 每交易日盘后 | `domestic_kline_sync_time` | 日 K + 基本面 + 估值增量同步 |
+| **T4** 国际交易同步 | 07:00 | 每交易日 | `international_data_sync_time` | 美股/港股/商品快照入库（隔夜参考） |
+| **T5** 月度模型训练 | 02:00 | 每月 1 号 | `model_training_time` / `model_training_day` | 单窗口 LightGBM 训练（≈15–20min） |
+| **T6** 信号生成 / 调仓 | 08:15 | 每交易日盘前 | `signal_generation_time` | 数据自检 + ISO 周首日 LLM-TopkDropout 调仓 |
 
-> 任务编号反映**逻辑依赖**（数据 → 模型 → 信号），不代表调度时间。
+> 任务编号反映**逻辑依赖**（数据 → 模型 → 信号），不代表调度时间。所有时间字段格式 `"HH:MM"`，时区由 `[system].timezone`（默认 `Asia/Shanghai`）统一控制 — 容器或 VPS 处于其他系统时区不需要额外设 `TZ`，APScheduler 会按 settings.toml 的时区触发。
+
+修改默认时间的示例（提前到 09:00 推调仓信号、晚 4 小时拉国内行情）：
+
+```toml
+# config/settings.toml
+[scheduler]
+signal_generation_time = "09:00"
+domestic_kline_sync_time = "22:00"
+```
 
 所有任务统一由 `@scheduled_task` 装饰：异常自动飞书告警 + 写 `task_runs` 历史。使用 `pangu status` 一览最近 24h 各任务运行情况。
 
