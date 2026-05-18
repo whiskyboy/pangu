@@ -2,22 +2,27 @@
 
 [English](README_EN.md) | 中文
 
-个人 A 股量化交易信号系统 — 基于 LightGBM 多因子打分 + LLM 牛熊辩论的 TopkDropout 周度调仓，自动推送候选与调仓决策到飞书。
+> 个人 A 股量化交易信号系统 — LightGBM 多因子打分 × LLM 牛熊辩论，每周自动把调仓建议推送到飞书。
 
-> ⚠️ 本系统仅生成交易**信号建议**，不对接券商、不执行自动交易。投资决策请自行判断。
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-600%20passing-brightgreen.svg)](#)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-## 功能概览
+> ⚠️ 仅生成交易**信号建议**，不对接券商，不执行自动交易。投资决策请自行判断。
 
-- 📊 **Alpha158 因子工程 + LightGBM 训练**：191 个因子（159 技术 + 32 基本面），生产线月度滚动训练 + 回测时多 seed 集成（详见 [离线训练与回测](#离线训练与回测)）
-- 🤖 **LLM-TopkDropout 周度调仓**：ML 模型给出 BUY/SELL 候选池，LLM 牛/熊/裁判三角辩论从中精选要调仓的股票
-- 🗃 **虚拟组合状态**：本地 JSON 记录最新持仓，每周 ISO 周首日按 TopkDropout 规则换仓
-- 🎯 **可执行信号增强**：调仓推送包含参考价 + 建议手数 + 涨跌停告警
-- 🔁 **决策回放**：`pangu replay` 用历史 `portfolio_snapshots` 喂同一回测引擎，估算生产线纸面收益
-- 🚨 **统一任务监控**：所有任务通过装饰器自动捕获异常 → 飞书告警 → `task_runs` 持久化运行历史
-- ⏰ **APScheduler 调度**：6 个任务按交易日历调度，`pangu status` 一览运行状态
-- 🛠 **CLI 工具齐全**：数据回填 / 因子计算 / 模型训练 / 回测 / 决策回放 / 评估 / 调度运行
+---
 
-## 系统架构
+## ✨ 功能亮点
+
+- 📊 **Alpha158 因子工程 × LightGBM**：191 个因子，生产线月度滚动训练，回测多 seed 集成
+- 🤖 **LLM-TopkDropout 周度调仓**：ML 圈出候选池，LLM 牛 / 熊 / 裁判三角辩论决出 BUY/SELL
+- 🎯 **可执行信号**：调仓推送含参考价、建议手数、涨跌停告警，飞书 Markdown 卡片一目了然
+- 🔁 **决策回放**：`pangu replay` 复用回测引擎估算生产线纸面收益 vs 基准
+- 🚨 **统一任务监控**：异常自动飞书告警 + 落 `task_runs` 历史，`pangu status` 一览全局
+- ⏰ **APScheduler 调度**：6 个任务按交易日历自动调度，时区 / 时间均可配置
+- 🛠 **CLI 工具齐全**：数据回填、因子计算、训练、回测、回放、评估一应俱全
+
+## 🏛 系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -41,49 +46,41 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 工作原理
+详见 [系统架构](docs/architecture.md)。
 
-PanGu 每个交易日按交易日历自动执行 6 个定时任务，组成"数据 → 模型 → 信号"完整闭环。
+## 🚀 快速开始
 
-> ℹ️ **任务编号反映逻辑依赖顺序**（数据 → 模型 → 信号），不代表调度时间。每月 1 号实际执行顺序为：T2 (整点) → T5 (02:00) → T1 (06:00) → T4 (07:00) → T6 (08:15) → T3 (18:00)。
+```bash
+# 1. 克隆并填写凭据
+git clone <repo-url> && cd pangu
+cp .env.example .env       # 编辑 .env：选一个 LLM provider + 飞书 App ID/Secret
 
-### 数据采集
+# 2. 一次性 bootstrap：拉历史数据 + 训练首个模型（≈9-12h，可在 screen 中跑）
+docker compose run --rm worker pangu run init
 
-- **T1 参考数据同步**（06:00 每月 1 号）：维护交易日历 + 指数成分股快照
-- **T2 财经快讯轮询**（00–23 整点）：抓取财联社等快讯，去重入库 + 过期清理；非交易日也运行以覆盖隔夜美股窗口
-- **T3 国内行情同步**（18:00 交易日盘后）：增量拉取股票池日 K + 基本面 + 估值字段，BaoStock 主源 / AkShare 兜底
-- **T4 国际交易同步**（07:00 每交易日）：抓取美股/港股/恒生科技/商品的最新快照入库，作为 T6 LLM context 的隔夜参考
+# 3. 启动 daemon
+docker compose up -d
+docker compose logs -f worker
+```
 
-### 模型训练
+> 不用 Docker？把 `docker compose run --rm worker` 换成 `uv run`，daemon 改为 `uv run pangu run start`。
 
-- **T5 月度模型训练**（02:00 每月 1 号）：单窗口生产训练（用全部历史数据 + 最后 N 个月做验证），产物文件名兼容 `MLScorer.reload()`；月度运行 ≈15–20 分钟
+更多场景（策略研究 / 回测）见 [部署指南](docs/deployment.md)。
 
-### LLM-TopkDropout 周度调仓
+## 📚 文档导航
 
-T6（08:15 每个交易日盘前）做两件事：
+| 文档 | 内容 |
+|------|------|
+| [部署指南](docs/deployment.md) | 场景 A（生产）/ 场景 B（研究） / Docker 完整流程 |
+| [配置说明](docs/configuration.md) | `.env` + `settings.toml` 参数详解 |
+| [调度任务详解](docs/scheduling.md) | 6 个定时任务、时间配置、手动触发 |
+| [系统架构](docs/architecture.md) | 分层架构、工作原理、项目结构、设计约定 |
+| [LLM Provider 配置](docs/litellm-setup.md) | Azure / DeepSeek / Gemini / OpenAI 切换 |
+| [飞书 Bot 配置](docs/feishu-bot-setup.md) | 自建应用 + 私聊绑定步骤 |
+| [ML 实验记录](docs/ml-experiments.md) | Walk-Forward 方法论、超参实验、Val/Test 铁律 |
+| [Copilot Agents 指南](docs/copilot-agents-guide.md) | 仓库内 AI 协作流程 |
 
-1. **数据新鲜度自检**：K 线 / 全球快照 / 新闻是否到位，否则告警
-2. **是否调仓日**：仅在每个 ISO 周首个交易日进入调仓流程，其它日只做自检
-
-调仓流程：
-
-1. **ML 打分** — `MLScoringStrategy` 用最新窗口的 LightGBM 模型对全池打分排序
-2. **候选池构建** — 持仓中评分最低的若干股进入 `SELL pool`，未持仓中评分最高的若干股进入 `BUY pool`
-3. **LLM 三角辩论** — 把两个候选池 + 隔夜全球行情 + 24h 快讯一起喂给 `judge_rebalance`：
-   - 牛方（Bull）：列出每只候选的买入/不卖理由
-   - 熊方（Bear）：列出每只候选的卖出/不买理由
-   - 裁判（Judge）：综合输出最终 BUY / SELL 名单（最多 `n_drop` 只）
-4. **ML 兜底** — 若 LLM 给出的 BUY/SELL 不足 `n_drop`，按 ML 排名补齐；若 LLM 整体失败则退化为经典 TopkDropout
-5. **写入 PortfolioState + 持仓快照** — `target_portfolio.json` 记录新持仓，`portfolio_snapshots` 表记录调仓日的成分股
-6. **推送飞书** — 一张 Markdown 卡片汇总所有 BUY / SELL，每项含参考价（T-1 close）、建议手数（按 `initial_capital / top_n` 等权重）、估算金额与涨跌停告警；同时写入 `trade_signals` 作审计
-
-### 决策回放与监控
-
-- **`pangu replay`**：用历史 `portfolio_snapshots` 复用同一回测引擎，估算生产线纸面收益 vs 基准（替代旧版"组合周报"任务）。实盘收益请在券商账户跟踪
-- **`pangu status`**：显示 DB 统计 + 最近 24h 任务运行 + 最新持仓快照
-- **统一任务监控**：所有任务被 `@scheduled_task` 装饰，异常自动写 `task_runs` 表 + 推送飞书告警
-
-## 技术栈
+## 🛠 技术栈
 
 | 类别 | 技术 |
 |------|------|
@@ -91,311 +88,13 @@ T6（08:15 每个交易日盘前）做两件事：
 | 包管理 | uv |
 | 数据源 | AkShare (主) / BaoStock (回退) |
 | 因子计算 | pandas-ta + pandas + numpy |
-| LLM 接口 | LiteLLM (Azure OpenAI / DeepSeek / Gemini) |
+| LLM 接口 | LiteLLM (Azure OpenAI / DeepSeek / Gemini / OpenAI) |
 | 数据库 | SQLite (本地持久化 + 增量缓存) |
 | 推送 | lark-oapi (飞书 Bot SDK) |
 | 调度 | APScheduler |
 | CLI | Click |
 | 容器化 | Docker |
 
-## 快速开始
+## 📄 License
 
-### 使用场景与路径
-
-PanGu 支持两种使用路径，请先选择目标场景再继续：
-
-| 场景 | 目标 | 典型流程 |
-|------|------|---------|
-| **A. 开箱即用（生产）** | 每日定时跑模型、生成调仓建议、飞书推送 | `pangu run init`（≈9-12h，一次性 bootstrap）→（可选）`pangu run signals` 验证 →  `pangu run start` 或 `docker compose up -d`（daemon） |
-| **B. 策略研究 / 回测** | 自己跑因子 + ML 训练 + 多窗口回测、迭代策略 | `pangu backfill *` → `pangu compute-factors` → `pangu train walkforward` → `pangu evaluate-* / pangu backtest` |
-
-注意事项（避免常见误区）：
-
-- **首次部署务必先跑 `pangu run init`**：拉历史 K 线 + 基本面（≈9-12h，受上游 API 限流影响） + 计算因子 + 训练首个模型。daemon 不会替你做这些事，启动后只跑增量同步与定时任务。
-- **首个调仓信号何时推送**：daemon 启动后，T6 会在每个交易日 08:15 自检；只有在 **ISO 周首个交易日**（通常周一）才推送调仓 Markdown 卡片。非调仓日只刷新 ML 排名、不会推送。
-- **T6 仅在 A 股交易日运行**，节假日和周末跳过。
-- **Val/Test 铁律**：`score_matrix_val.parquet` 用来调参 / 选策略；`score_matrix_test.parquet` 只用作最终报告——**绝不能用 test 选策略**（详见 [离线训练与回测](#离线训练与回测)）。
-- **生产 T5（月度自动再训练）= 单窗口** `pangu train`，约 15–20 分钟；**Walk-Forward = 多窗口** `pangu train walkforward`，约 2.5 小时，仅用于研究 / 回测。两者产物文件名一致（`wf_window_NN_seed*.txt`），都可被 `MLScorer.reload()` 加载。
-- **`pangu backtest` 的 `--scores` 是必传参数**（不区分 val/test）：用 `score_matrix_val.parquet` 调参，用 `score_matrix_test.parquet` 出最终报告。`--start / --end` 必须落在该 score 文件的日期范围内（命令行会自动收敛到 score 范围，但显式指定更稳妥）。
-
-### 前置条件
-
-- Python 3.12+ 或 Docker（二选一）
-- [uv](https://docs.astral.sh/uv/) 包管理器（非 Docker 路径）
-- 磁盘空间 ≈ 5GB（SQLite DB ~1-2GB + factors.parquet ~1.3GB + models ~50-200MB + 备份余量）
-- 飞书开放平台自建应用（获取 App ID / App Secret，详见 [飞书 Bot 配置指南](docs/feishu-bot-setup.md)）
-- LLM API Key（Azure OpenAI / DeepSeek / Gemini / OpenAI 等任选其一，配置指南见 [LLM Provider 配置指南](docs/litellm-setup.md)）
-
-### 安装
-
-```bash
-# 克隆项目
-git clone <repo-url>
-cd pangu
-
-# 安装依赖
-uv sync
-
-# 复制环境变量模板并填写
-cp .env.example .env
-# 编辑 .env，按 docs/litellm-setup.md 选一个 LLM provider 填凭据；填飞书 App ID / Secret
-```
-
-### 场景 A：开箱即用（生产）
-
-```bash
-# 1. 一键 bootstrap：拉 6 年历史数据 + 训练首个模型（约 9-12h；可在 screen / tmux 中跑）
-#    步骤幂等，中断后重跑会自动跳过已完成的部分；`--force` 全量重跑
-uv run pangu run init
-
-# 2. 可选：手动触发一次 T6 验证飞书推送是否畅通（非调仓日只做自检，调仓日才推送卡片）
-uv run pangu run signals
-
-# 3. 启动 daemon（前台跑或 systemd 托管）
-uv run pangu run start
-# 或 Docker 路径（见下文 "Docker 部署"）
-```
-
-### 场景 B：策略研究 / 回测
-
-```bash
-# 1. 拉历史数据（如果已跑过场景 A 可跳过）
-uv run pangu backfill constituents --start 2019-01-01     # <1min，得到 config/backfill_stock_pool.yaml
-uv run pangu backfill bars --start 2019-01-01             # ≈4-7h，受 BaoStock 限流
-uv run pangu backfill fundamentals --start 2019-01-01     # ≈4-5h，含 pub_date PIT
-uv run pangu backfill index --start 2019-01-01            # <1min
-
-# 2. 计算因子 + Walk-Forward 训练（详见 "离线训练与回测"）
-uv run pangu compute-factors                              # ≈10min → data/factors.parquet
-uv run pangu train walkforward --n-seeds 5                # ≈2.5h → 17 窗口模型 + score_matrix_{val,test}.parquet
-
-# 3. 评估 + 回测
-uv run pangu evaluate-scores --scores data/score_matrix_val.parquet
-uv run pangu evaluate-models --model-dir models
-uv run pangu backtest --scores data/score_matrix_val.parquet --start <val_start> --end <val_end>   # 调参
-uv run pangu backtest --scores data/score_matrix_test.parquet --start <test_start> --end <test_end> # 出报告
-uv run pangu replay --start 2026-01-01 --end 2026-05-15   # 用历史调仓快照回放
-```
-
-### 其他常用命令
-
-```bash
-uv run pangu status                       # DB 统计 + 最近 24h 任务运行历史 + 持仓快照
-uv run pangu train                        # 生产单窗口训练（≈15-20min；T5 月度任务也是它）
-```
-
-> 已激活虚拟环境（如 `source .venv/bin/activate`）则可省略 `uv run` 前缀。
-
-### Docker 部署
-
-```bash
-cp .env.example .env
-# 编辑 .env 填入 LLM provider 凭据 + 飞书凭据
-
-# 1. 首次部署必须先 bootstrap（在容器内一次性跑完，约 9-12h；终端可断开）
-docker compose run --rm worker pangu run init
-
-# 2. 启动 daemon
-docker compose up -d
-docker compose logs -f worker            # 查看日志
-```
-
-> 不先跑 `pangu run init` 直接 `docker compose up -d` 的话，daemon 启动后 T5/T6 会因为缺少历史数据 / 模型反复告警飞书。
-> 容器内默认 UTC 时区，但 APScheduler 调度遵循 `config/settings.toml::[system].timezone`（默认 `Asia/Shanghai`），不需要额外设 `TZ` 环境变量。
-
-## 项目结构
-
-```
-pangu/
-├── config/
-│   ├── settings.toml              # 主配置
-│   └── global_market_mapping.yaml # 国际行情符号映射
-├── src/pangu/
-│   ├── cli.py                     # CLI 入口 (run / status / backfill / train / backtest …)
-│   ├── main.py                    # Components 组装 + 任务入口
-│   ├── config.py                  # TOML 配置加载
-│   ├── models.py                  # 数据模型 (TradeSignal, NewsItem, Action 等)
-│   ├── scheduler.py               # APScheduler 调度
-│   ├── tz.py / utils.py           # 交易日历 + 工具
-│   ├── data/                      # Layer 1: 数据基建
-│   │   ├── storage.py             #   SQLite 存储 (含 portfolio_snapshots / task_runs)
-│   │   ├── market/                #   行情 (BaoStock + AkShare)
-│   │   ├── fundamental/           #   基本面
-│   │   ├── news/                  #   新闻
-│   │   └── stock_pool/            #   股票池
-│   ├── factor/                    # Layer 2: 因子工程
-│   │   ├── technical.py           #   PandasTA 技术因子
-│   │   ├── fundamental.py         #   基本面因子
-│   │   ├── alpha158.py            #   Alpha158 191 因子引擎 (训练/打分用)
-│   │   └── matrix.py              #   截面因子快照构建器 (LLM evidence pack)
-│   ├── ml/                        # ML 训练 + 评估
-│   │   ├── dataset.py             #   Walk-Forward 数据集
-│   │   ├── model.py               #   LightGBM 包装
-│   │   ├── scorer.py              #   滚动窗口集成打分
-│   │   ├── score_evaluator.py     #   打分质量诊断
-│   │   └── model_evaluator.py     #   模型质量诊断
-│   ├── strategy/                  # Layer 3: 策略
-│   │   ├── ml/ml_strategy.py      #   MLScoringStrategy + 候选池 + 兜底
-│   │   └── llm/                   #   LLM 牛/熊/裁判辩论
-│   │       ├── judge.py           #     judge_rebalance 主流程 + 解析 + 兜底
-│   │       ├── prompts.py         #     系统/用户 prompt 模板
-│   │       └── client.py          #     LiteLLM 封装（重试 + JSON 解析）
-│   ├── portfolio/                 # 虚拟组合 JSON
-│   ├── backtest/                  # 回测引擎
-│   │   ├── engine.py              #   5 步 TopkDropout 回测
-│   │   └── target_provider.py     #   TargetProvider 抽象 (ScoreBasedProvider / ReplayProvider)
-│   ├── notification/              # Layer 4: 飞书推送
-│   │   ├── manager.py             #   多通道分发
-│   │   └── feishu.py              #   notify_markdown / notify_text
-│   └── tasks/                     # 6 个调度任务
-│       ├── _base.py               #   @scheduled_task (alert + task_runs)
-│       ├── sync_reference_data.py #   T1
-│       ├── poll_news.py           #   T2
-│       ├── sync_domestic_market.py#   T3
-│       ├── sync_global_market.py  #   T4
-│       ├── update_model.py        #   T5 (月度训练)
-│       └── generate_signals.py    #   T6 (调仓主流)
-├── tests/                         # pytest 测试套件
-├── data/                          # 运行时数据 (gitignored)
-├── models/                        # 训练好的 LightGBM 模型 (gitignored)
-├── docs/                          # 文档
-├── Dockerfile / docker-compose.yml
-├── pyproject.toml
-└── .env.example                   # 环境变量模板
-```
-
-## 配置说明
-
-### 环境变量 (`.env`)
-
-PanGu 通过 LiteLLM 支持多家 LLM provider，**选一个**填凭据即可（不是 fallback 关系）。同时需要修改 `config/settings.toml::[llm].provider` 与之对应（默认 `azure/$AZURE_DEPLOYMENT`）。完整 provider 列表与切换方法见 [docs/litellm-setup.md](docs/litellm-setup.md)。
-
-```bash
-# === LLM Provider（任选一个填）===
-
-# 方案 A：Azure OpenAI（settings.toml 默认）
-AZURE_API_BASE=https://your-resource.openai.azure.com/
-AZURE_API_KEY=your-key
-AZURE_API_VERSION=2024-08-01-preview
-AZURE_DEPLOYMENT=your-deployment-name
-
-# 方案 B：DeepSeek
-# DEEPSEEK_API_KEY=your-deepseek-key
-
-# 方案 C：Google Gemini
-# GEMINI_API_KEY=your-gemini-key
-
-# 方案 D：OpenAI
-# OPENAI_API_KEY=your-openai-key
-
-# === 飞书 Bot（必需；详见 docs/feishu-bot-setup.md）===
-# 用户私聊 Bot 即自动完成绑定，无需配置 open_id
-FEISHU_APP_ID=cli_xxxx
-FEISHU_APP_SECRET=your-secret
-```
-
-### 生产环境关键参数 (`config/settings.toml`)
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `stock_pool.indices` | `["000300","000905"]` | 调仓股票池所属指数 (CSI300 + CSI500) |
-| `strategy.top_n` | 25 | TopkDropout 目标持仓数 |
-| `ml.enabled` | `true` | 是否启用 ML 打分（T6 必需） |
-| `ml.model_dir` | `models` | LightGBM 模型目录（T5 训练输出） |
-| `ml.n_drop` | 3 | 单次调仓换仓数（最多 BUY/SELL 数） |
-| `ml.buy_candidate_size` | 10 | 未持仓中 ML 排名靠前的 BUY 候选池大小 |
-| `ml.sell_candidate_size` | 5 | 持仓中 ML 排名靠后的 SELL 候选池大小 |
-| `ml.val_months` | 3 | T5 生产训练时切出的尾部验证窗口长度（月） |
-| `portfolio.state_path` | `data/target_portfolio.json` | 当前虚拟组合 JSON 路径 |
-| `portfolio.initial_capital` | `100000.0` | 冷启动总资金（CLI `--initial-capital` 可覆盖） |
-| `llm.provider` | `azure/$AZURE_DEPLOYMENT` | LiteLLM 模型标识（judge_rebalance 使用） |
-
-> 离线训练相关参数（n_seeds、`time_decay_halflife` 等）见 [离线训练与回测](#离线训练与回测)。
-
-## 定时任务
-
-系统启动后按 `config/settings.toml` 的 `[scheduler]` 段调度以下 6 个任务（标记"交易日"的任务在非交易日自动跳过）：
-
-| 任务 | 默认时间 | 默认频率 | 配置键（`[scheduler]`） | 说明 |
-|------|---------|---------|------------------------|------|
-| **T1** 参考数据同步 | 06:00 | 每月 1 号 | `reference_data_sync_time` / `reference_data_sync_day` | 交易日历 + 指数成分股快照 + cninfo 公司画像 |
-| **T2** 财经快讯轮询 | 00:00–23:00 整点 | 每小时（含周末） | `news_poll_start_time` / `news_poll_end_time` / `news_poll_interval_minutes` | 财联社快讯 → 去重 + 过期清理 |
-| **T3** 国内行情同步 | 18:00 | 每交易日盘后 | `domestic_kline_sync_time` | 日 K + 基本面 + 估值增量同步 |
-| **T4** 国际交易同步 | 07:00 | 每交易日 | `international_data_sync_time` | 美股/港股/商品快照入库（隔夜参考） |
-| **T5** 月度模型训练 | 02:00 | 每月 1 号 | `model_training_time` / `model_training_day` | 单窗口 LightGBM 训练（≈15–20min） |
-| **T6** 信号生成 / 调仓 | 08:15 | 每交易日盘前 | `signal_generation_time` | 数据自检 + ISO 周首日 LLM-TopkDropout 调仓 |
-
-> 任务编号反映**逻辑依赖**（数据 → 模型 → 信号），不代表调度时间。所有时间字段格式 `"HH:MM"`，时区由 `[system].timezone`（默认 `Asia/Shanghai`）统一控制 — 容器或 VPS 处于其他系统时区不需要额外设 `TZ`，APScheduler 会按 settings.toml 的时区触发。
-
-修改默认时间的示例（提前到 09:00 推调仓信号、晚 4 小时拉国内行情）：
-
-```toml
-# config/settings.toml
-[scheduler]
-signal_generation_time = "09:00"
-domestic_kline_sync_time = "22:00"
-```
-
-所有任务统一由 `@scheduled_task` 装饰：异常自动飞书告警 + 写 `task_runs` 历史。使用 `pangu status` 一览最近 24h 各任务运行情况。
-
-`pangu run signals` 可手动触发 T6（若当天 T4 快照未生成会自动补跑）。
-
-## 离线训练与回测
-
-离线训练与生产调度分离，用于首次部署、定期复盘、策略研究。完整方法论 / 实验记录见 [`docs/ml-experiments.md`](docs/ml-experiments.md)。
-
-```bash
-pangu compute-factors                          # 计算 Alpha158 191 因子 → data/factors.parquet
-
-# 多窗口 Walk-Forward（研究/回测专用，耗时数小时）
-pangu train walkforward --n-seeds 5            # → score_matrix_{val,test}.parquet + models/wf_window_*.txt
-
-pangu evaluate-scores --scores data/score_matrix_val.parquet
-pangu evaluate-models --model-dir models
-pangu backtest \
-    --scores data/score_matrix_val.parquet \
-    --start <val_start> --end <val_end>        # 用 val 数据回测 / 调参
-pangu replay --start 2026-01-01 --end 2026-05-15   # 用历史决策回放估算生产线收益
-```
-
-> 生产线 T5 月度训练是**单窗口**训练（`pangu train`，全部历史 + 尾部 `ml.val_months` 验证），耗时 ≈15–20 分钟；Walk-Forward 仅用于离线研究，因此命名 `pangu train walkforward`。两者产物文件名一致（`wf_window_NN_seed*.txt`），均可被 `MLScorer.reload()` 加载。
-
-| 配置项 | 说明 |
-|------|------|
-| `ml.n_seeds` | 每窗口集成的 seed 数（默认 5，调试可用 1 加速） |
-| `ml.time_decay_halflife` | 训练样本时间衰减半衰期（交易日数） |
-| `ml.first_train_start` | Walk-Forward 第一个训练窗口起点（默认 `2020-01-01`） |
-| `ml.val_months` | T5 生产训练 / Walk-Forward 验证窗口长度（月） |
-| `scheduler.model_training_day` / `scheduler.model_training_time` | T5 自动再训练的日期 / 时间 |
-
-> ⚠️ **Val/Test 分离铁律**：用 `score_matrix_val.parquet` 调参，用 `score_matrix_test.parquet` 出最终报告——绝不能用 test 选策略。
-
-
-## 开发
-
-```bash
-# 安装开发依赖
-uv sync --extra dev
-
-# 运行测试
-uv run pytest
-
-# 代码检查
-uv run ruff check src/ tests/
-
-# 格式化
-uv run ruff format src/ tests/
-```
-
-## 运行成本估算
-
-| 项目 | 月成本 |
-|------|--------|
-| LLM (Azure gpt-4o-mini, ~10 次/日) | ~$0.05 |
-| VPS (2C4G) | ~¥50-100 |
-| 数据源 (AkShare/BaoStock) | 免费 |
-| **合计** | **< ¥100/月** |
-
-## License
-
-Private — 个人使用项目
+MIT — 详见 [LICENSE](LICENSE)。

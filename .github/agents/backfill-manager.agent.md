@@ -33,7 +33,7 @@ Your job is to plan, execute, monitor, and verify data backfill operations.
 | "backfill bars for 2024" | `pangu backfill bars --start 2024-01-01` (incremental, current pool) |
 | "re-fetch 600519 and 000001" | `pangu backfill bars --start 2019-01-01 --force --symbols 600519,000001` |
 | "backfill fundamentals only" | `pangu backfill fundamentals --start 2019-01-01` |
-| "monitor the running backfill" | `screen -ls` + `tail -20 data/backfill_bars.log` |
+| "monitor the running backfill" | `screen -ls` + `tail -20 /tmp/backfill_bars.log` |
 | "which stocks failed?" | Compare pool YAML vs DB, check data_sync_log |
 
 ## You must NOT
@@ -113,7 +113,7 @@ constituents, currently ~1311 stocks). This is larger than the current constitue
 
 ### Step 2: Bars
 
-Fetches daily OHLCV + extended fields (turn, preclose, tradestatus, is_st, pe, pb, ps, pcf).
+Fetches daily OHLCV + bar-level extended fields (turn, preclose, tradestatus, is_st) and writes them to `daily_bars`. The same query also pulls valuation rows (peTTM, pbMRQ, psTTM, pcfNcfTTM, market_cap derived from turn/volume) which `composite._persist_valuation()` side-effect-writes into the **`fundamentals`** table — they are NOT stored in `daily_bars`.
 
 ```bash
 # Full backfill (use screen for long-running):

@@ -43,7 +43,7 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 - **daily_bars**: One row per (symbol, date). 13 columns: symbol, date, open, high, low, close, volume, amount, adj_factor, turn, preclose, tradestatus, is_st. Should have no gaps for trading days.
 - **fundamentals**: PE/PB/PS/PCF/market_cap are daily (from `_persist_valuation`); ROE, revenue_yoy, profit_yoy, gross_margin are quarterly (only on quarter-end dates). Sparsity in quarterly columns is **expected**.
-- **index_constituents**: Semi-annual snapshots of CSI300/CSI500 membership.
+- **index_constituents**: Dated PIT constituent snapshots (one row per `(date, index_code, symbol)`). T1 appends a snapshot of the current index membership on each run; older dates are kept as history. The table also carries each stock's `sector` (coarse cninfo taxonomy) for that snapshot date.
 
 ## Mandatory checklist
 

@@ -114,13 +114,13 @@ uv run pangu train walkforward --factors data/factors.parquet --output data
 | Parameter | Current | Suggested Range | Impact |
 |-----------|---------|-----------------|--------|
 | num_leaves | 31 | 15-63 | Model complexity |
-| learning_rate | 0.05 | 0.01-0.1 | Convergence speed |
-| min_child_samples | 20 | 10-100 | Overfitting control |
-| feature_fraction | 0.8 | 0.5-1.0 | Feature bagging |
-| bagging_fraction | 0.8 | 0.5-1.0 | Row bagging |
+| learning_rate | 0.02 | 0.01-0.05 | Convergence speed |
+| min_child_samples | 100 | 20-200 | Overfitting control |
+| colsample_bytree | 0.7 | 0.5-1.0 | Feature bagging |
+| subsample | 0.8 | 0.5-1.0 | Row bagging |
 | reg_alpha | 0 | 0-10 | L1 regularization |
 | reg_lambda | 0 | 0-10 | L2 regularization |
-| num_iterations | 500 | 200-2000 | Max trees |
+| n_estimators | 2000 | 500-3000 | Max trees (with `early_stopping=200`) |
 
 ### Manual Tuning Flow
 

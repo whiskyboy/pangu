@@ -40,6 +40,7 @@ htmlcov/
 
 # PRD (internal)
 docs/PRD.md
+docs/legacy/PRD.md
 
 # uv
 uv.lock

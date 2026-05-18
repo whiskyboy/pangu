@@ -91,7 +91,7 @@ Report whether metrics remain stable across reasonable parameter ranges.
 - **Dividends:** Detected via `adj_factor` changes, credited to cash with 20% tax (< 1 month holding)
 - **Rebalance:** First trading day of each ISO week, equal-weight allocation
 - **Lot sizes:** STAR Market (688/689) = 200 shares, others = 100 shares
-- **Price limits:** STAR/ChiNext (300/301) boards = ±20%, others = ±10%
+- **Price limits:** STAR/ChiNext (688/689/300/301) boards = ±20%, main-board ST = ±5%, all other main-board = ±10%
 - **Cost model:** Buy = commission + slippage; Sell = commission + stamp_tax + slippage; Min commission = ¥5
 - **Stuck positions:** Suspended or limit-locked stocks remain in holdings until tradeable
 - **Excluded by default:** STAR market (688, 689 prefixes)
