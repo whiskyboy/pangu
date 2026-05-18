@@ -52,6 +52,25 @@ FEISHU_APP_SECRET=your-secret
 | `portfolio.state_path` | `data/target_portfolio.json` | 当前虚拟组合 JSON 路径 |
 | `portfolio.initial_capital` | `100000.0` | 冷启动总资金（CLI `--initial-capital` 可覆盖） |
 | `llm.provider` | `azure/$AZURE_DEPLOYMENT` | LiteLLM 模型标识（judge_rebalance 使用） |
+| `rebalance.mode` | `weekly` | 调仓节奏模式：`weekly` 或 `monthly` |
+| `rebalance.weekly_day` | `1` | weekly 模式下的星期几（1=Mon..5=Fri） |
+| `rebalance.monthly_day` | `1` | monthly 模式下的日（1..28，避免 2 月边界） |
+
+### 调仓节奏 `[rebalance]`
+
+T6 的 cron 触发时间（"几点"）由 `[scheduler].signal_generation_time` 决定，而 **真正调仓哪一天** 由 `[rebalance]` 段控制：
+
+```toml
+[rebalance]
+mode = "weekly"        # "weekly" 或 "monthly"
+weekly_day = 1         # 1..5 (Mon..Fri)，仅 mode="weekly" 时生效
+monthly_day = 1        # 1..28，仅 mode="monthly" 时生效
+```
+
+- 非交易日 **自动顺延** 到下一个交易日（与 ETF 定投惯例一致）。
+- **不去重**：跨周/跨月的顺延有可能造成同一个 ISO 周/月内出现 2 次调仓（例如 `monthly:28` 遇到 2 月末整个周末非交易日，会顺延到下月初，而下月 28 号又会正常触发）。详情见 [调度任务详解](scheduling.md#调仓节奏)。
+- 默认 `weekly:1` 等价于"每周一调仓（节假日顺延到本周首个交易日）"，与历史版本行为一致。
+- 回测端 (`pangu backtest --rebalance`) 可独立指定，但参数 shape 一致。
 
 ### 离线训练参数
 

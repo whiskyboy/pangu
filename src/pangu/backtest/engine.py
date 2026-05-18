@@ -1,4 +1,8 @@
-"""Simple backtest engine for weekly rebalancing TopN strategies.
+"""Simple backtest engine for periodic TopN rebalancing strategies.
+
+Cadence is controlled by ``pangu.rebalance.RebalanceSchedule`` (default
+``weekly:1`` = every Monday, deferring to next trading day if Monday is
+non-trading) — equivalent to the historical ISO-week-first behaviour.
 
 Usage::
 
@@ -14,9 +18,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from pangu.rebalance import RebalanceSchedule
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +103,10 @@ class BacktestEngine:
         slippage: float = 0.001,
         min_commission: float = 5.0,
         max_per_sector: int | None = None,
+        schedule: "RebalanceSchedule | None" = None,
     ) -> None:
+        from pangu.rebalance import RebalanceSchedule as _RS
+
         self._top_n = top_n
         self._n_drop = n_drop
         self._capital = initial_capital
@@ -104,6 +115,8 @@ class BacktestEngine:
         self._slippage = slippage
         self._min_commission = min_commission
         self._max_per_sector = max_per_sector
+        # Default schedule (weekly:1) ≈ original ISO-week-first behaviour
+        self._schedule = schedule if schedule is not None else _RS("weekly", 1)
 
     # ------------------------------------------------------------------
     # Cost helpers
@@ -326,6 +339,10 @@ class BacktestEngine:
         holdings_records: list[dict] = []
 
         prev_date = None
+        # Trading-day predicate for RebalanceSchedule: dates inside this
+        # backtest window are by definition trading days.
+        trading_set = {ts.date() for ts in dates}
+        is_trading_day = trading_set.__contains__
 
         for i, date in enumerate(dates):
             # --- Dividend processing ---
@@ -349,11 +366,11 @@ class BacktestEngine:
                         div_per_share = pc * (1 - old_af / new_af)
                         cash += shares * div_per_share * 0.80
 
-            # Rebalance on first trading day of each new ISO week,
-            # plus the very first trading day of the backtest.
+            # Rebalance trigger:
+            #   day-0 always rebalances (bootstrap portfolio).
+            #   otherwise delegate to RebalanceSchedule (configurable cadence).
             is_first_day = prev_date is None and i == 0
-            is_new_week = prev_date is not None and date.isocalendar()[1] != prev_date.isocalendar()[1]
-            is_rebal = is_first_day or is_new_week
+            is_rebal = is_first_day or self._schedule.matches(date.date(), is_trading_day)
 
             if is_rebal:
                 # First day: use own date as score reference (no T-1 available)

@@ -47,6 +47,7 @@ class Settings:
     scheduler: dict[str, Any] = field(default_factory=dict)
     ml: dict[str, Any] = field(default_factory=dict)
     portfolio: dict[str, Any] = field(default_factory=dict)
+    rebalance: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for section in (
@@ -58,6 +59,7 @@ class Settings:
             "scheduler",
             "ml",
             "portfolio",
+            "rebalance",
         ):
             setattr(self, section, self.raw.get(section, {}))
 

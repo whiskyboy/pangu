@@ -23,7 +23,7 @@ Production (daily, async, 6 tasks — numbered by logical dependency, not schedu
   T3 sync_domestic_market  (18:00 trading-day)
   T4 sync_global_market    (07:00 trading-day)
   T5 update_model          (02:00 on the 1st of each month — single-window production training)
-  T6 generate_signals      (08:15 trading-day pre-market; rebalance only on ISO-week first trading day)
+  T6 generate_signals      (08:15 trading-day pre-market; rebalance cadence configurable via [rebalance])
 
   Rebalance flow (T6): ML score pool → BUY pool (top-ranked non-held) +
       SELL pool (bottom-ranked held) → LLM bull/bear/judge debate →
@@ -49,7 +49,7 @@ Offline (on-demand, sync):
    - `src/pangu/portfolio/` — `PortfolioState`: atomic JSON file holding latest virtual portfolio (date / symbols / scores / ranks).
    - `src/pangu/tasks/` — T1-T6. All wrapped by `@scheduled_task(task_id, name)` decorator from `_base.py` (log + alert + record_task_run).
    - `src/pangu/notification/` — Feishu bot: `notify_markdown` (rebalance card) and `notify_text` (alerts). Email module removed.
-   - `src/pangu/scheduler.py` — APScheduler-based cron orchestration. `is_rebalance_day` (ISO-week first trading day) gates T6 rebalance.
+   - `src/pangu/scheduler.py` — APScheduler-based cron orchestration. `is_rebalance_day` (configurable via `[rebalance]` mode/day; non-trading days defer to next trading day) gates T6 rebalance.
 
 2. **ML training & backtest pipeline** (offline, sync):
    - `src/pangu/factor/alpha158.py` — 191-factor engine (159 technical + 32 fundamental). Wide-format vectorized pandas. Outputs MultiIndex(date, symbol) × 191 columns, float32.
@@ -110,7 +110,7 @@ fundamentals → load_fundamentals_filled (ffill) → Alpha158 (reindex ffill) �
 
 **LightGBM defaults:** `objective=mae, num_leaves=31, lr=0.02, subsample=0.8, colsample_bytree=0.7, min_child_samples=100, early_stopping=200, MIN_ITERATIONS=50`. The model typically stops at 50 trees — this is expected implicit regularization, not a bug.
 
-**Backtest engine:** Weekly rebalance (first trading day of each ISO week), equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
+**Backtest engine:** Rebalance cadence is configurable via `[rebalance]` in settings (default `weekly:1` ≈ historical ISO-week-first behaviour) or `pangu backtest --rebalance weekly:N` / `monthly:N`. Non-trading-day targets defer to the next trading day; cross-period defers can produce two rebalances in a week/month (no dedup, by design). Engine is equal-weight, TopkDropout(top_n=30, n_drop=10). Trading costs: stamp tax 0.1% + commission 0.03% + slippage 0.1%. Excludes STAR Market (688/689 prefix).
 
 **Multi-seed ensemble:** `--n-seeds 5` (CLI default) trains 5 models per window with seeds 0–4, averaging predictions. This reduces seed variance ~√5 and produces stable, reproducible scores. Use `--n-seeds 1` only for quick experiments. For rigorous A/B testing of strategy changes, compare paired backtest results (both runs with `--n-seeds 5`).
 

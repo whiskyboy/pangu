@@ -9,8 +9,18 @@ global_market_mapping_path = "config/global_market_mapping.yaml"
 indices = ["000300", "000905"]
 
 [strategy]
-# Production rebalance: target portfolio holds top_n stocks; weekly rebalance.
+# Production rebalance: target portfolio holds top_n stocks; cadence in [rebalance].
 top_n = 25
+
+[rebalance]
+# 调仓节奏：决定 T6 在哪一天真正执行调仓 (cron 触发的"几点"由 [scheduler] 控制)。
+#   mode = "weekly"   每周第 weekly_day 天 (1=Mon..5=Fri)
+#   mode = "monthly"  每月第 monthly_day 天 (1..28)
+# 非交易日自动顺延到下一个交易日 (跨周/跨月顺延不去重，与 ETF 定投惯例一致)。
+# 默认 weekly:1 ≈ 现行 ISO 周首交易日行为，老部署升级零变化。
+mode = "weekly"
+weekly_day = 1
+monthly_day = 1
 
 [portfolio]
 # Where the virtual target portfolio state is persisted (atomic JSON write)

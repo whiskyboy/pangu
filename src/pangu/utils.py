@@ -114,24 +114,24 @@ def date_str(days_ago: int = 0) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rebalance day gate (ISO week start)
+# Rebalance day gate (configurable cadence — see pangu.rebalance)
 # ---------------------------------------------------------------------------
 
 
 def is_rebalance_day(today: str, db) -> bool:  # type: ignore[no-untyped-def]
-    """Return True iff *today* is the first trading day of its ISO week.
+    """Return True iff *today* is a rebalance day under the configured cadence.
 
-    Mirrors the backtest rebalance trigger
-    (``backtest/engine.py``: ``is_first_day or is_new_week``).
+    Reads ``[rebalance]`` from settings (``mode`` + ``weekly_day`` or
+    ``monthly_day``) and delegates to
+    :class:`pangu.rebalance.RebalanceSchedule`. Default config is
+    ``mode="weekly", weekly_day=1`` which preserves the original
+    ISO-week-first-trading-day behaviour.
 
     Logic
     -----
     1. ``today`` must itself be a trading day.
-    2. Find the previous trading day from DB.  If none exists (cold start /
-       empty calendar), treat today as a rebalance day so the system can
-       initialise its portfolio.
-    3. Compare ISO weeks: if previous trading day is in a different ISO
-       (year, week) tuple, today is the start of a new week → rebalance.
+    2. Cold start (no prior trading day in DB) → True (bootstrap portfolio).
+    3. Otherwise delegate to ``RebalanceSchedule.matches``.
 
     Parameters
     ----------
@@ -141,6 +141,9 @@ def is_rebalance_day(today: str, db) -> bool:  # type: ignore[no-untyped-def]
     """
     from datetime import date as _date
 
+    from pangu.config import get_settings
+    from pangu.rebalance import RebalanceSchedule
+
     if not db.is_trading_day(today):
         return False
 
@@ -149,9 +152,9 @@ def is_rebalance_day(today: str, db) -> bool:  # type: ignore[no-untyped-def]
         # Cold start: no prior trading day → bootstrap portfolio today
         return True
 
+    schedule = RebalanceSchedule.from_config(get_settings().rebalance)
     today_d = _date.fromisoformat(today)
-    prev_d = _date.fromisoformat(prev)
-    return today_d.isocalendar()[:2] != prev_d.isocalendar()[:2]
+    return schedule.matches(today_d, lambda d: db.is_trading_day(d.isoformat()))
 
 
 def quarter_dates(start: str, end: str) -> list[str]:

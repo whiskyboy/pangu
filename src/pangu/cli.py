@@ -651,6 +651,13 @@ def backfill_fundamentals(start: str, force: bool, pool_file: str | None) -> Non
     type=int,
     help="Max stocks per sector (industry diversification). Requires sector data in DB.",
 )
+@click.option(
+    "--rebalance",
+    "rebalance_spec",
+    default="weekly:1",
+    help="Rebalance cadence: 'weekly:N' (N=1..5, Mon..Fri) or 'monthly:N' (N=1..28). "
+    "Non-trading days defer to the next trading day. Default: weekly:1.",
+)
 @click.option("--plot/--no-plot", default=True, help="Generate equity curve chart (default: --plot)")
 @click.option("--plot-output", default=None, help="Chart output path (default: data/backtest_{date}.png)")
 def backtest_cmd(
@@ -667,14 +674,21 @@ def backtest_cmd(
     scores_path: str,
     score_smooth_halflife: int,
     max_per_sector: int | None,
+    rebalance_spec: str,
     plot: bool,
     plot_output: str | None,
 ) -> None:
     """Run local backtest with pre-computed LightGBM scores."""
     from pangu.main import build_components, load_env
+    from pangu.rebalance import RebalanceSchedule
 
     load_env()
     c, _, _ = build_components()
+
+    try:
+        schedule = RebalanceSchedule.from_string(rebalance_spec)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--rebalance") from exc
 
     import pandas as pd
 
@@ -790,6 +804,7 @@ def backtest_cmd(
         commission=commission,
         slippage=slippage,
         max_per_sector=max_per_sector,
+        schedule=schedule,
     )
     result = engine.run(
         scores,
@@ -846,6 +861,14 @@ def backtest_cmd(
     default="688,689",
     help="Stock code prefixes to exclude (default: 688,689 STAR market)",
 )
+@click.option(
+    "--rebalance",
+    "rebalance_spec",
+    default="weekly:1",
+    help="Rebalance cadence: 'weekly:N' or 'monthly:N'. Must match the cadence "
+    "production used when snapshots were recorded; otherwise rebalance dates "
+    "drift from snapshot dates and replay PnL is incorrect. Default: weekly:1.",
+)
 @click.option("--plot/--no-plot", default=True, help="Generate equity curve chart")
 @click.option("--plot-output", default=None, help="Chart output path (default: data/replay_{date}.png)")
 def replay_cmd(
@@ -855,6 +878,7 @@ def replay_cmd(
     benchmark: str,
     top_n: int | None,
     exclude_prefixes: str,
+    rebalance_spec: str,
     plot: bool,
     plot_output: str | None,
 ) -> None:
@@ -872,10 +896,16 @@ def replay_cmd(
     from pangu.backtest.engine import BacktestEngine
     from pangu.backtest.target_provider import ReplayProvider
     from pangu.main import build_components, load_env
+    from pangu.rebalance import RebalanceSchedule
 
     load_env()
     components, _, settings = build_components()
     storage = components.db
+
+    try:
+        schedule = RebalanceSchedule.from_string(rebalance_spec)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--rebalance") from exc
 
     capital = initial_capital
     if capital is None:
@@ -950,7 +980,7 @@ def replay_cmd(
 
     prefixes = tuple(p.strip() for p in exclude_prefixes.split(",") if p.strip()) if exclude_prefixes else ()
 
-    engine = BacktestEngine(top_n=selected_top_n, initial_capital=capital)
+    engine = BacktestEngine(top_n=selected_top_n, initial_capital=capital, schedule=schedule)
     provider = ReplayProvider(decisions)
     result = engine.run_with_provider(
         provider,
