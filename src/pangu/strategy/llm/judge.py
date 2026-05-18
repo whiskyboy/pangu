@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from pangu.models import NewsItem
+from pangu.models import NewsItem, StockMeta
 from pangu.strategy.llm.client import LLMClient
 from pangu.strategy.llm.prompts import (
     build_rebalance_prompt,
@@ -89,6 +89,7 @@ class LLMJudgeEngineImpl:
         n_drop: int,
         universe_size: int = 0,
         timeout: float = 120.0,
+        stock_meta: dict[str, StockMeta] | None = None,
     ) -> RebalanceDecision:
         """LLM rebalance decision over SELL + BUY candidate pools.
 
@@ -99,6 +100,11 @@ class LLMJudgeEngineImpl:
         Symbols not in the corresponding pool are silently dropped. If the
         LLM fails, returns an empty RebalanceDecision so the caller can fall
         back to the ML-rank-based TopkDropout.
+
+        ``stock_meta`` (optional) provides full company profiles (full name,
+        listing date, main business, registered area) used as grounding
+        context in the prompt. Symbols missing from the map render without
+        the extra context lines.
         """
         sell_pool_syms = {c["symbol"] for c in sell_candidates}
         buy_pool_syms = {c["symbol"] for c in buy_candidates}
@@ -125,6 +131,7 @@ class LLMJudgeEngineImpl:
                 top_n=top_n,
                 n_drop=n_drop,
                 universe_size=universe_size,
+                stock_meta=stock_meta,
             )
             result = await asyncio.wait_for(
                 self._client.call(system_prompt, user_prompt),

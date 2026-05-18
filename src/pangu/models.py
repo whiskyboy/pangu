@@ -33,10 +33,21 @@ class Region(Enum):
 
 @dataclass
 class StockMeta:
-    """Metadata for a single stock symbol."""
+    """Metadata for a single stock symbol.
+
+    ``name`` and ``sector`` come from ``index_constituents`` (sector is the
+    coarse 巨潮 industry classification, e.g. "酒、饮料和精制茶制造业").
+    The remaining fields come from ``stock_profile_cninfo`` and are used by
+    the LLM judge prompt as grounding context. They default to empty strings
+    when ``stock_profiles`` is unpopulated (cold start) or cninfo failed.
+    """
 
     name: str = ""
     sector: str = ""
+    full_name: str = ""
+    list_date: str = ""
+    main_business: str = ""
+    registered_area: str = ""
 
 
 class NewsCategory(str, Enum):

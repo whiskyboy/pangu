@@ -271,6 +271,36 @@ class TestRebalance:
         components.notif_manager.notify_markdown.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_stock_meta_forwarded_to_judge_rebalance(
+        self,
+        components,
+        monkeypatch,
+    ):
+        """generate_signals must pass stock_pool.get_stock_metadata() into judge_rebalance(stock_meta=...)."""
+        held = ["600015", "600016", "600017", "600018", "600019"]
+        components.portfolio_state.save(
+            Portfolio(
+                date="2026-02-09",
+                symbols=held,
+                scores={s: 0.5 for s in held},
+                ranks={s: i + 16 for i, s in enumerate(held)},
+            )
+        )
+        components.judge_engine.judge_rebalance = AsyncMock(return_value=RebalanceDecision(source="llm_failed"))
+
+        _patch_today(monkeypatch, "2026-02-16")
+        _stub_candidate_factors(monkeypatch)
+
+        await generate_signals(components)
+
+        components.judge_engine.judge_rebalance.assert_awaited_once()
+        kwargs = components.judge_engine.judge_rebalance.await_args.kwargs
+        assert "stock_meta" in kwargs, f"judge_rebalance was not called with stock_meta kwarg: {kwargs.keys()}"
+        # stock_meta should equal what stock_pool.get_stock_metadata() returned (universe-wide)
+        expected = components.stock_pool.get_stock_metadata.return_value
+        assert kwargs["stock_meta"] is expected or kwargs["stock_meta"] == expected
+
+    @pytest.mark.asyncio
     async def test_llm_failure_degenerates_to_classic_topkdropout(
         self,
         components,

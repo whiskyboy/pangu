@@ -6,10 +6,11 @@ Pure functions: no DB, no provider calls.  All data passed in as arguments.
 from __future__ import annotations
 
 import math
+from datetime import date as _date
 
 import pandas as pd
 
-from pangu.models import NewsItem
+from pangu.models import NewsItem, StockMeta
 
 # ---------------------------------------------------------------------------
 # Prompt truncation limits
@@ -19,6 +20,9 @@ from pangu.models import NewsItem
 _REBAL_STOCK_NEWS = 5
 _REBAL_ANNOUNCEMENTS = 3
 _REBAL_TELEGRAPH = 10
+# Main-business field can be long (paragraph-like); truncate to keep prompt
+# budget bounded. ~200 Chinese chars ≈ enough for the LLM to grasp the business.
+_REBAL_MAIN_BUSINESS_LIMIT = 200
 
 FACTOR_LABELS: dict[str, str] = {
     "rsi_14": "RSI(14)",
@@ -183,6 +187,7 @@ def build_rebalance_prompt(
     top_n: int,
     n_drop: int,
     universe_size: int = 0,
+    stock_meta: dict[str, StockMeta] | None = None,
 ) -> str:
     """Build the user message for ``judge_rebalance``.
 
@@ -201,6 +206,10 @@ def build_rebalance_prompt(
     telegraph / global_market : market-level context (shared).
     top_n / n_drop : passed for prompt clarity (not used for logic here).
     universe_size : total stocks scored today (for rank display).
+    stock_meta : optional symbol → StockMeta map. When provided and a
+        candidate's symbol is present, the renderer adds up to 4 grounding
+        lines (company/sector, listing, main business, registered area) just
+        below the candidate header. Fields with empty values are skipped.
     """
     parts: list[str] = [
         f"# 调仓决策 ({today})\n",
@@ -210,12 +219,16 @@ def build_rebalance_prompt(
             sell_candidates,
             universe_size=universe_size,
             include_rank_history=True,
+            stock_meta=stock_meta,
+            today=today,
         ),
         _format_candidate_section(
             "🟢 BUY 候选池（非持仓中 ML 评分最好）",
             buy_candidates,
             universe_size=universe_size,
             include_rank_history=False,
+            stock_meta=stock_meta,
+            today=today,
         ),
         _format_news_section("📡 市场快讯", telegraph, _REBAL_TELEGRAPH),
         _format_global_market_section(global_market),
@@ -239,6 +252,8 @@ def _format_candidate_section(
     *,
     universe_size: int,
     include_rank_history: bool,
+    stock_meta: dict[str, StockMeta] | None = None,
+    today: str | None = None,
 ) -> str:
     lines = [f"## {heading}"]
     if not candidates:
@@ -253,6 +268,16 @@ def _format_candidate_section(
         rank_str = f"{rank}/{universe_size}" if universe_size else f"{rank}"
         header = f"### {sym} {name}".rstrip()
         lines.append(header)
+
+        # Stock metadata grounding (full company name / industry / listing /
+        # main business / registered area). Only rendered when stock_meta
+        # is provided and contains the symbol; each line is skipped when its
+        # underlying field is empty so empty cninfo lookups degrade gracefully.
+        if stock_meta is not None:
+            meta = stock_meta.get(sym)
+            if meta is not None:
+                lines.extend(_format_stock_metadata(meta, today=today))
+
         lines.append(f"- ML 综合得分: {float(score):.4f}, 当前排名: {rank_str}")
 
         if include_rank_history:
@@ -309,6 +334,63 @@ def _format_candidate_section(
             lines.append("- 公司公告: 无")
         lines.append("")
     return "\n".join(lines)
+
+
+def _format_stock_metadata(meta: StockMeta, *, today: str | None) -> list[str]:
+    """Render up to 4 grounding lines for a candidate stock.
+
+    Lines are skipped silently when their underlying field is empty, so a
+    cold-start with no cninfo data degrades to no extra context (rather than
+    misleading the LLM with "信息缺失" placeholders).
+    """
+    lines: list[str] = []
+
+    company = meta.full_name or meta.name
+    sector = meta.sector
+    if company or sector:
+        if company and sector:
+            if meta.name and company != meta.name:
+                lines.append(f"- 公司：{company}（{meta.name}） / 行业：{sector}")
+            else:
+                lines.append(f"- 公司：{company} / 行业：{sector}")
+        elif company:
+            if meta.name and company != meta.name:
+                lines.append(f"- 公司：{company}（{meta.name}）")
+            else:
+                lines.append(f"- 公司：{company}")
+        else:
+            lines.append(f"- 行业：{sector}")
+
+    if meta.list_date:
+        suffix = _list_date_years_suffix(meta.list_date, today)
+        lines.append(f"- 上市：{meta.list_date}{suffix}")
+
+    if meta.main_business:
+        mb = meta.main_business
+        if len(mb) > _REBAL_MAIN_BUSINESS_LIMIT:
+            mb = mb[:_REBAL_MAIN_BUSINESS_LIMIT] + "…"
+        lines.append(f"- 主营：{mb}")
+
+    if meta.registered_area:
+        lines.append(f"- 注册地：{meta.registered_area}")
+
+    return lines
+
+
+def _list_date_years_suffix(list_date: str, today: str | None) -> str:
+    """Return ``（已上市 X.Y 年）`` when both dates parse, else empty string."""
+    if not today:
+        return ""
+    try:
+        t = _date.fromisoformat(today)
+        ld_str = list_date.split()[0]  # tolerate "YYYY-MM-DD HH:MM:SS"
+        ld = _date.fromisoformat(ld_str)
+    except (ValueError, AttributeError, IndexError):
+        return ""
+    if ld > t:
+        return ""
+    years = (t - ld).days / 365.25
+    return f"（已上市 {years:.1f} 年）"
 
 
 def _format_rank_delta(delta: int | None) -> str:

@@ -365,6 +365,7 @@ class FakeLLMJudgeEngine:
         n_drop: int,
         universe_size: int = 0,
         timeout: float = 120.0,
+        stock_meta: dict[str, Any] | None = None,
     ) -> RebalanceDecision:
         sells = [Pick(symbol=c["symbol"], reason="fake sell", evidence="") for c in sell_candidates[:n_drop]]
         buys = [Pick(symbol=c["symbol"], reason="fake buy", evidence="") for c in buy_candidates[:n_drop]]

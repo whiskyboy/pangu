@@ -190,6 +190,17 @@ CREATE TABLE IF NOT EXISTS index_constituents (
     PRIMARY KEY (date, index_code, symbol)
 );
 
+CREATE TABLE IF NOT EXISTS stock_profiles (
+    symbol           TEXT PRIMARY KEY,
+    name             TEXT,           -- A股简称 (latest snapshot)
+    full_name        TEXT,           -- 公司名称 (e.g. 贵州茅台酒股份有限公司)
+    sector           TEXT,           -- 所属行业 (粗粒度, cninfo classification)
+    list_date        TEXT,           -- 上市日期 (YYYY-MM-DD)
+    main_business    TEXT,           -- 主营业务 (used as LLM grounding)
+    registered_area  TEXT,           -- 注册地址
+    updated_at       TEXT NOT NULL   -- ISO timestamp of last write
+);
+
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     date          TEXT PRIMARY KEY,        -- YYYY-MM-DD
     symbols_json  TEXT NOT NULL,           -- JSON array of holdings on this date
@@ -1357,6 +1368,112 @@ class Database:
                 (start, start, end),
             ).fetchall()
         return [r[0] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Stock profiles (cninfo metadata, single-snapshot per symbol)
+    # ------------------------------------------------------------------
+
+    _PROFILE_FIELDS: tuple[str, ...] = (
+        "name",
+        "full_name",
+        "sector",
+        "list_date",
+        "main_business",
+        "registered_area",
+    )
+
+    def save_stock_profile(self, symbol: str, profile: dict[str, Any]) -> int:
+        """Upsert a single stock profile (cninfo snapshot).
+
+        ``profile`` may contain any subset of ``_PROFILE_FIELDS``; missing keys
+        default to empty string. ``updated_at`` is stamped automatically.
+        Returns the number of rows written (always 1).
+        """
+        return self.save_stock_profiles_batch([{"symbol": symbol, **profile}])
+
+    def save_stock_profiles_batch(self, profiles: list[dict[str, Any]]) -> int:
+        """Upsert a batch of stock profiles.
+
+        Each dict requires ``symbol`` and may contain any subset of
+        ``_PROFILE_FIELDS`` (missing keys default to empty string).
+        Returns the number of rows written.
+        """
+        if not profiles:
+            return 0
+        ts = _now().strftime("%Y-%m-%d %H:%M:%S")
+        tuples = [
+            (
+                str(p["symbol"]),
+                str(p.get("name", "") or ""),
+                str(p.get("full_name", "") or ""),
+                str(p.get("sector", "") or ""),
+                str(p.get("list_date", "") or ""),
+                str(p.get("main_business", "") or ""),
+                str(p.get("registered_area", "") or ""),
+                ts,
+            )
+            for p in profiles
+        ]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO stock_profiles "
+                "(symbol, name, full_name, sector, list_date, "
+                " main_business, registered_area, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                tuples,
+            )
+            self._conn.commit()
+        return len(tuples)
+
+    def load_stock_profile(self, symbol: str) -> dict[str, Any] | None:
+        """Return a single stock profile dict, or None if not found."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT symbol, name, full_name, sector, list_date, "
+                "main_business, registered_area, updated_at "
+                "FROM stock_profiles WHERE symbol = ?",
+                (symbol,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "symbol": row[0],
+            "name": row[1] or "",
+            "full_name": row[2] or "",
+            "sector": row[3] or "",
+            "list_date": row[4] or "",
+            "main_business": row[5] or "",
+            "registered_area": row[6] or "",
+            "updated_at": row[7],
+        }
+
+    def load_all_stock_profiles(self) -> dict[str, dict[str, Any]]:
+        """Return all stock profiles indexed by symbol."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT symbol, name, full_name, sector, list_date, "
+                "main_business, registered_area, updated_at "
+                "FROM stock_profiles"
+            ).fetchall()
+        return {
+            r[0]: {
+                "symbol": r[0],
+                "name": r[1] or "",
+                "full_name": r[2] or "",
+                "sector": r[3] or "",
+                "list_date": r[4] or "",
+                "main_business": r[5] or "",
+                "registered_area": r[6] or "",
+                "updated_at": r[7],
+            }
+            for r in rows
+        }
+
+    def count_stock_profiles(self) -> int:
+        """Return the number of rows in ``stock_profiles``."""
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM stock_profiles").fetchone()
+        return int(row[0]) if row else 0
 
     # ------------------------------------------------------------------
     # Adjustment factors

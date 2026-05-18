@@ -3,18 +3,76 @@
 Tracks the configurable A-share index universes (defaults to CSI300 + CSI500)
 from the ``index_constituents`` DB table. No manual watchlist concept —
 universe is entirely driven by exchange constituents history.
+
+Stock metadata (company name, industry, listing date, main business, etc.)
+is sourced from cninfo ``stock_profile_cninfo`` and stored in the
+``stock_profiles`` DB table. ``index_constituents.sector`` is dual-written
+with the coarse-grained cninfo industry classification so backtest
+``--max-per-sector`` and historical PIT snapshots stay self-contained.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pangu.data.storage import Database
     from pangu.models import StockMeta
+    from pangu.utils import CircuitBreaker
 
 logger = logging.getLogger(__name__)
+
+
+# cninfo wide-format column → stock_profiles field
+_CNINFO_FIELD_MAP: dict[str, str] = {
+    "A股简称": "name",
+    "公司名称": "full_name",
+    "所属行业": "sector",
+    "上市日期": "list_date",
+    "主营业务": "main_business",
+    "注册地址": "registered_area",
+}
+
+
+def _fetch_profile_cninfo(symbol: str, circuit: CircuitBreaker) -> dict[str, str] | None:
+    """Fetch a single symbol's profile via ``ak.stock_profile_cninfo``.
+
+    Returns a dict with keys from ``_CNINFO_FIELD_MAP.values()``, or ``None``
+    if the upstream returned empty (typical for delisted stocks) or all
+    retries were exhausted. All values are stripped strings, missing values
+    become empty strings.
+    """
+    import akshare as ak
+
+    from pangu.utils import retry_call
+
+    try:
+        df = retry_call(
+            lambda s=symbol: ak.stock_profile_cninfo(symbol=s),
+            circuit=circuit,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("cninfo lookup failed for %s", symbol, exc_info=False)
+        return None
+    if df is None or df.empty:
+        return None
+    row = df.iloc[0]
+    profile: dict[str, str] = {dest: "" for dest in _CNINFO_FIELD_MAP.values()}
+    for col, dest in _CNINFO_FIELD_MAP.items():
+        if col in row.index:
+            val = row[col]
+            if val is None:
+                profile[dest] = ""
+            else:
+                try:
+                    if val != val:  # NaN check
+                        profile[dest] = ""
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+                profile[dest] = str(val).strip()
+    return profile
 
 
 class IndexStockPool:
@@ -49,13 +107,34 @@ class IndexStockPool:
         return self._get_index_stocks()
 
     def get_stock_metadata(self) -> dict[str, StockMeta]:
-        """Return symbol → StockMeta sourced from ``index_constituents``."""
+        """Return symbol → StockMeta.
+
+        Primary source: ``stock_profiles`` (cninfo full profile). Falls back
+        to ``index_constituents`` (name + sector only) when the profile
+        record is missing (cold start / cninfo failed). The universe is the
+        latest ``index_constituents`` snapshot — profiles for non-constituent
+        symbols are ignored.
+        """
         from pangu.models import StockMeta
+
+        profiles = self._storage.load_all_stock_profiles()
 
         meta: dict[str, StockMeta] = {}
         for row in self._storage.load_all_index_constituents():
             sym = row["symbol"]
-            if sym not in meta:
+            if sym in meta:
+                continue
+            prof = profiles.get(sym)
+            if prof is not None:
+                meta[sym] = StockMeta(
+                    name=prof["name"] or row.get("name") or "",
+                    sector=prof["sector"] or row.get("sector") or "",
+                    full_name=prof["full_name"],
+                    list_date=prof["list_date"],
+                    main_business=prof["main_business"],
+                    registered_area=prof["registered_area"],
+                )
+            else:
                 meta[sym] = StockMeta(
                     name=row.get("name") or "",
                     sector=row.get("sector") or "",
@@ -91,11 +170,20 @@ class IndexStockPool:
     def sync_index_constituents(self) -> int:
         """Fetch constituents for all configured indices from AkShare.
 
-        Iterates over ``self._indices``, calls ``index_stock_cons(symbol=code)``
-        for each, enriches with sector via ``stock_individual_info_em``, and
-        persists to the ``index_constituents`` DB table.
+        For each index, calls ``index_stock_cons(symbol=code)`` to get the
+        current constituent list, then enriches each stock via cninfo
+        ``stock_profile_cninfo`` and dual-writes:
 
-        Returns the total number of rows saved.
+          * ``index_constituents`` — (date, index_code, symbol, name, sector)
+            PIT snapshot with coarse cninfo industry classification.
+          * ``stock_profiles`` — (symbol, name, full_name, sector, list_date,
+            main_business, registered_area) latest-value table consumed by
+            the LLM judge prompt.
+
+        Symbols whose cninfo lookup fails get sector="" in the constituents
+        snapshot and no row in ``stock_profiles``.
+
+        Returns the total number of ``index_constituents`` rows saved.
         """
         import akshare as ak
 
@@ -105,6 +193,8 @@ class IndexStockPool:
         circuit = CircuitBreaker()
         today = today_str()
         all_rows: list[dict[str, str]] = []
+        profiles: list[dict[str, Any]] = []
+        cninfo_failed = 0
 
         for index_code in self._indices:
             df = retry_call(
@@ -119,17 +209,13 @@ class IndexStockPool:
             for idx, (_, row) in enumerate(df.iterrows(), 1):
                 symbol = str(row["品种代码"])
                 name = str(row["品种名称"])
-                sector = ""
-                try:
-                    info_df = retry_call(
-                        lambda s=symbol: ak.stock_individual_info_em(symbol=s),
-                        circuit=circuit,
-                    )
-                    if info_df is not None and not info_df.empty:
-                        info_map = {str(r["item"]): str(r["value"]) for _, r in info_df.iterrows()}
-                        sector = info_map.get("行业", "")
-                except Exception:  # noqa: BLE001
-                    logger.warning("sync_index(%s): sector lookup failed for %s", index_code, symbol)
+                profile = _fetch_profile_cninfo(symbol, circuit)
+                if profile is None:
+                    sector = ""
+                    cninfo_failed += 1
+                else:
+                    sector = profile["sector"]
+                    profiles.append({"symbol": symbol, **profile})
                 all_rows.append(
                     {
                         "symbol": symbol,
@@ -140,13 +226,26 @@ class IndexStockPool:
                     }
                 )
                 if idx % 50 == 0:
-                    logger.info("sync_index(%s): %d/%d stocks processed", index_code, idx, total)
+                    logger.info(
+                        "sync_index(%s): %d/%d stocks processed (%d profiles ok)",
+                        index_code,
+                        idx,
+                        total,
+                        len(profiles),
+                    )
 
         count = self._storage.save_index_constituents(all_rows)
+        profile_count = self._storage.save_stock_profiles_batch(profiles)
         removed = self._storage.delete_stale_index_constituents(self._indices)
         if removed:
             logger.info("sync_index: removed %d constituents from unconfigured indices", removed)
-        logger.info("sync_index: %d constituents saved across %d indices", count, len(self._indices))
+        logger.info(
+            "sync_index: %d constituents saved across %d indices (%d profiles written, %d cninfo failures)",
+            count,
+            len(self._indices),
+            profile_count,
+            cninfo_failed,
+        )
         return count
 
     def sync_historical_constituents(
@@ -243,21 +342,31 @@ class IndexStockPool:
         return count, all_symbols
 
     def backfill_sectors(self, symbols: set[str] | None = None) -> int:
-        """Backfill sector classification for historical constituents via AkShare.
+        """Backfill sector classification for historical constituents via cninfo.
 
-        Queries ``stock_individual_info_em`` for each symbol that has no sector
-        in the DB. Updates all historical rows for that symbol.
+        For each symbol missing a sector in ``index_constituents``, calls
+        ``stock_profile_cninfo`` once. The fetched profile is used for two
+        writes:
+
+          * ``index_constituents.sector`` (UPDATE on all historical rows of
+            this symbol — broadcasts the current-snapshot sector across
+            history; this is a documented "current-value broadcast fill",
+            not true historical retrieval).
+          * ``stock_profiles`` (full upsert with all 6 fields).
+
+        Dual-writing here keeps the CLI workflow self-sufficient: a user
+        who runs ``pangu backfill constituents --with-sector`` after a
+        clean-and-rebackfill gets ``stock_profiles`` populated as a side
+        effect, without needing to also run T1 / ``pangu run init``.
 
         Parameters
         ----------
         symbols : set[str] or None
             Symbols to backfill. If None, queries DB for all symbols missing sector.
 
-        Returns the number of DB rows updated.
+        Returns the number of ``index_constituents`` rows updated.
         """
-        import akshare as ak
-
-        from pangu.utils import CircuitBreaker, retry_call
+        from pangu.utils import CircuitBreaker
 
         circuit = CircuitBreaker()
 
@@ -272,24 +381,19 @@ class IndexStockPool:
             logger.info("backfill_sectors: all symbols already have sector data")
             return 0
 
-        logger.info("backfill_sectors: %d symbols to process", len(symbols))
+        logger.info("backfill_sectors: %d symbols to process via cninfo", len(symbols))
         sector_map: dict[str, str] = {}
+        profiles: list[dict[str, Any]] = []
         failed = 0
 
         for i, symbol in enumerate(sorted(symbols), 1):
-            try:
-                info_df = retry_call(
-                    lambda s=symbol: ak.stock_individual_info_em(symbol=s),
-                    circuit=circuit,
-                )
-                if info_df is not None and not info_df.empty:
-                    info_map = {str(r["item"]): str(r["value"]) for _, r in info_df.iterrows()}
-                    sector = info_map.get("行业", "")
-                    if sector:
-                        sector_map[symbol] = sector
-            except Exception:  # noqa: BLE001
+            profile = _fetch_profile_cninfo(symbol, circuit)
+            if profile is None:
                 failed += 1
-                logger.debug("backfill_sectors: failed for %s", symbol)
+            else:
+                if profile["sector"]:
+                    sector_map[symbol] = profile["sector"]
+                profiles.append({"symbol": symbol, **profile})
 
             if i % 50 == 0:
                 logger.info(
@@ -301,11 +405,14 @@ class IndexStockPool:
                 )
 
         updated = self._storage.update_constituent_sectors(sector_map)
+        profile_count = self._storage.save_stock_profiles_batch(profiles)
         logger.info(
-            "backfill_sectors: %d symbols queried, %d sectors found, %d DB rows updated, %d failed",
+            "backfill_sectors: %d symbols queried, %d sectors found, "
+            "%d DB rows updated, %d profiles written, %d failed",
             len(symbols),
             len(sector_map),
             updated,
+            profile_count,
             failed,
         )
         return updated

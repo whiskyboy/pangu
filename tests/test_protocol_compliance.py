@@ -98,6 +98,7 @@ class _StubLLMJudge:
         n_drop: int,
         universe_size: int = 0,
         timeout: float = 120.0,
+        stock_meta: dict[str, Any] | None = None,
     ) -> Any:
         return None
 

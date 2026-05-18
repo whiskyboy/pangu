@@ -151,6 +151,8 @@ Use deterministic fakes (`tests/fakes.py`), not mocks/patches. Tests are integra
 - `config/settings.toml` — Main config (DB path, stock pool indices, strategy params, scheduler times). Supports `$ENV_VAR` substitution.
 - `.env` — Environment variables (copy from `.env.example`): `AZURE_API_BASE`, `AZURE_API_KEY`, `AZURE_API_VERSION`, `AZURE_DEPLOYMENT` (LLM), `FEISHU_APP_ID`, `FEISHU_APP_SECRET` (notification).
 - Stock pool indices are configurable: `[stock_pool].indices = ["000300", "000905"]` (CSI300 + CSI500). The pool is derived entirely from `index_constituents` — there is no manual watchlist.
+- T1 (`sync_reference_data`) calls akshare `stock_profile_cninfo` per symbol to dual-write `index_constituents` (date / index_code / symbol / name / sector PIT snapshot) **and** `stock_profiles` (symbol PK with full_name / sector / list_date / main_business / registered_area as "latest value"). The `stock_profiles` table feeds the LLM rebalance prompt (T6) as grounding context (4 metadata lines per candidate). cninfo's sector taxonomy is coarse (~60-80 categories, e.g. "酒、饮料和精制茶制造业") rather than the fine-grained 124-category breakdown of the older `stock_individual_info_em` — backtest `--max-per-sector` consumers should expect this coarser bucketing.
+- **Upgrade migration** (existing deployments with fine-grained sectors): either restart the daemon (auto-runs T1) or run `pangu run init` — both populate `stock_profiles` automatically (~44 min for ~1311 stocks). For a clean re-bucket of historical `index_constituents.sector`, run `sqlite3 data/pangu.db "UPDATE index_constituents SET sector = NULL"` then `pangu backfill constituents --with-sector --start 2019-01-01` before the daemon restart.
 
 ## CLI Operations
 

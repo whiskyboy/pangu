@@ -169,6 +169,7 @@ class LLMJudgeEngine(Protocol):
         n_drop: int,
         universe_size: int = 0,
         timeout: float = 120.0,
+        stock_meta: Any = None,
     ) -> Any:
         """Judge SELL + BUY candidate pools and return a RebalanceDecision."""
         ...

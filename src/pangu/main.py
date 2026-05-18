@@ -248,22 +248,66 @@ async def _run_init(*, force: bool = False) -> None:
     logger.info("    backfill start date: %s", init_start)
 
     # ------------------------------------------------------------------
-    # 1. trading calendar + current-date constituents (cheap)
+    # 1a. trading calendar (always runs — 5s, cheap, no skip)
     # ------------------------------------------------------------------
+    logger.info("[1a/6] sync trading calendar...")
+    components.stock_pool.sync_trading_calendar()
+
+    # ------------------------------------------------------------------
+    # 1b. current-date constituents + stock_profiles (cninfo, ~44min)
+    #
+    # Triggers when ANY of:
+    #   * force flag
+    #   * latest constituents snapshot is stale by >35 days (T1 monthly + 5d buffer)
+    #   * stock_profiles is empty (upgrade-from-old-DB or first-time install)
+    # ------------------------------------------------------------------
+    from datetime import date as _date
+
     rows = db.load_all_index_constituents()
-    if force or not rows:
-        logger.info("[1/6] sync trading calendar + index constituents...")
-        components.stock_pool.sync_trading_calendar()
+    latest_const_date = rows[0]["date"] if rows else None
+    if latest_const_date:
+        try:
+            stale_days = (_date.today() - _date.fromisoformat(latest_const_date)).days
+        except ValueError:
+            stale_days = 10**6
+    else:
+        stale_days = 10**6
+    profiles_count = db.count_stock_profiles()
+
+    if force or stale_days > 35 or profiles_count == 0:
+        logger.info(
+            "[1b/6] sync index constituents + stock profiles (stale=%dd, profiles=%d)...",
+            stale_days,
+            profiles_count,
+        )
         components.stock_pool.sync_index_constituents()
     else:
-        logger.info("[1/6] ⏭ skipped: index_constituents has %d rows", len(rows))
+        logger.info(
+            "[1b/6] ⏭ skipped: constituents fresh (%dd old), %d stock_profiles",
+            stale_days,
+            profiles_count,
+        )
 
     # ------------------------------------------------------------------
     # 2. historical constituents backfill + pool YAML
+    #
+    # Triggers when YAML is missing OR older than 180 days (CSI 300/500
+    # adjust every June and December — 180d ≈ one adjustment cycle).
     # ------------------------------------------------------------------
+    import time
+
     pool_yaml = Path(pool_yaml_path)
-    if force or not pool_yaml.exists():
-        logger.info("[2/6] backfill historical constituents (semi-annual sampling)...")
+    if pool_yaml.exists():
+        yaml_age_days = (time.time() - pool_yaml.stat().st_mtime) / 86400.0
+    else:
+        yaml_age_days = float("inf")
+    pool_yaml_stale = yaml_age_days > 180
+
+    if force or pool_yaml_stale:
+        logger.info(
+            "[2/6] backfill historical constituents (semi-annual sampling, yaml_age=%.0fd)...",
+            yaml_age_days,
+        )
         from pangu.tz import today_str
 
         count, all_symbols = components.stock_pool.sync_historical_constituents(init_start, today_str())
@@ -275,7 +319,11 @@ async def _run_init(*, force: bool = False) -> None:
                 f.write(f'- "{sym}"\n')
         logger.info("    exported pool to %s", pool_yaml)
     else:
-        logger.info("[2/6] ⏭ skipped: %s already exists", pool_yaml)
+        logger.info(
+            "[2/6] ⏭ skipped: %s up to date (%.0fd old)",
+            pool_yaml,
+            yaml_age_days,
+        )
 
     # Load pool for downstream steps
     import yaml

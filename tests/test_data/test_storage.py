@@ -40,6 +40,7 @@ class TestInitTables:
             "index_constituents",
             "portfolio_snapshots",
             "task_runs",
+            "stock_profiles",
         }
         assert expected.issubset(names)
 

@@ -101,6 +101,22 @@ Rebalance flow:
 
 ## Quick Start
 
+### Usage Scenarios
+
+PanGu supports two distinct workflows. Pick your target scenario before reading further:
+
+| Scenario | Goal | Typical Flow |
+|----------|------|--------------|
+| **A. Out-of-the-box (production)** | Run the daily model, generate rebalance decisions, push Feishu cards | `pangu run init` → (optional) `pangu run signals` to dry-run → `pangu run start` (daemon) |
+| **B. Strategy research / backtest** | Recompute factors + train ML + iterate strategy logic across multiple windows | `pangu backfill *` → `pangu compute-factors` → `pangu train walkforward` → `pangu evaluate-* / pangu backtest` |
+
+Notes to avoid common pitfalls:
+
+- **T6 only fires on A-share trading days**, and **only Mondays** (the first trading day of each ISO week) actually rebalance the portfolio. Non-rebalance trading days just refresh ML scores / ranks. Weekends and holidays are skipped.
+- **Val/Test golden rule**: use `score_matrix_val.parquet` for hyperparameter tuning / strategy selection; reserve `score_matrix_test.parquet` for the final report — **never use the test set to select strategies** (see [Offline Training & Backtest](#offline-training--backtest) below).
+- **Production T5 (monthly auto-retrain) = single-window** `pangu train` (~15–20 min). **Walk-Forward = multi-window** `pangu train walkforward` (~2.5h, research only). Both produce identically named `wf_window_NN_seed*.txt` artifacts loadable by `MLScorer.reload()`.
+- **Backtest defaults to val scores**; before running `pangu backtest`, check the time range of `score_matrix_*.parquet` and pass matching `--start / --end` flags. The CLI auto-clamps to the score matrix but explicit dates are preferred.
+
 ### Prerequisites
 
 - Python 3.12+

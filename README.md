@@ -100,6 +100,22 @@ T6（08:15 每个交易日盘前）做两件事：
 
 ## 快速开始
 
+### 使用场景与路径
+
+PanGu 支持两种使用路径，请先选择目标场景再继续：
+
+| 场景 | 目标 | 典型流程 |
+|------|------|---------|
+| **A. 开箱即用（生产）** | 每日定时跑模型、生成调仓建议、飞书推送 | `pangu run init` → （可选）`pangu run signals` 验证 → `pangu run start`（daemon） |
+| **B. 策略研究 / 回测** | 自己跑因子 + ML 训练 + 多窗口回测、迭代策略 | `pangu backfill *` → `pangu compute-factors` → `pangu train walkforward` → `pangu evaluate-* / pangu backtest` |
+
+注意事项（避免常见误区）：
+
+- **T6 仅在 A 股交易日运行**，且**周一**（ISO 周第一个交易日）才真正调仓；其他交易日只刷新 ML 分数与排名，不动持仓。节假日和周末跳过。
+- **Val/Test 铁律**：`score_matrix_val.parquet` 用来调参 / 选策略；`score_matrix_test.parquet` 只用作最终报告——**绝不能用 test 选策略**（详见 [离线训练与回测](#离线训练与回测)）。
+- **生产 T5（月度自动再训练）= 单窗口** `pangu train`，约 15–20 分钟；**Walk-Forward = 多窗口** `pangu train walkforward`，约 2.5 小时，仅用于研究 / 回测。两者产物文件名一致（`wf_window_NN_seed*.txt`），都可被 `MLScorer.reload()` 加载。
+- **回测命令默认使用 val 分数**；提交回测前请先看 `score_matrix_*.parquet` 的时间范围，`--start / --end` 必须落在该范围内（命令行会自动收敛但显式指定更稳妥）。
+
 ### 前置条件
 
 - Python 3.12+

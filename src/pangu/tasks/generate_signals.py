@@ -179,6 +179,7 @@ async def _ml_rebalance_path(c: Components, today: str) -> None:
         top_n=ml.top_n,
         n_drop=ml.n_drop,
         universe_size=universe_size,
+        stock_meta=stock_meta,
     )
     logger.info(
         "[T6/ML] LLM decision (source=%s): sells=%d, buys=%d", decision.source, len(decision.sells), len(decision.buys)

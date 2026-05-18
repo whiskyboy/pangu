@@ -336,3 +336,90 @@ class TestFakeLLMJudgeEngine:
         )
         assert decision.sells == []
         assert decision.buys == []
+
+
+# ---------------------------------------------------------------------------
+# stock_meta forwarding to user prompt
+# ---------------------------------------------------------------------------
+
+
+class TestStockMetaForwarding:
+    @pytest.fixture()
+    def engine(self) -> LLMJudgeEngineImpl:
+        return LLMJudgeEngineImpl(LLMClient(model="test/model"))
+
+    @pytest.mark.asyncio
+    async def test_stock_meta_appears_in_user_prompt(self, engine):
+        """stock_meta is forwarded to build_rebalance_prompt and renders metadata lines."""
+        from pangu.models import StockMeta
+
+        sell_pool = [_make_candidate("600519", "贵州茅台", 0.3, 18)]
+        resp = _llm_response(
+            sells=[{"symbol": "600519", "reason": "x", "evidence": ""}],
+        )
+        stock_meta = {
+            "600519": StockMeta(
+                name="贵州茅台",
+                sector="酒类业",
+                full_name="贵州茅台酒股份有限公司",
+                list_date="2001-08-27",
+                main_business="茅台酒及系列酒",
+                registered_area="贵州省仁怀市",
+            )
+        }
+
+        captured_messages: list[list[dict]] = []
+
+        async def fake_acompletion(*, model, messages, **kwargs):
+            captured_messages.append(messages)
+            return _make_completion(json.dumps(resp))
+
+        with patch("litellm.acompletion", new=fake_acompletion):
+            await engine.judge_rebalance(
+                today="2026-02-19",
+                sell_candidates=sell_pool,
+                buy_candidates=[],
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=2,
+                stock_meta=stock_meta,
+            )
+
+        assert captured_messages, "LLM was not called"
+        user_msg = captured_messages[0][-1]["content"]
+        assert "贵州茅台酒股份有限公司" in user_msg
+        assert "茅台酒及系列酒" in user_msg
+        assert "贵州省仁怀市" in user_msg
+        assert "2001-08-27" in user_msg
+
+    @pytest.mark.asyncio
+    async def test_no_stock_meta_omits_metadata_lines(self, engine):
+        """Without stock_meta the user prompt has no grounding lines."""
+        sell_pool = [_make_candidate("600519", "贵州茅台", 0.3, 18)]
+        resp = _llm_response(
+            sells=[{"symbol": "600519", "reason": "x", "evidence": ""}],
+        )
+
+        captured_messages: list[list[dict]] = []
+
+        async def fake_acompletion(*, model, messages, **kwargs):
+            captured_messages.append(messages)
+            return _make_completion(json.dumps(resp))
+
+        with patch("litellm.acompletion", new=fake_acompletion):
+            await engine.judge_rebalance(
+                today="2026-02-19",
+                sell_candidates=sell_pool,
+                buy_candidates=[],
+                telegraph=[],
+                global_market=_GLOBAL_DF,
+                top_n=25,
+                n_drop=2,
+            )
+
+        assert captured_messages, "LLM was not called"
+        user_msg = captured_messages[0][-1]["content"]
+        assert "公司：" not in user_msg
+        assert "主营：" not in user_msg
+        assert "注册地：" not in user_msg

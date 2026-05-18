@@ -6,9 +6,10 @@ from datetime import datetime
 
 import pandas as pd
 
-from pangu.models import NewsCategory, NewsItem, Region
+from pangu.models import NewsCategory, NewsItem, Region, StockMeta
 from pangu.strategy.llm.prompts import (
     _REBAL_ANNOUNCEMENTS,
+    _REBAL_MAIN_BUSINESS_LIMIT,
     _REBAL_STOCK_NEWS,
     _REBAL_TELEGRAPH,
     build_rebalance_prompt,
@@ -276,3 +277,156 @@ class TestRebalancePrompt:
         )
         assert "-2.30%" in prompt
         assert "+-" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Stock metadata grounding (cninfo profile lines)
+# ---------------------------------------------------------------------------
+
+
+class TestStockMetadataRendering:
+    def _full_meta(self) -> StockMeta:
+        return StockMeta(
+            name="贵州茅台",
+            sector="酒、饮料和精制茶制造业",
+            full_name="贵州茅台酒股份有限公司",
+            list_date="2001-08-27",
+            main_business="茅台酒及系列酒的生产与销售",
+            registered_area="贵州省仁怀市",
+        )
+
+    def test_renders_all_four_lines(self) -> None:
+        sell = _candidate("600519", name="贵州茅台")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[sell],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+            stock_meta={"600519": self._full_meta()},
+        )
+        assert "公司：贵州茅台酒股份有限公司（贵州茅台） / 行业：酒、饮料和精制茶制造业" in prompt
+        assert "上市：2001-08-27（已上市" in prompt
+        assert "年）" in prompt
+        assert "主营：茅台酒及系列酒的生产与销售" in prompt
+        assert "注册地：贵州省仁怀市" in prompt
+
+    def test_omits_when_stock_meta_none(self) -> None:
+        sell = _candidate("600519", name="贵州茅台")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[sell],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+        )
+        assert "公司：" not in prompt
+        assert "上市：" not in prompt
+        assert "主营：" not in prompt
+        assert "注册地：" not in prompt
+
+    def test_missing_symbol_in_meta_renders_without_grounding(self) -> None:
+        """Symbol absent from stock_meta map → degrades to no extra lines."""
+        sell = _candidate("999999")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[sell],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+            stock_meta={"600519": self._full_meta()},
+        )
+        assert "999999" in prompt
+        assert "公司：" not in prompt
+        assert "主营：" not in prompt
+
+    def test_partial_metadata_skips_empty_fields(self) -> None:
+        meta = StockMeta(
+            name="紫金矿业",
+            sector="",  # missing
+            full_name="紫金矿业集团股份有限公司",
+            list_date="",  # missing
+            main_business="黄金、铜采选",
+            registered_area="",  # missing
+        )
+        sell = _candidate("601899", name="紫金矿业")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[sell],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+            stock_meta={"601899": meta},
+        )
+        assert "公司：紫金矿业集团股份有限公司（紫金矿业）" in prompt
+        # sector missing → "/ 行业" omitted
+        assert "/ 行业：" not in prompt
+        # list_date missing → no 上市 line
+        assert "上市：" not in prompt
+        # main_business present → 主营 line
+        assert "主营：黄金、铜采选" in prompt
+        # registered_area missing → no 注册地 line
+        assert "注册地：" not in prompt
+
+    def test_long_main_business_truncated(self) -> None:
+        meta = StockMeta(
+            name="X",
+            main_business="字" * (_REBAL_MAIN_BUSINESS_LIMIT + 50),
+        )
+        cand = _candidate("000001", name="X")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[cand],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+            stock_meta={"000001": meta},
+        )
+        # Should contain truncation ellipsis
+        assert "…" in prompt
+        # Should not contain the full untruncated string
+        assert ("字" * (_REBAL_MAIN_BUSINESS_LIMIT + 50)) not in prompt
+
+    def test_unparseable_list_date_omits_years_suffix(self) -> None:
+        meta = StockMeta(name="X", list_date="N/A")
+        cand = _candidate("000001", name="X")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[cand],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+            stock_meta={"000001": meta},
+        )
+        assert "上市：N/A" in prompt
+        # No "（已上市..." suffix for unparseable date
+        assert "已上市" not in prompt
+
+    def test_company_name_equals_short_name_no_parens(self) -> None:
+        """When full_name == short name, the (short) duplicate is omitted."""
+        meta = StockMeta(name="贵州茅台", full_name="贵州茅台", sector="酒类")
+        cand = _candidate("600519", name="贵州茅台")
+        prompt = build_rebalance_prompt(
+            today="2026-02-19",
+            sell_candidates=[cand],
+            buy_candidates=[],
+            telegraph=[],
+            global_market=pd.DataFrame(),
+            top_n=25,
+            n_drop=3,
+            stock_meta={"600519": meta},
+        )
+        assert "公司：贵州茅台 / 行业：酒类" in prompt
+        assert "（贵州茅台）" not in prompt
